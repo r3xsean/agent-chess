@@ -145,17 +145,14 @@ export function predict(g: Game, viewerId: unknown, kind: unknown, pick: unknown
  * made before the move (or the end of the game) really happened, by the mirror's clock (game times are on the
  * local server's clock: mirrorSkewMs converts them).
  */
-const onMirrorClock = (g: Game, ts: number) => ts + (g.mirrorSkewMs ?? 0);
+/** When a ply was played: the mirror's frozen cut-off, or (on the local server) the move's own time. */
+const plyTime = (g: Game, ply: number) => g.mirrorCutoffs?.[ply] ?? g.moves[ply - 1]?.ts ?? Infinity;
 /** When result calls really closed: the move that reached the lock, or the end of the game, whichever came first. */
 function resultCutoff(g: Game): number {
-  const lock = g.moves[RESULT_LOCK_PLY - 1]?.ts ?? Infinity;
-  const end = g.result ? (g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Infinity) : Infinity;
-  return onMirrorClock(g, Math.min(lock, end));
+  const end = g.result ? (g.mirrorCutoffs?.end ?? g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Infinity) : Infinity;
+  return Math.min(plyTime(g, RESULT_LOCK_PLY), end);
 }
-const guessCounts = (g: Game, ply: number, ts: number) => {
-  const m = g.moves[ply - 1];
-  return !m || ts <= onMirrorClock(g, m.ts);
-};
+const guessCounts = (g: Game, ply: number, ts: number) => ts <= plyTime(g, ply);
 /** Old saved guesses were bare UCI strings. */
 const guessOf = (x: string | { uci: string; ts: number }) => (typeof x === "string" ? { uci: x, ts: 0 } : x);
 

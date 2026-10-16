@@ -42,7 +42,7 @@ import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
 import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, scoresChanged, setGameSource, viewerInfo } from "./predictions";
-import { acceptSeq, ingest, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
+import { acceptSeq, ingest, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
 setGameSource(() => games.values());
@@ -171,14 +171,21 @@ function openStream(req: Request, res: Response): ((data: string) => void) | nul
   };
 }
 
-/** One serialisation per change, shared by every stream of the same thing. */
-const serialized = new Map<string, { at: number; data: string }>();
-function shared(key: string, payload: () => unknown): string {
-  const hit = serialized.get(key);
-  if (hit && Date.now() - hit.at < 150) return hit.data;
+/** One serialisation per change, shared by every stream of the same thing: keyed by how many changes it has seen. */
+const revisions = new Map<string, number>();
+const serialized = new Map<string, { rev: number; data: string }>();
+function trackRevisions(event: string) {
+  if (revisions.has(event)) return;
+  revisions.set(event, 0);
+  // Registered before any stream's own listener, so a stream always serialises the newest revision.
+  bus.prependListener(event, () => revisions.set(event, (revisions.get(event) ?? 0) + 1));
+}
+function shared(event: string, payload: () => unknown): string {
+  const rev = revisions.get(event) ?? 0;
+  const hit = serialized.get(event);
+  if (hit && hit.rev === rev) return hit.data;
   const data = `data: ${JSON.stringify(payload())}\n\n`;
-  serialized.set(key, { at: Date.now(), data });
-  if (serialized.size > 5000) serialized.delete(serialized.keys().next().value!);
+  serialized.set(event, { rev, data });
   return data;
 }
 /* ------------------------------ helpers ------------------------------ */
@@ -262,6 +269,7 @@ function gameSummary(g: Game) {
 function sse(req: Request, res: Response, event: string, payload: () => unknown) {
   const write = openStream(req, res);
   if (!write) return;
+  trackRevisions(event);
   let timer: NodeJS.Timeout | null = null;
   const send = () => {
     if (timer) return;
@@ -270,7 +278,7 @@ function sse(req: Request, res: Response, event: string, payload: () => unknown)
       write(shared(event, payload));
     }, 100);
   };
-  write(`data: ${JSON.stringify(payload())}\n\n`);
+  write(shared(event, payload));
   const ping = setInterval(() => write(": ping\n\n"), 20000);
   bus.on(event, send);
   req.on("close", () => {
@@ -384,7 +392,7 @@ app.post(
   express.json({ limit: "200mb" }),
   handle((req) => {
     const batch = req.body ?? {};
-    if (!acceptSeq(batch.seq)) return { ok: true, stale: true };
+    if (!acceptSeq(batch.seq)) return syncAck({ stale: true });
     const changed = ingest(batch);
     scoresChanged();
     for (const id of changed) {
@@ -392,7 +400,7 @@ app.post(
       if (g) bus.emit(`game:${id}`, g);
     }
     bus.emit("lobby");
-    return { ok: true, games: changed.length };
+    return syncAck({ games: changed.length });
   }),
 );
 

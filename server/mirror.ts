@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -83,7 +83,18 @@ export function startMirror() {
   cfg = mirrorConfig();
   if (!cfg) return;
   console.log(`[mirror] pushing to ${cfg.url}`);
-  // A full sync: every game, and every player's journal and model's lessons that exist.
+  queueEverything();
+  memoryEvents.on("journal", (id: string) => (pendingJournals.add(id), mirrorChanged()));
+  memoryEvents.on("lessons", (model: string) => (pendingLessons.add(model), mirrorChanged()));
+  schedule(500);
+}
+
+class ResyncError extends Error {}
+/** The mirror's storage identity, from its acknowledgements: if it changes, the mirror lost what we sent. */
+let mirrorEpoch: string | null = null;
+
+/** A full sync: every game, and every player's journal and model's lessons that exist. */
+function queueEverything() {
   for (const g of games.values()) {
     pendingGames.add(g.id);
     for (const p of [g.white, g.black]) {
@@ -92,9 +103,6 @@ export function startMirror() {
     }
   }
   pendingMeta = true;
-  memoryEvents.on("journal", (id: string) => (pendingJournals.add(id), mirrorChanged()));
-  memoryEvents.on("lessons", (model: string) => (pendingLessons.add(model), mirrorChanged()));
-  schedule(500);
 }
 
 export function mirrorChanged(g?: Game) {
@@ -171,12 +179,33 @@ async function push() {
         signal: AbortSignal.timeout(60_000),
       });
       if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+      const ack = (await r.json().catch(() => ({}))) as { stale?: boolean; acceptedSeq?: number; epoch?: string };
+      // A mirror with fresh storage (new epoch) has none of what we sent before: start again from scratch.
+      if (ack.epoch && mirrorEpoch && ack.epoch !== mirrorEpoch) {
+        mirrorEpoch = ack.epoch;
+        throw new ResyncError("the mirror's storage was reset");
+      }
+      mirrorEpoch ??= ack.epoch ?? null;
+      // Our clock is behind what the mirror last accepted (a clock correction, then a restart): jump past it and resend.
+      if (ack.stale) {
+        lastSeq = Math.max(lastSeq, Number(ack.acceptedSeq) || 0);
+        throw new Error("batch was older than the mirror's last one; resending");
+      }
       for (const [k, h] of changed) sent.set(k, h);
       if (!fullSyncDone) console.log(`[mirror] full sync done (${gameList.length} games, ${(body.length / 1024).toFixed(0)} KB)`);
     }
     fullSyncDone = true;
     failures = 0;
   } catch (e) {
+    if (e instanceof ResyncError) {
+      console.log(`[mirror] ${e.message}: sending everything again`);
+      inFlight = false;
+      sent.clear();
+      fullSyncDone = false;
+      queueEverything();
+      schedule(200);
+      return;
+    }
     // Put everything back and try again later; the next success sends the latest state anyway (with a newer seq,
     // so if this one still lands late, the mirror ignores it).
     restore();
@@ -194,26 +223,49 @@ async function push() {
 /* ------------------------------ the public side: receive ------------------------------ */
 
 const SEQ_FILE = path.join(DATA, "mirror-seq.json");
-let acceptedSeq = existsSync(SEQ_FILE) ? Number(JSON.parse(readFileSync(SEQ_FILE, "utf8")).seq) || 0 : 0;
+const saved = existsSync(SEQ_FILE) ? JSON.parse(readFileSync(SEQ_FILE, "utf8")) : {};
+let acceptedSeq = Number(saved.seq) || 0;
+/** Names this storage: a wiped volume gets a new one, which tells the local server to resend everything. */
+export const storageEpoch = typeof saved.epoch === "string" ? saved.epoch : randomBytes(8).toString("hex");
+const persistSeq = () => {
+  writeFileSync(SEQ_FILE + ".tmp", JSON.stringify({ seq: acceptedSeq, epoch: storageEpoch }));
+  renameSync(SEQ_FILE + ".tmp", SEQ_FILE);
+};
+if (!saved.epoch && process.env.PUBLIC_MODE === "1") persistSeq();
+export const syncAck = (extra: object) => ({ ok: true, acceptedSeq, epoch: storageEpoch, ...extra });
 
 /** Only batches newer than the last one applied are taken (a retried push can arrive after its replacement). */
 export function acceptSeq(seq: unknown): boolean {
   const n = Number(seq);
   if (!Number.isFinite(n) || n <= acceptedSeq) return false;
   acceptedSeq = n;
-  writeFileSync(SEQ_FILE + ".tmp", JSON.stringify({ seq: n }));
-  renameSync(SEQ_FILE + ".tmp", SEQ_FILE);
+  persistSeq();
   return true;
+}
+
+/*
+ * Prediction cut-offs. Move times are on the local server's clock. A batch's delay (arrival − sentAt) is the clock
+ * difference plus the trip; the smallest recent one is the best estimate of the difference alone. Each move's
+ * cut-off is fixed when the mirror first hears of it, so later clock corrections never re-judge old guesses.
+ */
+const delays: number[] = [];
+function clockOffset(sentAt: unknown): number {
+  if (typeof sentAt !== "number" || !Number.isFinite(sentAt)) return delays.length ? Math.min(...delays) : 0;
+  delays.push(Date.now() - sentAt);
+  if (delays.length > 50) delays.shift();
+  return Math.min(...delays);
 }
 
 /** Apply a batch from the local server to this (public) server's store. Returns the changed game ids. */
 export function ingest(batch: SyncBatch): string[] {
   const changed: string[] = [];
-  // How far the mirror's clock is ahead of the local server's (plus the trip): move times are on the local clock.
-  const skew = typeof batch.sentAt === "number" ? Date.now() - batch.sentAt : 0;
+  const offset = clockOffset(batch.sentAt);
   for (const g of batch.games ?? []) {
     if (!g || typeof g.id !== "string" || !/^[\w-]+$/.test(g.id) || !Array.isArray(g.moves)) continue;
-    g.mirrorSkewMs = skew;
+    const cut: Record<string, number> = { ...games.get(g.id)?.mirrorCutoffs };
+    for (const m of g.moves) cut[m.ply] ??= m.ts + offset;
+    if (g.result) cut.end ??= (g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Date.now() - offset) + offset;
+    g.mirrorCutoffs = cut;
     games.set(g.id, g);
     saveGameNow(g);
     changed.push(g.id);
