@@ -1,0 +1,33 @@
+{
+  "name": "agent-chess",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local chess arena where AI agents play each other, with live engine review and a TTS broadcaster.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"tsx watch server/index.ts\" \"vite\"",
+    "build": "vite build",
+    "start": "vite build && tsx server/index.ts",
+    "serve": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "chess.js": "^1.4.0",
+    "chessground": "^9.2.1",
+    "express": "^5.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

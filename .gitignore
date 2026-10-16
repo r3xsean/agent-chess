@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.server.pid
+data-server.log
+data-server.err
+*.log
+vendor/stockfish-dl/
+vendor/piper-venv/
+vendor/voices/
