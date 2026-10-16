@@ -25,6 +25,7 @@ import {
   playerFinished,
   seatIsHuman,
   seatKeysFor,
+  startablePairings,
   submitTurn,
   tick,
   touch,
@@ -33,7 +34,9 @@ import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec } from "./prompts";
 import { directorBrief, needsDirection, validatePlan } from "./director";
-import { directorDone, jobsFor, MUSIC_DIR, musicTracks, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { directorDone, jobsFor, MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { rivalry } from "./rivalry";
+import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { gameToPgn } from "./pgn";
@@ -86,7 +89,7 @@ if (PUBLIC_MODE) {
 // Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
-const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/render$/, /^\/api\/music/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
@@ -472,7 +475,10 @@ app.post(
     t.autoRun = true;
     saveTournamentNow(t);
     bus.emit("lobby");
-    if (live) return { ok: true, alreadyRunning: live.gameId };
+    // Several boards: start whatever can go now; anything blocked starts as boards and models free up.
+    if ((t.boards ?? 1) > 1 && !startablePairings(t).length) return { ok: true, waiting: true };
+    if ((t.boards ?? 1) > 1) t.lastKickAt = Date.now();
+    else if (live) return { ok: true, alreadyRunning: live.gameId };
     await triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
       throw new ActionError(e.message);
     });
@@ -671,6 +677,8 @@ app.post(
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
     };
+    const boards = Math.floor(Number(req.body.boards) || 1);
+    if (boards > 1) t.boards = Math.min(boards, Math.floor(unique.length / 2));
     if (req.body.chess960) {
       // Every pairing gets its own start position; in a double round-robin the return game replays it with colours swapped.
       t.chess960 = true;
@@ -702,19 +710,29 @@ app.post(
     requireAdmin(req);
     const t = tournaments.get(String(req.params.id));
     if (!t) throw new ActionError("No such tournament");
-    const live = t.pairings.find((p) => p.gameId && games.get(p.gameId)?.phase !== "finished");
-    if (live) return { game: games.get(live.gameId!), launch: launchSpec(games.get(live.gameId!)!), alreadyRunning: true };
-    const next = t.pairings.find((p) => !p.gameId);
-    if (!next) {
+    const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished");
+    if (!live.length && !t.pairings.some((p) => !p.gameId)) {
       t.status = "finished";
       saveTournament(t);
       return { finished: true };
     }
     const byId = new Map(t.players.map((p) => [p.id, p]));
-    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, chess960: next.chess960 });
-    next.gameId = g.id;
+    const start = (next: Tournament["pairings"][number]) => {
+      const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, chess960: next.chess960 });
+      next.gameId = g.id;
+      return g;
+    };
+    if ((t.boards ?? 1) <= 1) {
+      if (live.length) return { game: games.get(live[0].gameId!), launch: launchSpec(games.get(live[0].gameId!)!), alreadyRunning: true };
+      const g = start(t.pairings.find((p) => !p.gameId)!);
+      saveTournamentNow(t);
+      return { game: g, launch: launchSpec(g) };
+    }
+    // Several boards: start every pairing that can go now. Only the new games come back, so each
+    // orchestrator run launches only what it started; games already running are listed by id.
+    const started = startablePairings(t).map(start);
     saveTournamentNow(t);
-    return { game: g, launch: launchSpec(g) };
+    return { started: started.map((g) => ({ game: g, launch: launchSpec(g) })), running: live.map((p) => p.gameId) };
   }),
 );
 
@@ -906,6 +924,8 @@ app.post(
 /* ------------------------------ static ------------------------------ */
 
 app.use("/videos", express.static(VIDEO_DIR));
+// The recorded voice lines are a local thing, like the renders that use them.
+if (!PUBLIC_MODE) app.use("/voice", express.static(VOICE_DIR));
 // The site plays the same sound effects as the videos.
 const SFX_DIR = path.join(ROOT, "vendor", "sfx");
 app.use("/sfx", express.static(SFX_DIR, { maxAge: "1d" }));
@@ -918,9 +938,21 @@ app.get(
 
 const renderState = (id: string) => {
   const g = getGame(id);
-  return { jobs: jobsFor(id), videos: videosFor(id), music: musicTracks(), directed: !!g.video, summonAvailable: summonAvailable() };
+  return {
+    jobs: jobsFor(id),
+    videos: videosFor(id),
+    ...packagingFor(id),
+    packaging: g.video?.packaging ?? null,
+    music: musicTracks(),
+    directed: !!g.video,
+    summonAvailable: summonAvailable(),
+  };
 };
 app.get("/api/games/:id/render", handle((req) => renderState(String(req.params.id))));
+// The recorded voice lines (and their lengths, which set the video's timing).
+app.get("/api/games/:id/voice", handle((req) => voiceManifest(getGame(String(req.params.id)).id)));
+// The two models' series, for the replay's versus and result cards.
+app.get("/api/games/:id/rivalry", handle((req) => ({ rivalry: rivalry(getGame(String(req.params.id))) })));
 app.post(
   "/api/games/:id/render",
   localOnly,
@@ -929,7 +961,7 @@ app.post(
     const want = req.body?.formats;
     const formats = (Array.isArray(want) ? want : ["landscape", "portrait"]).filter((f: string): f is RenderFormat => f === "landscape" || f === "portrait");
     if (!formats.length) throw new ActionError('formats must include "landscape" and/or "portrait".');
-    await startRender(id, formats, req.body?.music ? String(req.body.music) : null).catch((e) => {
+    await startRender(id, formats, req.body?.music ? String(req.body.music) : null, req.body?.voices !== false).catch((e) => {
       throw new ActionError(e.message);
     });
     return renderState(id);

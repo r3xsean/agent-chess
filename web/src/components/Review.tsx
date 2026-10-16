@@ -1,5 +1,6 @@
 import type { Color, Game, Score } from "../../../shared/types";
 import { winPercentWhite } from "../../../shared/evalmath";
+import { engineAfter } from "../../../shared/belief";
 import { selfEvalColors, sideName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
 import { Avatar } from "./PlayerBar";
@@ -9,11 +10,12 @@ import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
 export function engineScoreAt(game: Game, ply: number): Score | undefined {
   const pos = (fen: string | undefined) => {
     const a = fen ? game.analysis[fen] : undefined;
-    return a && !a.failed ? a.score : undefined;
+    return a && !a.failed && a.depth > 0 ? a.score : undefined;
   };
   if (ply === 0) return pos(game.moves[0]?.fenBefore ?? "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
   const m = game.moves[ply - 1];
-  return m?.analysis?.evalAfter ?? pos(m?.fenAfter);
+  // Same rule as shared/belief's engineAfter: a verdict made without engine data carries a placeholder score.
+  return m && engineAfter(game, m);
 }
 
 export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; ply: number; onSelect: (p: number) => void; height?: number }) {

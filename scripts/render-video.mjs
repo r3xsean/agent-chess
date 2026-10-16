@@ -1,7 +1,7 @@
 // Render a game replay to MP4 for YouTube (16:9) and/or TikTok (9:16).
 //
 //   node scripts/render-video.mjs <gameId> [--format landscape|portrait|both] [--fps 30]
-//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--audio-only]
+//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only]
 //
 // The server must be running with a fresh build (dist/). The video page at #/video/<id> lays out
 // every frame as a pure function of time; this script seeks it frame by frame in headless Chrome and
@@ -10,7 +10,8 @@
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
 
@@ -76,6 +77,8 @@ function run(cmd, argv, input) {
 /* ------------------------------ sound effects ------------------------------ */
 
 const SFX_DIR = resolve("vendor/sfx");
+/** Seconds into a voiced scene that its line starts (web/src/video/timeline.ts VOICE_AT). */
+const VOICE_AT = 0.3;
 const STINGS = { brilliant: ["brilliant", 1], great: ["great", 0.9], blunder: ["blunder", 1], mistake: ["mistake", 0.9], miss: ["mistake", 0.9], inaccuracy: ["inaccuracy", 0.7] };
 
 /**
@@ -86,8 +89,11 @@ function sfxCues(scenes, g) {
   const cues = [];
   const at = (t, ev, gain) => cues.push({ t, ev, gain });
   for (const s of scenes) {
+    // The speaker's recorded line (thinking, interviews, flashbacks), at the offset the timeline allows for.
+    if (s.voice) cues.push({ t: s.start + VOICE_AT, file: `${SERVER}${s.voice.url}`, rate: s.voice.rate, gain: 1 });
     if (s.kind === "versus") at(s.start + 0.25, "versus", 0.8);
-    else if (s.kind === "interview" || s.kind === "end") at(s.start, "transition", 0.35);
+    else if (s.kind === "interview" || s.kind === "end" || s.kind === "flashback") at(s.start, "transition", 0.35);
+    else if (s.kind === "rewind") at(s.start, "transition", 0.6);
     else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
     else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
     else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);
@@ -112,13 +118,16 @@ function sfxCues(scenes, g) {
   return cues;
 }
 
+/** A sound as raw stereo samples; `tempo` speeds it up without changing its pitch (the short's quicker voices). */
 const decoded = new Map();
-async function decode(file) {
-  if (!decoded.has(file)) {
-    const buf = await run("ffmpeg", ["-v", "error", "-i", file, "-f", "f32le", "-ac", "2", "-ar", String(RATE), "-"]);
-    decoded.set(file, new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
+async function decode(file, tempo = 1) {
+  const key = `${file}|${tempo}`;
+  if (!decoded.has(key)) {
+    const filter = tempo !== 1 ? ["-af", `atempo=${tempo}`] : [];
+    const buf = await run("ffmpeg", ["-v", "error", "-i", file, ...filter, "-f", "f32le", "-ac", "2", "-ar", String(RATE), "-"]);
+    decoded.set(key, new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
   }
-  return decoded.get(file);
+  return decoded.get(key);
 }
 
 /** Mix every cue into one stereo track and write it as a 16-bit WAV. Variants of a sound rotate. */
@@ -129,10 +138,13 @@ async function buildSfxTrack(cues, duration, file) {
   const mix = new Float32Array(Math.ceil((duration + 2) * RATE) * 2);
   let placed = 0;
   for (const c of cues) {
-    const list = variants(c.ev);
-    if (!list.length) continue;
-    const name = list[(used[c.ev] = (used[c.ev] ?? -1) + 1) % list.length];
-    const pcm = await decode(join(SFX_DIR, name));
+    let src = c.file;
+    if (!src) {
+      const list = variants(c.ev);
+      if (!list.length) continue;
+      src = join(SFX_DIR, list[(used[c.ev] = (used[c.ev] ?? -1) + 1) % list.length]);
+    }
+    const pcm = await decode(src, c.rate ?? 1);
     const off = Math.max(0, Math.round(c.t * RATE)) * 2;
     for (let i = 0; i < pcm.length && off + i < mix.length; i++) mix[off + i] += pcm[i] * c.gain;
     placed++;
@@ -174,6 +186,58 @@ async function mux(video, out, duration, sfx, music) {
   await run("ffmpeg", ["-y", "-v", "error", ...inputs, "-map", "0:v", ...audio, "-c:v", "copy", "-t", duration.toFixed(3), "-movflags", "+faststart", out]);
 }
 
+/* ------------------------------ packaging ------------------------------ */
+
+const stamp = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+/**
+ * YouTube chapters from the landscape timeline: the cold open, the players, each of the director's
+ * named moments (from its thinking, or the move itself), and the result. YouTube wants the first at
+ * 0:00, at least three, and each at least 10 seconds long, so ones that come too soon are dropped.
+ */
+function chapters(scenes, g, duration) {
+  const plan = g.video;
+  const want = [];
+  if (scenes[0]?.kind !== "versus") want.push({ t: 0, title: "Cold open" });
+  const versus = scenes.find((s) => s.kind === "versus");
+  if (versus) want.push({ t: want.length ? versus.start : 0, title: "The players" });
+  for (const m of plan?.moments ?? []) {
+    if (!m.chapter) continue;
+    const i = g.moves.findIndex((x) => x.ply === m.ply);
+    // The game's own scenes for this move, not the cold open's copy of it.
+    const s = scenes.find((x) => (x.kind === "think" || x.kind === "move") && x.i === i && !x.hook);
+    if (s) want.push({ t: s.start, title: m.chapter });
+  }
+  const result = scenes.find((s) => s.kind === "result");
+  if (result) want.push({ t: result.start, title: "The result" });
+  want.sort((a, b) => a.t - b.t);
+  const kept = [];
+  for (const c of want) if (!kept.length || c.t - kept[kept.length - 1].t >= 10) kept.push(c);
+  while (kept.length && duration - kept[kept.length - 1].t < 10) kept.pop();
+  if (kept.length) kept[0].t = 0;
+  return kept.length >= 3 ? kept : [];
+}
+
+/** The YouTube upload text: title, the TikTok caption, a line about the game, and the chapters. */
+function description(g, scenes, duration) {
+  const pk = g.video?.packaging;
+  const name = (ref) => ref.modelLabel;
+  const lines = [
+    `TITLE: ${pk?.title ?? `${name(g.white)} vs ${name(g.black)}`}`,
+    "",
+    `TIKTOK CAPTION: ${pk?.caption ?? ""}`,
+    "",
+    "DESCRIPTION:",
+    g.white.provider === "human" || g.black.provider === "human"
+      ? `${name(g.white)} (White) vs ${name(g.black)} (Black): a human against an AI model on Agent Chess. Every thought on screen is the model's own commentary, written during the game; the engine judges every move.`
+      : `${name(g.white)} (White) vs ${name(g.black)} (Black), two AI models playing chess on Agent Chess. Every thought on screen is the model's own commentary, written during the game; the engine judges every move.`,
+    `${g.opening?.name ? `Opening: ${g.opening.name}. ` : ""}Result: ${g.result} (${g.termination}).`,
+  ];
+  const ch = chapters(scenes, g, duration);
+  if (ch.length) lines.push("", ...ch.map((c) => `${stamp(c.t)} ${c.title}`));
+  return lines.join("\n") + "\n";
+}
+
 /* ------------------------------ render ------------------------------ */
 
 const music = stills.length ? null : findMusic();
@@ -189,7 +253,7 @@ try {
     const [width, height] = SIZES[format];
     const page = await browser.newPage();
     await page.setViewport({ width, height, deviceScaleFactor: 1 });
-    await page.goto(`${SERVER}/#/video/${gameId}?format=${format}&render=1&thoughts=${opt("thoughts", "on")}`, { waitUntil: "load" });
+    await page.goto(`${SERVER}/#/video/${gameId}?format=${format}&render=1&thoughts=${opt("thoughts", "on")}&voices=${opt("voices", "on")}`, { waitUntil: "load" });
     await page.waitForFunction(() => window.__video?.ready, { timeout: 60_000 });
     await page.evaluate(() => document.fonts.ready);
     const duration = await page.evaluate(() => window.__video.duration);
@@ -214,10 +278,17 @@ try {
     const silent = `${out}.video.mp4`;
     const started = Date.now();
     let note = "";
+    // What the frames were timed to. --audio-only reuses the frames, so it must find the same timing:
+    // new voice lines, a re-plan or the short's voice speed all move scenes about.
+    const timing = createHash("sha1").update(JSON.stringify(scenes.map((s) => [s.kind, s.start, s.dur]))).digest("hex");
+    const timingFile = `${out}.timing`;
 
     if (audioOnly) {
       if (!existsSync(out)) throw new Error(`--audio-only needs an existing render: ${out}`);
-      copyFileSync(out, silent);
+      if (!existsSync(timingFile) || readFileSync(timingFile, "utf8").trim() !== timing)
+        throw new Error(`The timing changed since ${out} was rendered (new voice lines, a new plan or a different voice speed): render the frames again, without --audio-only.`);
+      // The picture only: whatever soundtrack it had is replaced (or, with nothing to add, dropped).
+      await run("ffmpeg", ["-y", "-v", "error", "-i", out, "-map", "0:v", "-c", "copy", silent]);
     } else {
       const ff = spawn(
         "ffmpeg",
@@ -252,17 +323,37 @@ try {
     }
     await page.close();
 
+    // Effects and voices share one track (so the music ducks under both); --sfx off drops only the effects.
+    const sfxOn = opt("sfx", "on") !== "off";
+    const cues = sfxCues(scenes, game).filter((q) => sfxOn || q.file);
     let sfx = null;
-    if (opt("sfx", "on") !== "off") {
+    if (cues.length) {
       sfx = `${out}.sfx.wav`;
-      const placed = await buildSfxTrack(sfxCues(scenes, game), duration, sfx);
+      const placed = await buildSfxTrack(cues, duration, sfx);
       if (!placed) sfx = null;
-      note += `${placed} sound effects, `;
+      note += `${placed} sounds, `;
     }
     if (sfx || music) await mux(silent, out, duration, sfx, music);
     else renameSync(silent, out);
     for (const f of [silent, `${out}.sfx.wav`]) rmSync(f, { force: true });
+    writeFileSync(timingFile, timing);
     console.log(`\r${format}: ${out}  (${duration.toFixed(1)}s, ${note}${((Date.now() - started) / 1000).toFixed(0)}s)${music ? "" : "  [no music]"}`);
+
+    // With the YouTube cut come its upload text (chapters need its timeline) and the thumbnail.
+    if (format === "landscape" && game.video) {
+      writeFileSync(join(outDir, `${gameId}-youtube.txt`), description(game, scenes, duration));
+      if (game.video.packaging) {
+        const tp = await browser.newPage();
+        await tp.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+        await tp.goto(`${SERVER}/#/video/${gameId}?render=1&thumb=1`, { waitUntil: "load" });
+        // Once its text has been sized to fit (see Thumbnail in VideoPage.tsx).
+        await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
+        if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${game.video.packaging.thumbnail.text}" doesn't fit, so part of it may be cut off.`);
+        await tp.evaluate(() => document.fonts.ready);
+        await tp.screenshot({ path: join(outDir, `${gameId}-thumb.png`) });
+        await tp.close();
+      }
+    }
   }
 } finally {
   await browser.close();

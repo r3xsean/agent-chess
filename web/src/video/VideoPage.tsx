@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
-import type { Classification, Color, Game, PlayerRef, Score } from "../../../shared/types";
+import type { Classification, Color, Game, PlayerRef, Rivalry, Score } from "../../../shared/types";
+import { seriesLine } from "../../../shared/series";
+import type { VoiceManifest } from "../../../shared/voices";
 import { personalityById, RISK_LABEL } from "../../../shared/personalities";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
+import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, sceneAt, type Format, type Scene, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, sceneAt, VOICE_AT, type Format, type Scene, type Timeline } from "./timeline";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
 import "./video.css";
@@ -98,6 +101,8 @@ interface Prep {
   clocks: Record<Color, number>[];
   /** Each player's own evaluation after their moves, as White's win%. */
   self: Record<Color, { ply: number; w: number }[]>;
+  /** What each mover believed against the engine, by move index. */
+  belief: (Belief | null)[];
   firstOutOfBook: number;
 }
 
@@ -135,7 +140,7 @@ function prepare(g: Game): Prep {
     const prev = clocks[clocks.length - 1];
     clocks.push({ ...prev, [m.color]: prev[m.color] + m.thinkMs });
   }
-  return { check, material, line, bestLine, graph, self, clocks, firstOutOfBook: g.moves.findIndex((m) => m.analysis?.classification !== "book") };
+  return { check, material, line, bestLine, graph, self, belief: beliefs(g), clocks, firstOutOfBook: g.moves.findIndex((m) => m.analysis?.classification !== "book") };
 }
 
 /* ------------------------------ what's on screen at time t ------------------------------ */
@@ -163,14 +168,22 @@ interface View {
   board?: BoardView;
   /** `status` is a plain one-line banner ("… is thinking") instead of a move verdict. */
   callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string };
-  line?: { label: string; text: string };
+  /** `color`: the line is about a player (what they thought), in their colour. */
+  line?: { label: string; text: string; color?: string };
   thought?: { text: string; color: Color; selfEval: string; fade: number };
   reveal?: number;
+  /** The cold open's caption, over the payoff moment. */
+  hook?: string;
+  /** The wind-back after the cold open: 0 → 1 over the scene. */
+  rewind?: number;
+  /** On a key moment where the mover misjudges (or finally sees the truth): what they think, then the engine. */
+  /** Whose belief the eval bar features: the player of move i (about to play it, during their thinking), and whether it gets a name label. */
+  focus?: { i: number; label: boolean };
   /** Each side's thinking time so far, shown on the player cards. */
   clocks?: Record<Color, number>;
 }
 
-const GAME_SCENES: Scene["kind"][] = ["move", "illegal", "think", "draw", "resign"];
+const GAME_SCENES: Scene["kind"][] = ["move", "illegal", "think", "draw", "resign", "rewind"];
 const isGameScene = (s: Scene | undefined) => !!s && GAME_SCENES.includes(s.kind);
 
 const kingSquare = (fen: string, c: Color) => [...fenBoard(fen)].find(([, p]) => p.type === "k" && p.color === c)?.[0];
@@ -190,6 +203,9 @@ function settledBoard(g: Game, prep: Prep, i: number): BoardView {
   };
 }
 
+/** Worth calling out: the mover is far from the truth, or has just come back to it. */
+const telling = (b: Belief | null) => !!b && (!!b.state || b.change === "realizes");
+
 function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
   const s = sceneAt(tl, t);
   const idx = tl.scenes.indexOf(s);
@@ -198,7 +214,25 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
   const fade = isGameScene(s) && isGameScene(tl.scenes[idx - 1]) ? 1 : r3(clamp01(local / 0.35));
   const v: View = { idx, kind: s.kind, fade };
 
-  if (s.kind === "interview") v.reveal = s.text.split(/\s+/).length;
+  if (s.kind === "interview" || s.kind === "flashback") v.reveal = s.text.split(/\s+/).length;
+  if ((s.kind === "think" || s.kind === "move") && s.hook) v.hook = s.hook;
+
+  if (s.kind === "rewind") {
+    // The game winds back from the cold open's move to the start, quickly at first, settling at move 0.
+    const p = ease(clamp01(local / Math.max(0.1, s.dur - 0.35)));
+    const k = Math.round(s.i - p * (s.i + 1));
+    const m = g.moves[k];
+    v.board = {
+      i: k,
+      fen: m ? m.fenAfter : (g.startFen ?? START_FEN),
+      lastMove: m && [m.from, m.to],
+      check: m ? prep.check[k] : undefined,
+      evalW: r3(prep.graph[k + 1]),
+      evalText: "",
+    };
+    v.clocks = prep.clocks[k + 1];
+    v.rewind = r3(p);
+  }
 
   if (s.kind === "think") {
     const m = g.moves[s.i];
@@ -219,6 +253,9 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     };
     v.callout = { label: `${name} is thinking…`, evalText: formatScore(score), status: true };
     v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)) };
+    // While they think, the bar already shows where they believe their move leaves them; the engine's
+    // level only moves once it lands.
+    v.focus = { i: s.i, label: telling(prep.belief[s.i]) };
   }
 
   if (s.kind === "draw") {
@@ -318,11 +355,22 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
       took: s.key ? took(m.thinkMs) : undefined,
     };
     v.clocks = prep.clocks[s.i + 1];
+    // The reveal is the bar: the engine's level slides away from (or back to) the mover's marker as the move lands.
+    const bl = prep.belief[s.i];
+    const callOut = s.key && telling(bl);
+    v.focus = { i: s.i, label: callOut };
     v.line = bad
         ? { label: "Engine preferred", text: prep.bestLine[s.i] }
         : prep.line[s.i]
           ? { label: "Engine line", text: prep.line[s.i] }
           : undefined;
+    // On a misjudged key moment the line under the verdict says, plainly, what the mover thought (the
+    // better move is already in the verdict and on the board as an arrow).
+    if (callOut && settled) {
+      const said = `${formatScore(selfScore(m))}, ${standing(bl!.self)}`;
+      const color = selfEvalColors(g)[m.color];
+      v.line = bl!.state ? { label: `${sideName(g, m.color)} thought`, text: said, color } : { label: `${sideName(g, m.color)} now sees it:`, text: said, color };
+    }
   }
   return v;
 }
@@ -429,14 +477,55 @@ function Arrow({ from, to }: { from: { x: number; y: number }; to: { x: number; 
   );
 }
 
-function EvalBar({ w, text, length, thickness }: { w: number; text: string; length: number; thickness: number }) {
+/** A player's own evaluation on the bar: White's win% as they see it, in their colour. */
+type BarMark = { color: Color; w: number; fill: string; misjudged: boolean; label?: string };
+
+/**
+ * Each player's latest own evaluation up to the move on the board. One player is featured: the one
+ * about to play (during their thinking, with the evaluation that comes with that move) or who just
+ * moved. Only that player's gap to the engine's level is striped, so two never overlap, and on key
+ * moments their marker carries a name label.
+ */
+function barMarks(g: Game, prep: Prep, b: BoardView, focus?: View["focus"]): BarMark[] {
+  const colors = selfEvalColors(g);
+  const i = focus?.i ?? b.i;
+  const featured = g.moves[i]?.color;
+  return (["w", "b"] as Color[]).flatMap((c) => {
+    const own = prep.self[c].filter((p) => p.ply <= (c === featured ? i : b.i) + 1).at(-1);
+    if (!own) return [];
+    const side = (white: number) => (c === "w" ? white : 100 - white);
+    const lead = c === featured;
+    const label = lead && focus?.label ? `${sideName(g, c)}: ${formatScore(selfScore(g.moves[own.ply - 1]))}` : undefined;
+    return [{ color: c, w: own.w, fill: colors[c], misjudged: lead && !!judge(side(own.w), side(b.evalW)), label }];
+  });
+}
+function EvalBar({ w, text, length, thickness, marks = [] }: { w: number; text: string; length: number; thickness: number; marks?: BarMark[] }) {
   const whiteAhead = w >= 50;
   return (
+    <div className="v-evalbar-wrap" style={{ width: thickness, height: length }}>
     <div className="v-evalbar" style={{ width: thickness, height: length }}>
       <div className="v-evalbar-white" style={{ height: `${w}%` }} />
+      {marks.map((m) => (
+        <div key={m.color}>
+          {m.misjudged && (
+            <div className="v-evalbar-gap" style={{ bottom: `${Math.min(m.w, w)}%`, height: `${Math.abs(m.w - w)}%`, ["--c" as string]: m.fill }} />
+          )}
+          <div className={`v-evalbar-mark ${m.misjudged ? "off" : ""}`} style={{ bottom: `${m.w}%`, background: m.fill }} />
+        </div>
+      ))}
       <span className={`v-evalbar-text ${whiteAhead ? "bottom" : "top"}`} style={{ fontSize: thickness * 0.5 }}>
         {text.replace(/^[+-]/, "")}
       </span>
+    </div>
+      {/* Whose marker it is, beside the bar (over the board's edge) on the moments that matter. */}
+      {marks.map(
+        (m) =>
+          m.label && (
+            <div key={m.color} className="v-evalbar-label" style={{ bottom: `${m.w}%`, left: thickness + 8, borderColor: m.fill, fontSize: Math.max(20, thickness * 0.72) }}>
+              {m.label}
+            </div>
+          ),
+      )}
     </div>
   );
 }
@@ -565,7 +654,6 @@ function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]
   );
 }
 
-/** The engine's eval (White's share shaded) with each player's own evaluation drawn over it. */
 /** The moves played so far (never the ones to come), newest at the bottom, with their verdicts. */
 function MoveList({ g, ply }: { g: Game; ply: number }) {
   const ROWS = 11;
@@ -663,7 +751,10 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
   const bubble = t && <ThoughtBubble g={g} t={t} size={30} />;
   const line = v.line && (
     <>
-      <span className="v-line-label">{v.line.label}</span> {v.line.text}
+      <span className="v-line-label" style={v.line.color ? { color: v.line.color } : undefined}>
+        {v.line.label}
+      </span>{" "}
+      {v.line.text}
     </>
   );
   const turn: Color = b.fen.split(" ")[1] as Color;
@@ -671,13 +762,25 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
   const opening = g.opening && b.i >= prep.firstOutOfBook - 1 ? g.opening.name : "";
   const card = (c: Color) => <PlayerCard g={g} color={c} material={mat} rating={ratings?.[c].before} toMove={turn === c && !b.anim} clockMs={v.clocks?.[c] ?? 0} />;
   const callout = b.illegal ? <IllegalBanner g={g} b={b} /> : v.callout ? <Callout c={v.callout} wide={wide} /> : null;
+  const hook =
+    v.rewind !== undefined ? (
+      <div className="v-hook rewind">
+        <div className="v-hook-rewind">⏪</div>
+        <div className="v-hook-text">How did we get here?</div>
+        <div className="v-hook-sub">{b.i >= 0 ? moveLabel(g.moves[b.i].ply, g.moves[b.i].san) : "Move 1"}</div>
+      </div>
+    ) : v.hook ? (
+      <div className="v-hook">
+        <div className="v-hook-text">{v.hook}</div>
+      </div>
+    ) : null;
 
   if (wide)
     return (
       <div className="v-game landscape">
         <div className="v-top-card">{card("b")}</div>
         <div className="v-evalbar-pos">
-          <EvalBar w={b.evalW} text={b.evalText} length={860} thickness={34} />
+          <EvalBar w={b.evalW} text={b.evalText} length={860} thickness={34} marks={barMarks(g, prep, b, v.focus)} />
         </div>
         <div className="v-board-pos">
           <VBoard b={b} size={860} orientation="w" />
@@ -694,9 +797,14 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
           {!t && (
           <div className="v-line">{line}</div>
           )}
-          <MoveList g={g} ply={b.i + 1} />
-          <ChartLegend g={g} />
-          <EvalGraph prep={prep} g={g} ply={b.i + 1} width={840} height={130} />
+          {/* The cold open and its rewind hold the big caption where the move list and chart go. */}
+          {hook ?? (
+            <>
+              <MoveList g={g} ply={b.i + 1} />
+              <ChartLegend g={g} />
+              <EvalGraph prep={prep} g={g} ply={b.i + 1} width={840} height={130} />
+            </>
+          )}
         </div>
       </div>
     );
@@ -707,23 +815,54 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
         <span className="v-opening">{opening}</span>
       </div>
       <div className="v-p-callout">{callout}</div>
-      <div className="v-p-line v-line">{line}</div>
-      {/* How the game went so far, and how each player saw it. */}
-      <div className="v-p-caption">
-        <div className="v-p-chart">
-          <ChartLegend g={g} />
-          <EvalGraph prep={prep} g={g} ply={b.i + 1} width={900} height={150} />
-        </div>
+      {!hook && <div className="v-p-line v-line">{line}</div>}
+      {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead. */}
+      <div className={`v-p-caption ${hook ? "hooked" : ""}`}>
+        {hook ? (
+          hook
+        ) : (
+          <div className="v-p-chart">
+            <ChartLegend g={g} />
+            <EvalGraph prep={prep} g={g} ply={b.i + 1} width={900} height={150} />
+          </div>
+        )}
       </div>
       <div className="v-p-top-card">{card("b")}</div>
       <div className="v-p-evalbar">
-        <EvalBar w={b.evalW} text={b.evalText} length={900} thickness={28} />
+        <EvalBar w={b.evalW} text={b.evalText} length={900} thickness={28} marks={barMarks(g, prep, b, v.focus)} />
       </div>
       <div className="v-p-board">
         <VBoard b={b} size={900} orientation="w" />
         {bubble}
       </div>
       <div className="v-p-bottom-card">{card("w")}</div>
+    </div>
+  );
+}
+
+/** "Before the game, X said…": a pre-game line coming back at the moment it's proven wrong (or right). */
+function FlashbackScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: "flashback" }>; v: View; wide: boolean }) {
+  const ref = s.color === "w" ? g.white : g.black;
+  const ws = s.text.split(/\s+/);
+  return (
+    <div className={`v-interview v-flashback ${wide ? "landscape" : "portrait"}`}>
+      <div className="v-flashback-tag">⏮ Flashback · before the game</div>
+      <div className="v-interview-head">
+        <Avatar player={ref} size={wide ? 120 : 140} />
+        <div>
+          <div className="v-interview-kind">Pre-game interview</div>
+          <div className="v-interview-name" style={{ color: makerOf(ref.provider).color }}>
+            {ref.modelLabel}
+          </div>
+        </div>
+      </div>
+      <div className="v-quote" style={{ fontSize: wide ? 60 : 58 }}>
+        {ws.map((w, i) => (
+          <span key={i} style={{ opacity: i < (v.reveal ?? 0) ? 1 : 0 }}>
+            {w}{" "}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -749,7 +888,20 @@ function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: numb
   );
 }
 
-function VersusScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean; ratings: Ratings }) {
+/** The series line under the matchup: a first meeting, a rematch, or a revenge match. */
+function SeriesBanner({ g, rival }: { g: Game; rival: Rivalry | null }) {
+  if (!rival) return null;
+  const name = (c: Color) => sideName(g, c);
+  if (!rival.last) return <div className="v-series first">First meeting</div>;
+  const tag = rival.last.winner === null ? "Rematch" : `Revenge match for ${name(rival.last.winner === "w" ? "b" : "w")}`;
+  return (
+    <div className="v-series">
+      <b>{tag}</b> · {seriesLine(rival.before, name)}
+    </div>
+  );
+}
+
+function VersusScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: boolean; ratings: Ratings; rival: Rivalry | null }) {
   return (
     <div className={`v-versus ${wide ? "landscape" : "portrait"}`}>
       <div className="v-logo big">♞ Agent Chess</div>
@@ -758,6 +910,7 @@ function VersusScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean;
         <div className="v-vs">VS</div>
         <PlayerHero g={g} color="b" rating={ratings?.b.before} />
       </div>
+      <SeriesBanner g={g} rival={rival} />
     </div>
   );
 }
@@ -796,7 +949,7 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
 
 const RESULT_COUNTS: Classification[] = ["brilliant", "great", "best", "excellent", "good", "inaccuracy", "mistake", "miss", "blunder"];
 
-function ResultScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean; ratings: Ratings }) {
+function ResultScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: boolean; ratings: Ratings; rival: Rivalry | null }) {
   const winner: Color | null = g.result === "1-0" ? "w" : g.result === "0-1" ? "b" : null;
   const headline = winner ? `${sideName(g, winner)} wins` : "Draw";
   const side = (c: Color) => {
@@ -841,6 +994,7 @@ function ResultScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean;
       <div className="v-result-score">{g.result ?? "*"}</div>
       <div className="v-result-headline">{headline}</div>
       <div className="v-result-term">{g.termination}</div>
+      {rival && rival.after.w + rival.after.b + rival.after.draws > 1 && <div className="v-series">{seriesLine(rival.after, (c) => sideName(g, c))}</div>}
       <div className="v-result-row">
         {side("w")}
         {side("b")}
@@ -865,14 +1019,15 @@ function EndScene({ g }: { g: Game }) {
   );
 }
 
-function Frame({ g, tl, prep, v, ratings }: { g: Game; tl: Timeline; prep: Prep; v: View; ratings: Ratings }) {
+function Frame({ g, tl, prep, v, ratings, rival }: { g: Game; tl: Timeline; prep: Prep; v: View; ratings: Ratings; rival: Rivalry | null }) {
   const wide = tl.format === "landscape";
   const s = tl.scenes[v.idx];
   let body: React.ReactNode = null;
   if (v.board) body = <GameScene g={g} v={v} prep={prep} wide={wide} ratings={ratings} />;
-  else if (s.kind === "versus") body = <VersusScene g={g} v={v} wide={wide} ratings={ratings} />;
+  else if (s.kind === "versus") body = <VersusScene g={g} v={v} wide={wide} ratings={ratings} rival={rival} />;
   else if (s.kind === "interview") body = <InterviewScene g={g} s={s} v={v} wide={wide} />;
-  else if (s.kind === "result") body = <ResultScene g={g} v={v} wide={wide} ratings={ratings} />;
+  else if (s.kind === "flashback") body = <FlashbackScene g={g} s={s} v={v} wide={wide} />;
+  else if (s.kind === "result") body = <ResultScene g={g} v={v} wide={wide} ratings={ratings} rival={rival} />;
   else if (s.kind === "end") body = <EndScene g={g} />;
   const { w, h } = FRAME[tl.format];
   return (
@@ -884,6 +1039,76 @@ function Frame({ g, tl, prep, v, ratings }: { g: Game; tl: Timeline; prep: Prep;
   );
 }
 
+/* ------------------------------ thumbnail ------------------------------ */
+
+export const THUMB = { w: 1280, h: 720 };
+
+/** The YouTube thumbnail: the director's chosen position with its verdict, a few huge words and the matchup. */
+function Thumbnail({ g, prep }: { g: Game; prep: Prep }) {
+  const pk = g.video?.packaging;
+  const words = pk?.thumbnail.text ?? "";
+  const i = Math.max(0, g.moves.findIndex((m) => m.ply === pk?.thumbnail.ply));
+  const b = settledBoard(g, prep, i);
+  const cls = g.moves[i]?.analysis?.classification;
+  // The text starts as big as it can be and shrinks, measured in the real font, until no word sticks out
+  // and the column (icon, text, matchup) fits the frame. data-fit tells the renderer it's settled: "1" fitted, "0" didn't.
+  const text = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState<"1" | "0" | null>(null);
+  useLayoutEffect(() => {
+    let alive = true;
+    setFit(null);
+    // Measured in the real font, so once it has loaded (or after 3 s, if it never reports in).
+    Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 3000))]).then(() => {
+      const el = text.current;
+      const col = column.current;
+      if (!alive || !el || !col) return;
+      const wide = () => el.scrollWidth > el.clientWidth + 1;
+      const tall = () => col.getBoundingClientRect().height > THUMB.h - 40;
+      let size = 104;
+      const at = (px: number) => (el.style.fontSize = `${(size = px)}px`);
+      at(104);
+      el.style.overflowWrap = "normal";
+      while (size > 28 && (wide() || tall())) at(size - 4);
+      // A single word too long for the column even at 28px is allowed to break, then sized to fit the height.
+      if (wide()) {
+        el.style.overflowWrap = "anywhere";
+        while (size > 12 && tall()) at(size - 2);
+      }
+      setFit(!wide() && !tall() ? "1" : "0");
+    });
+    return () => {
+      alive = false;
+    };
+  }, [words]);
+  const side = (c: Color) => {
+    const ref = c === "w" ? g.white : g.black;
+    return (
+      <div className="v-thumb-player">
+        <Avatar player={ref} size={64} />
+        <span style={{ color: makerOf(ref.provider).color }}>{ref.modelLabel}</span>
+      </div>
+    );
+  };
+  return (
+    <div className="v-thumb" style={{ width: THUMB.w, height: THUMB.h }} data-fit={fit ?? undefined}>
+      <div className="v-thumb-board">
+        <VBoard b={b} size={640} orientation="w" />
+      </div>
+      <div className="v-thumb-right" ref={column}>
+        {cls && <ClassIcon c={cls} size={120} />}
+        <div className="v-thumb-text" ref={text}>
+          {words}
+        </div>
+        <div className="v-thumb-vs">
+          {side("w")}
+          <span className="v-thumb-vs-word">vs</span>
+          {side("b")}
+        </div>
+      </div>
+    </div>
+  );
+}
 /* ------------------------------ ratings at the time of the game ------------------------------ */
 
 async function loadRatings(g: Game): Promise<Ratings> {
@@ -921,10 +1146,18 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   const render = query.get("render") === "1";
   const [game, setGame] = useState<Game | null>(null);
   const [ratings, setRatings] = useState<Ratings | undefined>(undefined);
+  const [rival, setRival] = useState<Rivalry | null | undefined>(undefined);
+  const [voice, setVoice] = useState<VoiceManifest | undefined>(undefined);
   const [error, setError] = useState("");
   // The preview opens just past the intro's fade-in rather than on a blank frame.
   const [t, setT] = useState(Number(query.get("t")) || (render ? 0 : 0.5));
   const [playing, setPlaying] = useState(false);
+  // Counts the viewer's jumps in the preview (not the clock running on), so a spoken line can follow them.
+  const [seeks, setSeeks] = useState(0);
+  const seek = (to: number | ((x: number) => number)) => {
+    setT(to);
+    setSeeks((n) => n + 1);
+  };
   const [reload, setReload] = useState(0);
   const keyRef = useRef("");
 
@@ -936,13 +1169,24 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       })
       .then((r) => setRatings(r ?? null))
       .catch((e) => setError(String(e.message ?? e)));
+    // The series between the two models (absent on the public mirror: the cards just leave it out).
+    api<{ rivalry: Rivalry | null }>(`/api/games/${id}/rivalry`)
+      .then((r) => setRival(r.rivalry))
+      .catch(() => setRival(null));
+    // The players' recorded lines, whose lengths set the timing (none on the public mirror).
+    // (A render asked to be silent gets none.)
+    if (query.get("voices") === "off") setVoice({ clips: {} });
+    else
+      api<VoiceManifest>(`/api/games/${id}/voice`)
+        .then(setVoice)
+        .catch(() => setVoice({ clips: {} }));
   }, [id, reload]);
 
   const thoughts = query.get("thoughts") !== "off";
   const pace = Number(query.get("pace")) || 1;
-  const tl = useMemo(() => game && buildTimeline(game, format, { thoughts, pace }), [game, format, thoughts, pace]);
+  const tl = useMemo(() => game && voice && buildTimeline(game, format, { thoughts, pace, voice }), [game, format, thoughts, pace, voice]);
   const prep = useMemo(() => game && prepare(game), [game]);
-  const ready = !!(game && tl && prep && ratings !== undefined);
+  const ready = !!(game && tl && prep && ratings !== undefined && rival !== undefined);
   const v = ready ? derive(game!, tl!, prep!, Math.min(t, tl!.duration - 1e-3)) : null;
   if (v) keyRef.current = JSON.stringify(v);
 
@@ -987,6 +1231,28 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
     return () => cancelAnimationFrame(raf);
   }, [playing, tl]);
 
+  // Preview playback speaks the recorded lines as their scenes come up (a render mixes them into the
+  // soundtrack instead).
+  const sceneIdx = v?.idx ?? -1;
+  useEffect(() => {
+    const s = tl?.scenes[sceneIdx];
+    if (render || !playing || !s?.voice) return;
+    const audio = new Audio(s.voice.url);
+    audio.playbackRate = s.voice.rate;
+    // Picks up from wherever the preview is in the scene: its start, or mid-line after a seek or a pause.
+    const into = (t - s.start - VOICE_AT) * s.voice.rate;
+    const start = () => {
+      audio.currentTime = Math.max(0, into);
+      audio.play().catch(() => {});
+    };
+    const wait = setTimeout(start, Math.max(0, -into / s.voice.rate) * 1000);
+    return () => {
+      clearTimeout(wait);
+      audio.pause();
+    };
+    // A new scene, play/pause or a seek starts or stops a line; time running on within the scene doesn't.
+  }, [sceneIdx, playing, tl, render, seeks]);
+
   const [win, setWin] = useState({ w: innerWidth, h: innerHeight });
   useEffect(() => {
     const on = () => setWin({ w: innerWidth, h: innerHeight });
@@ -1000,8 +1266,8 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       if (e.key === " ") {
         e.preventDefault();
         setPlaying((p) => !p);
-      } else if (e.key === "ArrowRight") setT((x) => x + 5);
-      else if (e.key === "ArrowLeft") setT((x) => Math.max(0, x - 5));
+      } else if (e.key === "ArrowRight") seek((x) => x + 5);
+      else if (e.key === "ArrowLeft") seek((x) => Math.max(0, x - 5));
     };
     addEventListener("keydown", on);
     return () => removeEventListener("keydown", on);
@@ -1009,8 +1275,9 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
 
   if (error) return <div className="v-msg">Couldn't load game: {error}</div>;
   if (!ready || !v) return <div className="v-msg">Loading…</div>;
+  if (query.get("thumb") === "1") return <div className="v-render">{<Thumbnail g={game!} prep={prep!} />}</div>;
 
-  const frame = <Frame g={game!} tl={tl!} prep={prep!} v={v} ratings={ratings!} />;
+  const frame = <Frame g={game!} tl={tl!} prep={prep!} v={v} ratings={ratings!} rival={rival ?? null} />;
   if (render) return <div className="v-render">{frame}</div>;
 
   const { w, h } = FRAME[format];
@@ -1023,11 +1290,11 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
         <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0" }}>{frame}</div>
       </div>
       <div className="v-controls">
-        <button onClick={() => (t >= tl!.duration ? (setT(0), setPlaying(true)) : setPlaying((p) => !p))}>{playing ? "⏸" : "▶"}</button>
+        <button onClick={() => (t >= tl!.duration ? (seek(0), setPlaying(true)) : setPlaying((p) => !p))}>{playing ? "⏸" : "▶"}</button>
         <span className="v-time">
           {fmtTime(t)} / {fmtTime(tl!.duration)}
         </span>
-        <input type="range" min={0} max={tl!.duration} step={0.05} value={t} onChange={(e) => setT(Number(e.target.value))} />
+        <input type="range" min={0} max={tl!.duration} step={0.05} value={t} onChange={(e) => seek(Number(e.target.value))} />
         <a className={format === "landscape" ? "on" : ""} href={swap("landscape")}>
           YouTube 16:9
         </a>

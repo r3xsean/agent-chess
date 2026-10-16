@@ -1,4 +1,6 @@
 import type { Classification, Color, Game } from "../../../shared/types";
+import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
+import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
 
 export type Format = "landscape" | "portrait";
 export const FRAME: Record<Format, { w: number; h: number }> = {
@@ -6,12 +8,18 @@ export const FRAME: Record<Format, { w: number; h: number }> = {
   portrait: { w: 1080, h: 1920 },
 };
 
-export type Scene = { start: number; dur: number } & (
+/** `voice`: the recorded line spoken in this scene, starting VOICE_AT seconds in, played at `rate`. */
+export type Scene = { start: number; dur: number; voice?: { url: string; rate: number } } & (
   | { kind: "versus" }
   | { kind: "interview"; when: "pre" | "post"; color: Color; text: string }
-  | { kind: "think"; i: number; thought: string }
+  /** `hook`: this is the cold open, with its on-screen caption. */
+  | { kind: "think"; i: number; thought: string; hook?: string }
   | { kind: "illegal"; i: number; attempt: string }
-  | { kind: "move"; i: number; anim: number; key: boolean }
+  | { kind: "move"; i: number; anim: number; key: boolean; hook?: string }
+  /** After the cold open: "how did we get here?", winding back from move i to the start. */
+  | { kind: "rewind"; i: number }
+  /** A pre-game line replayed right after move i, the one that proves it wrong (or right). */
+  | { kind: "flashback"; i: number; color: Color; text: string }
   /** A draw offer made with move i, and what the opponent did about it. */
   | { kind: "draw"; i: number; answer: "declined" | "accepted" | "open" }
   | { kind: "resign"; color: Color }
@@ -32,7 +40,13 @@ export interface TimelineOptions {
   thoughts?: boolean;
   /** Reading speed multiplier: 1.2 = everything 20% quicker. */
   pace?: number;
+  /** The recorded voice lines: a voiced scene lasts as long as its line. */
+  voice?: VoiceManifest;
 }
+
+/** When a voiced line starts within its scene, and the breath left after it. */
+export const VOICE_AT = 0.3;
+const VOICE_TAIL = 0.5;
 
 /** Fallback when there's no director's plan: what slows the video down. */
 const NOTABLE: Classification[] = ["brilliant", "great", "mistake", "miss", "blunder"];
@@ -41,17 +55,6 @@ const PUNISHABLE: Classification[] = ["mistake", "miss", "blunder"];
 /** About 270 words a minute: a little quicker than the average adult reads (~240). */
 const WORDS_PER_SECOND = 4.5;
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
-
-/** The opening sentences of a text, up to about max words (at least one sentence). */
-function excerpt(text: string, max = 40): string {
-  const sentences = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) ?? [text];
-  let out = "";
-  for (const s of sentences) {
-    if (out && words(out + s) > max) break;
-    out += s;
-  }
-  return out.trim();
-}
 
 /*
  * The broadcaster isn't in the video: its lines are stamped with the move on the board when they
@@ -70,18 +73,37 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   };
 
   const plan = g.video;
-  // Interviews are cut to their best line: the director's pick, or else the opening sentences.
-  const interview = (when: "pre" | "post", c: Color) => {
-    const full = g.interviews[when][c]?.text;
-    return plan?.interviewLines[when][c] || (full && excerpt(full));
+  // A line with a recording made from exactly its words, voice and delivery lasts as long as the
+  // recording (at this cut's speed, plus a breath); otherwise, as long as it takes to read.
+  const lines = new Map(videoLines(g).map((l) => [l.id, l]));
+  const rate = VOICE_RATE[format];
+  const voiced = (id: string, dur: number) => {
+    const line = lines.get(id);
+    const clip = opts.voice?.clips[id];
+    const voiceId = line && voiceOf(g, line.color);
+    if (!line || !clip || !voiceId || clip.sig !== lineSig(voiceId, line)) return { dur };
+    return { voice: { url: clip.url, rate }, dur: Math.max(dur, VOICE_AT + clip.dur / rate + VOICE_TAIL) };
   };
+  const interview = (when: "pre" | "post", c: Color) => interviewText(g, when, c);
 
-  // Intro: the matchup, then both pre-game interviews.
-  push({ kind: "versus", dur: 3 });
-  for (const c of ["w", "b"] as Color[]) {
-    const text = interview("pre", c);
-    if (text) push({ kind: "interview", when: "pre", color: c, text, dur: Math.max(2.5, 0.4 + read(text)) });
+  // Cold open: the director's payoff moment first (the mover's line, the move, its verdict), then rewind.
+  const hookAt = plan?.hook ? g.moves.findIndex((m) => m.ply === plan.hook!.ply) : -1;
+  if (plan?.hook && hookAt >= 0) {
+    const { quote, caption } = plan.hook;
+    if (quote && opts.thoughts !== false) push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...voiced("hook", Math.max(2, 0.6 + read(quote))) });
+    const anim = wide ? 0.3 : 0.25;
+    push({ kind: "move", i: hookAt, anim, key: true, hook: caption, dur: anim + Math.max(2.4, read(caption)) });
+    push({ kind: "rewind", i: hookAt, dur: 1.6 });
   }
+
+  // Intro: the matchup, then the pre-game interviews. After a cold open the short gets straight to the
+  // game: its pre-game line, if any, comes back as a flashback when it pays off.
+  push({ kind: "versus", dur: wide || hookAt < 0 ? 3 : 1.8 });
+  if (wide || hookAt < 0)
+    for (const c of ["w", "b"] as Color[]) {
+      const text = interview("pre", c);
+      if (text) push({ kind: "interview", when: "pre", color: c, text, ...voiced(`interview:pre:${c}`, Math.max(2.5, 0.4 + read(text))) });
+    }
 
   // The game.
   const moment = (ply: number) => plan?.moments.find((x) => x.ply === ply && (wide || x.importance >= 2));
@@ -101,7 +123,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
 
     // On key moments the mover explains themselves first, then tries any illegal moves, then plays.
     const thought = opts.thoughts === false ? undefined : plan ? picked?.thought : key ? m.commentary.trim() : undefined;
-    if (thought) push({ kind: "think", i, thought, dur: 0.3 + read(thought) });
+    if (thought) push({ kind: "think", i, thought, ...voiced(`moment:${m.ply}`, 0.3 + read(thought)) });
     for (const attempt of m.illegalAttempts) push({ kind: "illegal", i, attempt, dur: 1.5 });
 
     const anim = wide ? 0.3 : 0.25;
@@ -114,6 +136,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       const answer = !last ? "declined" : g.termination === "draw agreed" ? "accepted" : "open";
       push({ kind: "draw", i, answer, dur: 3 });
     }
+
+    // The flashback lands right after the move that settles it.
+    const cb = plan?.callback;
+    if (cb && cb.ply === m.ply && picked) push({ kind: "flashback", i, color: cb.color, text: cb.line, ...voiced("callback", Math.max(2.8, 0.8 + read(cb.line))) });
   });
   const resigned = /^(White|Black) resigned/.exec(g.termination ?? "");
   if (resigned) push({ kind: "resign", color: resigned[1] === "White" ? "w" : "b", dur: 2.8 });
@@ -123,7 +149,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   const order: Color[] = g.result === "0-1" ? ["b", "w"] : ["w", "b"];
   for (const c of order) {
     const text = interview("post", c);
-    if (text) push({ kind: "interview", when: "post", color: c, text, dur: Math.max(2.5, 0.4 + read(text)) });
+    if (text) push({ kind: "interview", when: "post", color: c, text, ...voiced(`interview:post:${c}`, Math.max(2.5, 0.4 + read(text))) });
   }
   push({ kind: "end", dur: 2.5 });
 

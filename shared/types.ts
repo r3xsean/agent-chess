@@ -165,6 +165,16 @@ export interface Game {
   mirrorCutoffs?: Record<string, number>;
 }
 
+/** Two models' record against each other, keyed by this game's colours. */
+export interface Rivalry {
+  /** Before this game started. */
+  before: { w: number; b: number; draws: number };
+  /** Including this game, once it's over. */
+  after: { w: number; b: number; draws: number };
+  /** Their most recent earlier game: who won it (null = draw), how, and its replay headline if any. */
+  last?: { gameId: string; endedAt: number; winner: Color | null; termination: string; headline?: string };
+}
+
 /** A moment the video slows down for. */
 export interface VideoMoment {
   ply: number;
@@ -174,12 +184,49 @@ export interface VideoMoment {
   importance: 1 | 2 | 3;
   /** Verbatim excerpt of the mover's thinking on this move, shown as a speech bubble before it. */
   thought?: string;
+  /** How the quote is spoken, as a few words of direction ("smug, unbothered"); becomes the voice's audio tag. */
+  delivery?: string;
+  /** A short label for this moment as a YouTube chapter (headline moments only). */
+  chapter?: string;
+}
+
+/** The cold open: the payoff moment, played first, before "how did we get here?". */
+export interface VideoHook {
+  /** The move whose position, quote and verdict open the video. */
+  ply: number;
+  /** Verbatim excerpt of that move's commentary (omitted for a human's move). */
+  quote?: string;
+  delivery?: string;
+  /** The on-screen hook, a dozen words at most ("Sonnet thinks it's winning. It's mate in one."). */
+  caption: string;
+}
+
+/** A pre-game line replayed as a flashback right after the move that proves it wrong (or right). */
+export interface VideoCallback {
+  color: Color;
+  /** Verbatim excerpt of that player's pre-game interview. */
+  line: string;
+  ply: number;
+}
+
+export interface VideoPackaging {
+  /** YouTube title. */
+  title: string;
+  /** TikTok caption, hashtags included. */
+  caption: string;
+  /** The thumbnail: the position after this move, with a few words of big text. */
+  thumbnail: { ply: number; text: string };
 }
 
 export interface VideoPlan {
   moments: VideoMoment[];
   /** The best verbatim line from each interview, for the short cut. */
   interviewLines: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
+  /** How each interview line is spoken (see VideoMoment.delivery). */
+  interviewDelivery?: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
+  hook?: VideoHook;
+  callback?: VideoCallback;
+  packaging?: VideoPackaging;
   createdAt: number;
 }
 
@@ -221,6 +268,10 @@ export interface Tournament {
   chess960?: boolean;
   pairings: { white: string; black: string; gameId?: string; chess960?: number }[];
   status: "running" | "finished";
+  /** Games played at once (default 1). Above 1, no model ever plays two games at the same time, in or out of the tournament. */
+  boards?: number;
+  /** Last time the server asked T3 to start more pairings (so it doesn't ask twice in a row). */
+  lastKickAt?: number;
 }
 
 export interface Lessons {

@@ -7,6 +7,6 @@ export default defineConfig({
   build: { outDir: "../dist", emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { "/api": "http://127.0.0.1:5170", "/sfx": "http://127.0.0.1:5170" },
+    proxy: { "/api": "http://127.0.0.1:5170", "/sfx": "http://127.0.0.1:5170", "/videos": "http://127.0.0.1:5170", "/voice": "http://127.0.0.1:5170" },
   },
 });

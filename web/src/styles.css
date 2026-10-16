@@ -272,6 +272,7 @@ button.nav-item {
   font-size: 12px;
   color: var(--muted);
   height: 18px;
+  min-width: 0;
 }
 .captured {
   display: flex;
@@ -369,6 +370,61 @@ button.nav-item {
   font-size: 10px;
   font-weight: 800;
   z-index: 1;
+}
+/* Each player's own evaluation on the bar, in their colour; a misjudgment shades the gap to the engine. */
+.eval-bar .belief-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--c);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  z-index: 2;
+  transition: bottom 0.6s ease, top 0.6s ease;
+  cursor: help;
+}
+.eval-bar .belief-mark.off {
+  height: 5px;
+  animation: belief-pulse 1.6s ease-in-out infinite;
+}
+.eval-bar .belief-gap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--c) 55%, transparent) 0 4px, color-mix(in srgb, var(--c) 20%, transparent) 4px 8px);
+  z-index: 1;
+  transition: all 0.6s ease;
+  cursor: help;
+}
+@keyframes belief-pulse {
+  50% {
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 8px 2px var(--c);
+  }
+}
+/* "Thinks: winning", under a player's name, loud when it's far from the truth. */
+.belief-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c) 60%, transparent);
+  color: var(--text-2);
+  white-space: nowrap;
+  /* Shrinks (and ellipsizes) before it can push into the clock on a narrow board. */
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+.belief-pill.off {
+  background: color-mix(in srgb, #e5534b 22%, transparent);
+  border-color: #e5534b;
+  color: #ffb4ad;
+}
+.belief-pill.real {
+  border-color: #81b64c;
+  color: #b8dd8e;
 }
 
 /* board theme (chess.com green) */
@@ -727,6 +783,70 @@ cg-board square.check {
   border-radius: 4px;
   background: #1e1d1a;
   color: var(--text-2);
+}
+/* Thinks vs. engine on one lost→winning scale, in the thinking feed. */
+.belief {
+  margin-top: 8px;
+  padding: 7px 9px 6px;
+  border-radius: 6px;
+  background: #1e1d1a;
+  font-size: 12px;
+}
+.belief.off {
+  background: color-mix(in srgb, #e5534b 12%, #1e1d1a);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #e5534b 45%, transparent);
+}
+.belief-track {
+  position: relative;
+  height: 8px;
+  margin: 3px 6px 7px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #e5534b55, #3d3b38 40%, #3d3b38 60%, #81b64c55);
+}
+.belief-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(45deg, #e5534b99 0 4px, #e5534b33 4px 8px);
+}
+.belief-dot {
+  position: absolute;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px #1e1d1a;
+}
+.belief-dot.self {
+  background: var(--c);
+}
+.belief-dot.engine {
+  background: #ffffff;
+  border-radius: 3px;
+  width: 11px;
+  height: 11px;
+}
+.belief-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-2);
+}
+.belief-text .who b {
+  color: var(--c);
+}
+.belief-text .eng b {
+  color: #ffffff;
+}
+.belief-text .tag {
+  font-weight: 800;
+}
+.belief-text .tag.off {
+  color: #ff8a7a;
+}
+.belief-text .tag.real {
+  color: #b8dd8e;
 }
 .eval-chip.engine {
   background: #ffffff;

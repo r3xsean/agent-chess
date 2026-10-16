@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result } from "../shared/types";
+import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result, Tournament } from "../shared/types";
 import { Engine } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
@@ -204,6 +204,47 @@ export const playerFinished = (g: Game, c: Color) =>
 /** Ready to start: the pre-game interview is in (a human is always ready). */
 const preReady = (g: Game, c: Color) => seatIsHuman(g, c) || !!g.interviews.pre[c];
 
+/** A model is busy while any of its games (tournament or not) is unfinished, post-game duties included. */
+const busyModels = () => {
+  const busy = new Set<string>();
+  for (const g of games.values()) if (g.phase !== "finished") for (const p of [g.white, g.black]) if (!isHuman(p)) busy.add(p.model);
+  return busy;
+};
+
+/**
+ * The pairings a tournament can start right now, in schedule order: a free board each, and
+ * (with more than one board) no model that is already playing anywhere.
+ */
+export function startablePairings(t: Tournament) {
+  const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished").length;
+  const boards = Math.max(1, t.boards ?? 1);
+  if (boards === 1) return live ? [] : t.pairings.filter((p) => !p.gameId).slice(0, 1);
+  const byId = new Map(t.players.map((p) => [p.id, p]));
+  const busy = busyModels();
+  const out: Tournament["pairings"] = [];
+  for (const p of t.pairings) {
+    if (live + out.length >= boards) break;
+    if (p.gameId) continue;
+    const models = [byId.get(p.white)!.model, byId.get(p.black)!.model];
+    if (models.some((m) => busy.has(m))) continue;
+    models.forEach((m) => busy.add(m));
+    out.push(p);
+  }
+  return out;
+}
+
+const KICK_COOLDOWN_MS = 5 * 60_000;
+
+/** Ask T3 for an orchestrator run that starts this tournament's next pairings. */
+function kickTournament(t: Tournament, onFail?: () => void) {
+  t.lastKickAt = Date.now();
+  saveTournament(t);
+  triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
+    console.error("[summon] tournament-next failed (retrying in 60s):", e.message);
+    onFail?.();
+  });
+}
+
 /** Periodic housekeeping: phase gates that depend on time. */
 export function tick() {
   const now = Date.now();
@@ -235,12 +276,16 @@ export function tick() {
       if (t?.autoRun && t.status === "running") {
         g.nextTriggered = true;
         saveGameNow(g);
-        triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
-          console.error("[summon] tournament-next failed (retrying in 60s):", e.message);
-          setTimeout(() => (g.nextTriggered = false), 60_000);
-        });
+        kickTournament(t, () => setTimeout(() => (g.nextTriggered = false), 60_000));
       }
     }
+  }
+  // Multi-board tournaments can also be held up by games outside them (a model was busy elsewhere):
+  // when a board is free and a pairing could start, ask again.
+  for (const t of tournaments.values()) {
+    if (!t.autoRun || t.status !== "running" || (t.boards ?? 1) <= 1) continue;
+    if (now - (t.lastKickAt ?? 0) < KICK_COOLDOWN_MS || !startablePairings(t).length) continue;
+    kickTournament(t, () => (t.lastKickAt = Date.now() - KICK_COOLDOWN_MS + 60_000));
   }
 }
 

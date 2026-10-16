@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from "../../../shared/types";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
-import { formatScore, scoreToCp } from "../../../shared/evalmath";
-import { humanSide, sideName } from "../../../shared/naming";
+import { formatScore, scoreToCp, winPercentFor, winPercentWhite } from "../../../shared/evalmath";
+import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
+import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
 import { materialInfo } from "../../../shared/material";
 import { lineBreakReason } from "../../../shared/explain";
@@ -301,6 +302,8 @@ export function GamePage({ id }: { id: string }) {
     if (calc && calcLine) return materialInfo(start, [...game.moves.slice(0, calc.ply - 1).map((m) => m.san), ...calcLine.san.slice(0, calc.step)], variant);
     return materialInfo(start, game.moves.slice(0, ply).map((m) => m.san), variant);
   }, [game?.moves.length, ply, calc, calcLine, explore]);
+  // What each player believed after every move, against the engine (recomputed as analysis arrives).
+  const beliefList = useMemo(() => (game ? beliefs(game) : []), [game]);
 
   // Engine analysis of the viewer's own positions, plus a rating for the move that reached each one.
   const exploreFen = explore && view ? view.fen : null;
@@ -439,6 +442,40 @@ export function GamePage({ id }: { id: string }) {
     if (game.phase === "postgame") return { text: "Post-game", kind: "plain" as const };
     return null;
   };
+  // Each player's latest own evaluation, set against the engine's view of the position on the board (the
+  // same score the bar shows, so the mark, the shading and the pill always agree). Not while you play
+  // (it would leak the engine), nor on a line off the game, where nobody's belief applies.
+  const evalScore = explore ? exploreA?.score : calc ? undefined : engineScoreAt(game, ply);
+  const selfColors = selfEvalColors(game);
+  const latestBelief = (c: Color) => {
+    if (hidden || explore || calc || !evalScore) return null;
+    for (let i = ply - 1; i >= 0; i--) {
+      const m = game.moves[i];
+      if (m.color !== c) continue;
+      const own = selfScore(m);
+      if (!own) return null;
+      const self = winPercentFor(own, c);
+      const engine = winPercentFor(evalScore, c);
+      // "Sees it now": it just came back in line with the engine, on the move it just played.
+      const realizes = i === ply - 1 && beliefList[i]?.change === "realizes";
+      return { m, own, self, engine, state: judge(self, engine), realizes };
+    }
+    return null;
+  };
+  const beliefPill = (c: Color): Parameters<typeof PlayerBar>[0]["belief"] => {
+    const x = latestBelief(c);
+    if (!x) return null;
+    const own = formatScore(x.own);
+    const title = `${sideName(game, c)}'s own evaluation after ${x.m.san}: ${own} (thinks it's ${standing(x.self)}). Engine, now: ${standing(x.engine)}.`;
+    if (x.state) return { text: `💭 thinks: ${standing(x.self)} · engine: ${standing(x.engine)}`, kind: "off", color: selfColors[c], title };
+    if (x.realizes) return { text: `💡 sees it now: ${standing(x.self)}`, kind: "real", color: selfColors[c], title };
+    return { text: `💭 thinks ${own}`, kind: "plain", color: selfColors[c], title };
+  };
+  const beliefMarks = (["w", "b"] as Color[]).flatMap((c) => {
+    const x = latestBelief(c);
+    if (!x) return [];
+    return [{ key: c, white: winPercentWhite(x.own), color: selfColors[c], misjudged: !!x.state, title: `${sideName(game, c)} thinks ${formatScore(x.own)}` }];
+  });
   const top: Color = orientation === "w" ? "b" : "w";
   const bottom: Color = orientation;
   const bar = (c: Color) => (
@@ -448,11 +485,11 @@ export function GamePage({ id }: { id: string }) {
       material={material}
       rating={rating(c)}
       status={status(c)}
+      belief={beliefPill(c)}
       clockMs={thinkMs(c)}
       active={playing && turn === c}
     />
   );
-  const evalScore = explore ? exploreA?.score : calc ? undefined : engineScoreAt(game, ply);
   const agentName = agentSide ? sideName(game, agentSide) : "";
   const hiddenNote = (what: string) => (
     <div className="empty">
@@ -467,7 +504,7 @@ export function GamePage({ id }: { id: string }) {
   return (
     <div className="game-page">
       <div className="board-col">
-        <EvalBar score={evalScore} orientation={orientation} result={ply === total && !calc && !explore ? game.result : null} hidden={hidden} />
+        <EvalBar score={evalScore} orientation={orientation} result={ply === total && !calc && !explore ? game.result : null} hidden={hidden} marks={beliefMarks} />
         <div className="board-stack">
           {bar(top)}
           <Board

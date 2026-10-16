@@ -1,5 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import type { VideoPackaging } from "../../../shared/types";
+
+/** A labelled block of text with a copy button. */
+function Copyable({ label, text, multiline }: { label: string; text: string; multiline?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () =>
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  return (
+    <div className="rp-copy">
+      <div className="rp-copy-head">
+        <span className="rp-label">{label}</span>
+        <button className="rp-small" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {multiline ? <pre className="rp-copy-text">{text}</pre> : <div className="rp-copy-text">{text}</div>}
+    </div>
+  );
+}
+
+/** The upload text minus its TITLE/CAPTION lines: just what goes in YouTube's description box. */
+const descriptionBody = (d: string) => d.split("DESCRIPTION:\n")[1]?.trim() ?? d.trim();
 
 type Format = "landscape" | "portrait";
 
@@ -17,6 +42,10 @@ interface RenderJob {
 interface RenderState {
   jobs: RenderJob[];
   videos: { kind: "youtube" | "tiktok"; url: string; bytes: number; at: number }[];
+  /** The director's title, caption and thumbnail pick; the rendered upload text and thumbnail image. */
+  packaging: VideoPackaging | null;
+  description: string | null;
+  thumbUrl: string | null;
   music: string[];
   directed: boolean;
   summonAvailable: boolean;
@@ -30,19 +59,33 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
   const [state, setState] = useState<RenderState | null>(null);
   const [formats, setFormats] = useState<Format[]>(["landscape", "portrait"]);
   const [music, setMusic] = useState("");
+  const [silent, setSilent] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const wasDirected = useRef<boolean | null>(null);
+  /** Jobs seen running (by this panel, or started from it), and finished jobs already acted on. */
+  const watched = useRef(new Set<string>());
+  const handled = useRef(new Set<string>());
+
+  /**
+   * A new state from the server. When the director has just delivered its plan, or a job this panel
+   * watched has ended (voices recorded, or the attempt stopped, which can rewrite the voice manifest
+   * either way), the preview reloads to show and say the current version.
+   */
+  const take = (s: RenderState) => {
+    setState(s);
+    const last = s.jobs.at(-1);
+    if (last && active(last)) watched.current.add(last.id);
+    const ended = !!last && !active(last) && watched.current.has(last.id) && !handled.current.has(last.id);
+    if (ended) handled.current.add(last!.id);
+    if ((wasDirected.current === false && s.directed) || ended) onPlan();
+    wasDirected.current = s.directed;
+  };
 
   const load = () =>
     api<RenderState>(`/api/games/${gameId}/render`)
-      .then((s) => {
-        setState(s);
-        // The director just delivered its plan: the preview should show the new picks.
-        if (wasDirected.current === false && s.directed) onPlan();
-        wasDirected.current = s.directed;
-      })
+      .then(take)
       .catch((e) => setError(e.message));
 
   const job = state?.jobs.at(-1);
@@ -56,7 +99,11 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
   const render = async () => {
     setError("");
     try {
-      setState(await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null }));
+      const s = await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null, voices: !silent });
+      // The job this click started counts as watched even if it already ended (a fast failure).
+      const last = s.jobs.at(-1);
+      if (last) watched.current.add(last.id);
+      take(s);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -118,6 +165,12 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
         <input ref={file} type="file" accept="audio/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       </div>
 
+      <div className="rp-row rp-formats">
+        <label title="The players' lines in their own voices are recorded (or reused) before the render. Tick this for a version without them.">
+          <input type="checkbox" checked={silent} onChange={(e) => setSilent(e.target.checked)} disabled={busy} /> Without voices
+        </label>
+      </div>
+
       <button className="rp-go" onClick={render} disabled={busy || !formats.length}>
         {busy ? "Rendering…" : "Render"}
       </button>
@@ -151,6 +204,28 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
           <button className="rp-small" onClick={() => api(`/api/games/${gameId}/videos/open`, {})}>
             Show in folder
           </button>
+        </div>
+      )}
+
+      {state?.packaging && (
+        <div className="rp-packaging">
+          <h3>📦 For the upload</h3>
+          <Copyable label="YouTube title" text={state.packaging.title} />
+          {state.description && <Copyable label="YouTube description" text={descriptionBody(state.description)} multiline />}
+          <Copyable label="TikTok caption" text={state.packaging.caption} />
+          {state.thumbUrl ? (
+            <div className="rp-copy">
+              <div className="rp-copy-head">
+                <span className="rp-label">Thumbnail</span>
+                <a className="rp-small" href={state.thumbUrl} download={`${gameId}-thumb.png`}>
+                  Download
+                </a>
+              </div>
+              <img className="rp-thumb" src={state.thumbUrl} alt="YouTube thumbnail" />
+            </div>
+          ) : (
+            <div className="rp-muted">The thumbnail and chapters are made with the YouTube render.</div>
+          )}
         </div>
       )}
     </div>

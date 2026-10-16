@@ -12,6 +12,7 @@ import { renderBoardPng } from "./boardImage";
 import { agentDir, games, readJournal, readLessons } from "./store";
 import { MAX_LESSONS, MAX_LESSON_LINES } from "./game";
 import { modelLabel } from "../shared/models";
+import { rivalry, seriesLine } from "./rivalry";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
@@ -141,7 +142,38 @@ function headToHead(g: Game, color: Color) {
     else if ((x.result === "1-0") === (myColor === "w")) w++;
     else l++;
   }
-  return w + d + l ? `Your record against this opponent: ${w} wins, ${d} draws, ${l} losses.` : "You have never played this opponent before.";
+  // The same two models may have met in other personalities or efforts: that's the series the
+  // interviewer asks about, so say both, and which is which.
+  const r = rivalry(g);
+  const series = r ? { w: r.before[color], d: r.before.draws, l: r.before[other(color)] } : { w: 0, d: 0, l: 0 };
+  const exact = w + d + l ? `Your record against this exact opponent (this personality and effort): ${w} wins, ${d} draws, ${l} losses.` : "";
+  const model = series.w + series.d + series.l ? `Your record against ${sideName(g, other(color))} in any personality or effort: ${series.w} wins, ${series.d} draws, ${series.l} losses.` : "";
+  return [exact, model].filter(Boolean).join(" ") || "You have never played this opponent before.";
+}
+
+/** After the game, where the series between the two models stands now (empty for a first meeting). */
+function seriesNow(g: Game, color: Color): string {
+  const r = rivalry(g);
+  if (!r || r.before.w + r.before.b + r.before.draws === 0) return "";
+  const opp = sideName(g, other(color));
+  return ` ${seriesLine(r.after, (c) => (c === color ? "you" : opp)).replace(/^you leads/, "you lead")} now.`;
+}
+
+/** The interviewer's opening question: about the last meeting and the series when these two models have met before. */
+function pregameQuestion(g: Game, color: Color): string {
+  const plain = "Welcome to the board. How are you feeling about this matchup, and what's your plan for the game?";
+  const r = rivalry(g);
+  if (!r?.last) return plain;
+  const opp = sideName(g, other(color));
+  const lastTime =
+    r.last.winner === null
+      ? `Your last game against ${opp} was a draw${r.last.termination ? ` (${r.last.termination})` : ""}`
+      : r.last.winner === color
+        ? `Last time, you beat ${opp}${r.last.termination ? ` (${r.last.termination})` : ""}`
+        : `Last time, ${opp} beat you${r.last.termination ? ` (${r.last.termination})` : ""}`;
+  const headline = r.last.headline ? ` The replay's headline was: '${r.last.headline.replace(/[.!?]+$/, "")}'.` : "";
+  const series = seriesLine(r.before, (c) => (c === color ? "you" : opp)).replace(/^you leads/, "you lead");
+  return `Welcome back. ${lastTime}.${headline} ${series}. What's different today, and what's your plan?`;
 }
 
 export function pregameBrief(g: Game, color: Color): string {
@@ -165,7 +197,7 @@ export function pregameBrief(g: Game, color: Color): string {
     ...journal.map((e) => `- [${new Date(e.ts).toISOString().slice(0, 10)} vs ${e.opponent}, result ${e.result}, you were ${colorName(e.color)}] ${e.text}`),
     "",
     ...lessonsBlock(g, color),
-    "INTERVIEWER: \"Welcome to the board. How are you feeling about this matchup, and what's your plan for the game?\"",
+    `INTERVIEWER: "${pregameQuestion(g, color)}"`,
     `Answer ${voiceOf(g, color)}, under 800 characters, with: interview <file.txt>  (or: interview --text "...")`,
   ];
   return out.join("\n");
@@ -265,7 +297,7 @@ export function postgameBrief(g: Game, color: Color): string {
   const needs: string[] = [];
   if (!g.interviews.post[color]) {
     needs.push(
-      "1) INTERVIEWER: \"Walk us through that game — what was the key moment, and how do you feel about it?\"",
+      `1) INTERVIEWER: "Walk us through that game — what was the key moment, and how do you feel about it?${seriesNow(g, color)}"`,
       `   Answer ${voiceOf(g, color)}, under 800 characters: interview <file.txt>`,
     );
   }

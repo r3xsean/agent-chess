@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { DATA, ROOT } from "./paths";
 import { games } from "./store";
 import { needsDirection } from "./director";
 import { summonAvailable, triggerOrchestrator } from "./summon";
+import { voiceGame } from "./voice";
 
 /*
  * Video renders started from the website. One render runs at a time; the rest queue. A game with no
@@ -18,6 +19,8 @@ export interface RenderJob {
   gameId: string;
   formats: RenderFormat[];
   music: string | null;
+  /** Speak the players' lines (false: a deliberately silent render). */
+  voices: boolean;
   status: "waiting-director" | "queued" | "rendering" | "done" | "failed";
   /** What's happening right now, in words. */
   stage: string;
@@ -48,6 +51,16 @@ export function musicTracks(): string[] {
     .sort();
 }
 
+/** What came with the YouTube render: the upload text (title, caption, chapters) and the thumbnail. */
+export function packagingFor(gameId: string) {
+  const txt = path.join(VIDEO_DIR, `${gameId}-youtube.txt`);
+  const thumb = path.join(VIDEO_DIR, `${gameId}-thumb.png`);
+  return {
+    description: existsSync(txt) ? readFileSync(txt, "utf8") : null,
+    thumbUrl: existsSync(thumb) ? `/videos/${gameId}-thumb.png?t=${Math.round(statSync(thumb).mtimeMs)}` : null,
+  };
+}
+
 /** The finished videos of a game, newest first. */
 export function videosFor(gameId: string) {
   if (!existsSync(VIDEO_DIR)) return [];
@@ -64,7 +77,7 @@ function update(job: RenderJob, patch: Partial<RenderJob>) {
   Object.assign(job, patch);
 }
 
-export async function startRender(gameId: string, formats: RenderFormat[], music: string | null): Promise<RenderJob> {
+export async function startRender(gameId: string, formats: RenderFormat[], music: string | null, voices = true): Promise<RenderJob> {
   const g = games.get(gameId);
   if (!g) throw new Error("No such game.");
   if (g.phase !== "finished") throw new Error("The game isn't finished yet.");
@@ -72,7 +85,7 @@ export async function startRender(gameId: string, formats: RenderFormat[], music
   const active = jobs.find((j) => j.gameId === gameId && !["done", "failed"].includes(j.status));
   if (active) return active;
 
-  const job: RenderJob = { id: `${gameId}-${Date.now().toString(36)}`, gameId, formats, music, status: "queued", stage: "Queued", progress: 0, createdAt: Date.now() };
+  const job: RenderJob = { id: `${gameId}-${Date.now().toString(36)}`, gameId, formats, music, voices, status: "queued", stage: "Queued", progress: 0, createdAt: Date.now() };
   jobs.push(job);
   if (needsDirection(g)) {
     if (summonAvailable()) {
@@ -107,11 +120,38 @@ function pump() {
   });
 }
 
-function run(job: RenderJob): Promise<void> {
+async function run(job: RenderJob): Promise<void> {
+  // The players' voices first: the video's timing follows the length of each recorded line. A video
+  // with some lines voiced and others silent would look broken, so if any line can't be voiced the
+  // render stops and says why; a retry reuses everything already recorded.
+  const g = games.get(job.gameId);
+  if (g?.video && job.voices) {
+    update(job, { status: "rendering", stage: "Recording the voices…", progress: 0 });
+    const stop = (why: string) =>
+      update(job, {
+        status: "failed",
+        stage: "Stopped: the voices aren't ready",
+        error: `${why} Render again to retry (lines already recorded are reused, not paid for twice), or tick "Without voices".`,
+        finishedAt: Date.now(),
+      });
+    try {
+      const v = await voiceGame(g, (done, total) => update(job, { stage: `Recording the voices… ${done}/${total}`, progress: Math.round((done / total) * 100) }));
+      if (v.silent) return stop(`${v.silent} line${v.silent > 1 ? "s" : ""} couldn't be voiced: ${v.reason ?? "unknown reason."}`);
+      if (v.recorded) update(job, { note: `Recorded ${v.recorded} voice line${v.recorded > 1 ? "s" : ""} (${v.chars} ElevenLabs characters)${v.cached ? `, reused ${v.cached}` : ""}.` });
+    } catch (e) {
+      return stop(`Recording failed: ${(e as Error).message}.`);
+    }
+  }
+  return renderFrames(job);
+}
+
+function renderFrames(job: RenderJob): Promise<void> {
   return new Promise((resolve) => {
     const format = job.formats.length === 2 ? "both" : job.formats[0];
-    const args = [SCRIPT, job.gameId, "--format", format];
+    // Into the folder the site serves and lists videos from (the data folder can live anywhere).
+    const args = [SCRIPT, job.gameId, "--format", format, "--out", VIDEO_DIR];
     if (job.music) args.push("--music", path.join(MUSIC_DIR, job.music));
+    if (!job.voices) args.push("--voices", "off");
     update(job, { status: "rendering", stage: "Starting the renderer…", progress: 0 });
     const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let errText = "";

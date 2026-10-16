@@ -50,6 +50,8 @@ export function PlayerBar(props: {
   material: MaterialInfo;
   rating?: number;
   status?: { text: string; kind: "thinking" | "idle" | "plain" } | null;
+  /** What this player believes about the position (its latest own eval), against the engine. */
+  belief?: { text: string; kind: "off" | "real" | "plain"; color: string; title: string } | null;
   clockMs: number;
   active: boolean;
   onClick?: () => void;
@@ -69,6 +71,11 @@ export function PlayerBar(props: {
         </div>
         <div className="player-sub">
           <Captured info={props.material} color={props.color} />
+          {props.belief && (
+            <span className={`belief-pill ${props.belief.kind}`} style={{ ["--c" as string]: props.belief.color }} title={props.belief.title}>
+              {props.belief.text}
+            </span>
+          )}
         </div>
       </div>
       <div className={`clock ${props.active ? "active" : ""}`} title="Total thinking time">

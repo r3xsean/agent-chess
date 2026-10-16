@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Game, MoveRecord } from "../../../shared/types";
-import { sideName } from "../../../shared/naming";
+import { selfEvalColors, sideName } from "../../../shared/naming";
+import { beliefs, engineAfter, selfScore, standing, type Belief } from "../../../shared/belief";
 import { PlayerAvatar } from "./PlayerName";
 import { formatScore } from "../../../shared/evalmath";
 import { explainIllegal, lineBreakReason } from "../../../shared/explain";
@@ -15,7 +16,52 @@ export interface CalcRef {
 
 const moveNo = (m: MoveRecord) => `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
 
-function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: MoveRecord; on: boolean; calc: CalcRef | null; onSelect: () => void; onPlayLine: (i: number) => void }) {
+/**
+ * What the mover believed against what was true, on one scale from their side: lost on the left,
+ * winning on the right. Far apart, the gap is shaded and labelled.
+ */
+function BeliefMeter({ game, m, b }: { game: Game; m: MoveRecord; b: Belief }) {
+  const color = selfEvalColors(game)[m.color];
+  const engine = engineAfter(game, m);
+  const lo = Math.min(b.self, b.engine);
+  return (
+    <div className={`belief ${b.state ? "off" : ""}`} style={{ ["--c" as string]: color }}>
+      <div className="belief-track" title="Lost ← → winning, from the mover's side">
+        {b.state && <div className="belief-span" style={{ left: `${lo}%`, width: `${Math.abs(b.self - b.engine)}%` }} />}
+        <div className="belief-dot engine" style={{ left: `${b.engine}%` }} />
+        <div className="belief-dot self" style={{ left: `${b.self}%` }} />
+      </div>
+      <div className="belief-text">
+        <span className="who">
+          💭 Thinks <b>{formatScore(selfScore(m))}</b> ({standing(b.self)})
+        </span>
+        <span className="eng">
+          Engine <b>{formatScore(engine)}</b> ({standing(b.engine)})
+        </span>
+        {b.state && <span className="tag off">{b.state === "over" ? "Misjudging: far too optimistic" : "Misjudging: far too pessimistic"}</span>}
+        {b.change === "realizes" && <span className="tag real">💡 Sees it now</span>}
+      </div>
+    </div>
+  );
+}
+
+function Thought({
+  game,
+  m,
+  belief,
+  on,
+  calc,
+  onSelect,
+  onPlayLine,
+}: {
+  game: Game;
+  m: MoveRecord;
+  belief: Belief | null;
+  on: boolean;
+  calc: CalcRef | null;
+  onSelect: () => void;
+  onPlayLine: (i: number) => void;
+}) {
   const player = m.color === "w" ? game.white : game.black;
   const a = m.analysis;
   const self = m.selfEval;
@@ -41,13 +87,14 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
         </div>
         {/* A human's moves come without commentary or self-evaluation. */}
         {m.commentary && <div className="bubble">{m.commentary}</div>}
+        {belief && <BeliefMeter game={game} m={m} b={belief} />}
         <div className="evals">
-          {(self !== null || m.selfEvalRaw) && (
+          {!belief && (self !== null || m.selfEvalRaw) && (
             <span className="eval-chip" title="The player's own evaluation (White's point of view)">
               Self-eval {self !== null ? (self > 0 ? "+" : "") + self.toFixed(1) : m.selfEvalRaw}
             </span>
           )}
-          {a && (
+          {!belief && a && (
             <span className={`eval-chip engine ${formatScore(a.evalAfter).startsWith("-") ? "neg" : ""}`} title="Stockfish after this move">
               Engine {formatScore(a.evalAfter)}
             </span>
@@ -102,16 +149,18 @@ export function ThinkingFeed(props: { game: Game; ply: number; calc: CalcRef | n
     opened.current = true;
   }, [props.ply, props.game.moves.length]);
   const pre = props.game.phase === "pregame";
+  const belief = useMemo(() => beliefs(props.game), [props.game]);
   return (
     <div ref={ref}>
       {props.game.moves.length === 0 && (
         <div className="empty">{pre ? "The players are in the pre-game studio. Their thinking will appear here move by move." : "Waiting for the first move…"}</div>
       )}
-      {props.game.moves.map((m) => (
+      {props.game.moves.map((m, i) => (
         <Thought
           key={m.ply}
           game={props.game}
           m={m}
+          belief={belief[i]}
           on={m.ply === props.ply}
           calc={props.calc}
           onSelect={() => props.onSelect(m.ply)}

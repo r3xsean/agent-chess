@@ -14,12 +14,34 @@ export function terminalScore(fen: string): Score | null {
 }
 
 /** Bump when classification rules change: stored games are re-classified at startup. */
-export const CLASSIFIER_VERSION = 2;
+export const CLASSIFIER_VERSION = 3;
 
 const moverCp = (s: Score, color: Color) => {
   const cp = Math.max(-1000, Math.min(1000, scoreToCp(s)));
   return color === "w" ? cp : -cp;
 };
+
+/**
+ * Forced-mate transitions, after Lichess's MateAdvice (lila, modules/tree/src/main/Advice.scala). The win% curve
+ * scores every mate as 0 or 100 and caps evals at ±10 pawns, so on its own it barely notices walking into a mate
+ * from an already bad position, or letting a mate slip while staying far ahead.
+ */
+function mateVerdict(before: Score, after: Score, mover: Color): Classification | null {
+  const pov = (s: Score) => (mover === "w" ? scoreToCp(s) : -scoreToCp(s));
+  const mateBefore = before.mate !== undefined ? Math.sign(pov(before)) : 0;
+  const mateAfter = after.mate !== undefined ? Math.sign(pov(after)) : 0;
+  // Walked into a forced mate: softer the more lost the position already was.
+  if (!mateBefore && mateAfter < 0) {
+    const cp = pov(before);
+    return cp < -999 ? "inaccuracy" : cp < -700 ? "mistake" : "blunder";
+  }
+  // Let a forced mate slip: softer the more winning the position still is.
+  if (mateBefore > 0 && mateAfter <= 0) {
+    const cp = mateAfter ? 0 : pov(after);
+    return cp > 999 ? "inaccuracy" : cp > 700 ? "mistake" : "blunder";
+  }
+  return null;
+}
 
 export function classifyMove(
   m: MoveRecord,
@@ -70,6 +92,10 @@ export function classifyMove(
     else if (drop > 10) classification = "mistake";
     else if (drop > 5) classification = "inaccuracy";
     else classification = "good";
+  }
+
+  if (!playedBest && classification !== "forced" && classification !== "book" && classification !== "miss") {
+    classification = mateVerdict(before.score, afterScore, mover) ?? classification;
   }
 
   return {

@@ -19,6 +19,7 @@ Launch specs contain every seat's key, so these endpoints need the orchestrator 
 - Existing game: `Invoke-RestMethod http://127.0.0.1:5170/api/games/<id>/launch`
 - New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }` → `{ game, launch }`. Personality `"none"` means no personality (the model plays as itself). Add `chess960: true` for a random Chess960 start position, or `chess960: <0–959>` for a given one; tournaments take `chess960: true`.
 - Tournament: `POST /api/tournaments/<tid>/next` → `{ game, launch }`, `{ finished:true }`, or `alreadyRunning:true` (then use that game's launch spec — do not re-delegate seats that are still running).
+- Multi-board tournament (`boards` > 1): `/next` instead returns `{ started: [{ game, launch }, …], running: [gameIds] }`. Launch every game in `started` (it may be empty: no board or model is free yet — then you're done). Never launch the `running` games; other runs own them.
 
 `launch.tasks` has one entry per seat (white, black, optional broadcaster): `title`, `clientRequestId`, `target` (`providerInstanceId`, `model`, `options`) and the full `prompt`. `launch.launched` maps seats (`w`, `b`, `x`) that some orchestrator run already delegated to a timestamp.
 
@@ -31,7 +32,7 @@ Skip any seat already in `launch.launched` (another run owns it), unless step 3'
 Right after each successful delegation, record it: `POST /api/games/<id>/launched` with body `{"seat":"w"|"b"|"x"}` and the admin token.
 Keep each returned `taskId` and `childThreadId`. Tell the user the game URL: `http://127.0.0.1:5170/#/game/<id>`.
 
-Runs can also start from the website: its **Summon agents** / **Start tournament** buttons call a T3 webhook that opens a fresh orchestrator thread with the request. Tournaments started that way advance by themselves — the server fires the webhook again (`tournament-next`) when each game finishes — so a webhook-started run only owns its one game.
+Runs can also start from the website: its **Summon agents** / **Start tournament** buttons call a T3 webhook that opens a fresh orchestrator thread with the request. Tournaments started that way advance by themselves — the server fires the webhook again (`tournament-next`) when each game finishes — so a webhook-started run only owns the games its own `/next` call returned.
 
 ## 3. Supervise
 
@@ -43,7 +44,7 @@ Completion notifications wake you. On each one, check `GET /api/games/<id>/agent
 
 ## 4. Tournaments
 
-When every seat of a tournament game is done (phase `finished`), call `/api/tournaments/<tid>/next` and repeat from step 2 until `{finished:true}`. Then report the standings (`GET /api/tournaments/<tid>`).
+When every seat of a tournament game is done (phase `finished`), call `/api/tournaments/<tid>/next` and repeat from step 2 until `{finished:true}`. Create a multi-board tournament with `POST /api/tournaments` `{ players, doubleRound, boards: 3, broadcaster:{enabled:false} }`; with `autoRun` (`POST /api/tournaments/<tid>/start`) the server fires `tournament-next` whenever a board and both models are free, including when a model was busy in a game outside the tournament. Then report the standings (`GET /api/tournaments/<tid>`).
 
 ## 5. Video director
 

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="1440" viewBox="0 0 2560 1440">
+  <!-- YouTube channel art. Everything important sits in the 1546x423 safe area (x 507-2053, y 508-931). -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#36342f"/>
+      <stop offset="55%" stop-color="#232220"/>
+      <stop offset="100%" stop-color="#141311"/>
+    </radialGradient>
+    <pattern id="squares" width="160" height="160" patternUnits="userSpaceOnUse" x="0" y="80">
+      <rect width="160" height="160" fill="#ebecd0"/>
+      <rect width="80" height="80" fill="#739552"/>
+      <rect x="80" y="80" width="80" height="80" fill="#739552"/>
+    </pattern>
+    <radialGradient id="fade" cx="50%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#fff" stop-opacity="0.13"/>
+      <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fadeMask"><rect width="2560" height="1440" fill="url(#fade)"/></mask>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d9d8d3"/>
+    </linearGradient>
+    <linearGradient id="trace" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#81b64c" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#81b64c" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#81b64c" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="30" y="30" width="84" height="84">
+      <feGaussianBlur stdDeviation="4.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="textShadow" x="-10%" y="-30%" width="120%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <clipPath id="knightClip">
+      <path id="knightPath" d="M58 168 C62 148 78 134 92 122 C80 124 66 128 54 130 C44 131 36 128 33 121 L26 112 C22 106 24 98 30 93 L64 58 C70 46 80 38 90 34 L96 14 L106 32 C140 38 162 70 162 110 C162 135 156 152 150 168 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="2560" height="1440" fill="url(#bg)"/>
+  <rect width="2560" height="1440" fill="url(#squares)" mask="url(#fadeMask)"/>
+
+  <!-- circuit traces running out across the banner -->
+  <g fill="none" stroke="url(#trace)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 610 L420 610 L470 560 L1000 560"/>
+    <path d="M0 860 L360 860 L420 800 L900 800"/>
+    <path d="M1560 400 L1900 400 L1960 460 L2560 460"/>
+    <path d="M1700 1000 L2050 1000 L2110 940 L2560 940"/>
+  </g>
+  <g fill="#1e1d1a" stroke="#81b64c" stroke-opacity="0.5" stroke-width="5">
+    <circle cx="470" cy="560" r="10"/>
+    <circle cx="420" cy="800" r="10"/>
+    <circle cx="1960" cy="460" r="10"/>
+    <circle cx="2110" cy="940" r="10"/>
+  </g>
+
+  <!-- the knight -->
+  <g transform="translate(755 724) scale(2.0) translate(-96 -100)" filter="url(#shadow)">
+    <use href="#knightPath" fill="url(#body)" stroke="#1e1d1a" stroke-width="5" stroke-linejoin="round"/>
+    <rect x="40" y="166" width="132" height="24" rx="7" fill="url(#body)" stroke="#1e1d1a" stroke-width="5"/>
+    <rect x="50" y="160" width="112" height="10" rx="4" fill="#81b64c" stroke="#1e1d1a" stroke-width="4"/>
+    <g clip-path="url(#knightClip)" fill="none" stroke="#81b64c" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M76 70 L104 70 L118 56 L170 56"/>
+      <path d="M76 74 L96 94 L130 94 L144 108 L170 108"/>
+      <path d="M110 120 L120 130 L170 130"/>
+      <path d="M118 80 L170 80"/>
+    </g>
+    <g fill="#1e1d1a" stroke="#81b64c" stroke-width="3">
+      <circle cx="118" cy="56" r="4.5"/>
+      <circle cx="130" cy="94" r="4.5"/>
+      <circle cx="118" cy="80" r="4.5"/>
+      <circle cx="110" cy="120" r="4.5"/>
+    </g>
+    <path d="M34 104 Q38 100 42 103" fill="none" stroke="#1e1d1a" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="72" cy="72" r="9" fill="#a3d160" filter="url(#glow)"/>
+    <circle cx="72" cy="72" r="4" fill="#f4ffe0"/>
+  </g>
+
+  <!-- title -->
+  <g font-family="Segoe UI, Arial, sans-serif" filter="url(#textShadow)">
+    <text x="960" y="702" font-size="140" font-weight="900" fill="#ffffff" letter-spacing="4">AGENT <tspan fill="#81b64c">CHESS</tspan></text>
+    <text x="965" y="782" font-size="48" font-weight="600" fill="#c3c2c1" letter-spacing="1">AI models battle it out over the board</text>
+    <text x="965" y="848" font-size="31" font-weight="600" fill="#989795" letter-spacing="5">LIVE GAMES · COMMENTARY · PREDICTIONS</text>
+  </g>
+</svg>
