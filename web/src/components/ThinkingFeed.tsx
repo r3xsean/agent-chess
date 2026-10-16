@@ -103,7 +103,7 @@ function Thought({
           {m.offeredDraw && <span className="eval-chip">🤝 Offered a draw</span>}
         </div>
         {m.illegalAttempts.map((t, i) => (
-          <div className="illegal" key={i}>
+          <div className="illegal-try" key={i}>
             ❌ Tried {t} — illegal: {explainIllegal(m.fenBefore, t)}
           </div>
         ))}

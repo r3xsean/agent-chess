@@ -7,7 +7,7 @@ import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
 import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
 import { materialInfo } from "../../../shared/material";
-import { lineBreakReason } from "../../../shared/explain";
+import { illegalMovePath, lineBreakReason } from "../../../shared/explain";
 import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
 import { CrowdPanel, useCrowd } from "../components/Crowd";
 import { crowdApi, useViewer } from "../viewer";
@@ -19,6 +19,8 @@ import { MoveList } from "../components/MoveList";
 import { ThinkingFeed } from "../components/ThinkingFeed";
 import { Studio } from "../components/Studio";
 import { Review, engineScoreAt } from "../components/Review";
+import { WhyCard, movePrefixes } from "../components/WhyCard";
+import { explainMove, type EngineLine } from "../../../shared/why";
 import { playMoveSound, playSfx, STING, useSfxToggle } from "../sfx";
 
 type Tab = "moves" | "thinking" | "studio" | "review" | "predict";
@@ -37,25 +39,15 @@ interface ExploreState {
   basePly: number | null;
   moves: string[];
   step: number;
+  /** Set while it's an engine line from the verdict card, not the viewer's own moves. */
+  label?: string;
+  /** Playing itself out, like an agent's calculation. */
+  playing?: boolean;
 }
 
 function checkColor(fen: string): Color | false {
   const c = looseChess(fen);
   return c.inCheck() ? c.turn() : false;
-}
-
-/** Move-number prefixes for a SAN sequence starting at `fen` ("12. ", "12… ", ""). */
-function movePrefixes(fen: string, count: number): string[] {
-  const [, side, , , , full] = fen.split(" ");
-  let no = Number(full) || 1;
-  let white = side === "w";
-  const out: string[] = [];
-  for (let i = 0; i < count; i++) {
-    out.push(white ? `${no}. ` : i === 0 ? `${no}… ` : "");
-    if (!white) no++;
-    white = !white;
-  }
-  return out;
 }
 
 const VERDICT: Record<Classification, string> = {
@@ -132,6 +124,8 @@ export function GamePage({ id }: { id: string }) {
   const [playErr, setPlayErr] = useState("");
   /** Bumped to put the board back when a move of yours doesn't go through. */
   const [boardNonce, setBoardNonce] = useState(0);
+  /** An illegal attempt that just came in live, shown on the board for a moment (from the position it was tried in). */
+  const [flash, setFlash] = useState<{ fen: string; move: NonNullable<BoardProps["illegal"]> } | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -157,7 +151,7 @@ export function GamePage({ id }: { id: string }) {
     const clamped = Math.max(0, Math.min(total, p));
     setViewPly(clamped >= total ? null : clamped);
   };
-  const stepExplore = (d: number) => setExplore((x) => (x ? { ...x, step: Math.max(0, Math.min(x.moves.length, x.step + d)) } : x));
+  const stepExplore = (d: number) => setExplore((x) => (x ? { ...x, playing: false, step: Math.max(0, Math.min(x.moves.length, x.step + d)) } : x));
 
   // keyboard navigation
   useEffect(() => {
@@ -173,19 +167,33 @@ export function GamePage({ id }: { id: string }) {
   });
 
   const calcLine = calc && game ? game.moves[calc.ply - 1]?.lines[calc.line] : null;
+  // A line that breaks on an illegal move gets one more step: that move, played on the board anyway.
+  const calcEnd = calcLine ? calcLine.san.length + (calcLine.brokenAt ? 1 : 0) : 0;
+  const calcBroken = !!calc && !!calcLine && calc.step > calcLine.san.length;
   const stepCalc = (d: number) =>
-    setCalc((c) => (c && calcLine ? { ...c, playing: false, step: Math.max(0, Math.min(calcLine.san.length, c.step + d)) } : c));
+    setCalc((c) => (c && calcLine ? { ...c, playing: false, step: Math.max(0, Math.min(calcEnd, c.step + d)) } : c));
 
   // calculation autoplay
   useEffect(() => {
     if (!calc?.playing || !calcLine) return;
-    if (calc.step >= calcLine.san.length) {
+    if (calc.step >= calcEnd) {
       setCalc({ ...calc, playing: false });
       return;
     }
     const t = setTimeout(() => setCalc((c) => (c ? { ...c, step: c.step + 1 } : c)), calc.step === 0 ? 500 : 950);
     return () => clearTimeout(t);
   }, [calc?.playing, calc?.step, calcLine]);
+
+  // engine-line autoplay, at the same pace
+  useEffect(() => {
+    if (!explore?.playing) return;
+    if (explore.step >= explore.moves.length) {
+      setExplore({ ...explore, playing: false });
+      return;
+    }
+    const t = setTimeout(() => setExplore((x) => (x?.playing ? { ...x, step: x.step + 1 } : x)), explore.step === 0 ? 500 : 950);
+    return () => clearTimeout(t);
+  }, [explore?.playing, explore?.step, explore?.moves.length]);
 
   // Every position and move of the viewer's line, worked out once.
   const exploreLine = useMemo(() => {
@@ -199,6 +207,9 @@ export function GamePage({ id }: { id: string }) {
     });
     return { fens, moves };
   }, [explore?.baseFen, explore?.moves.join(" ")]);
+
+  // The engine's case for the verdict on the move being viewed (recomputed as analysis arrives).
+  const why = useMemo(() => (game && ply > 0 ? explainMove(game, ply - 1) : null), [game, ply]);
 
   const view = useMemo((): BoardProps | null => {
     if (!game) return null;
@@ -217,11 +228,12 @@ export function GamePage({ id }: { id: string }) {
       }
       const arrows: BoardProps["arrows"] = [];
       const nextSan = calcLine.san[calc.step];
+      const broken = calcLine.brokenAt && calc.step >= calcLine.san.length ? illegalMovePath(c.fen(), calcLine.brokenAt) : null;
       if (nextSan) {
         const mv = newRules(c.fen(), variant).move(nextSan);
         arrows.push({ from: mv.from, to: mv.to, brush: "blue" });
-      }
-      return { fen: c.fen(), orientation, lastMove: last, check: checkColor(c.fen()), arrows };
+      } else if (broken && !calcBroken) arrows.push({ from: broken.from, to: broken.to, brush: "red" });
+      return { fen: c.fen(), orientation, lastMove: last, check: checkColor(c.fen()), arrows, illegal: calcBroken && broken ? broken : undefined };
     }
     if (ply === 0) return { fen: game.moves[0]?.fenBefore ?? startFen, orientation };
     const m = game.moves[ply - 1];
@@ -230,6 +242,8 @@ export function GamePage({ id }: { id: string }) {
     if (showBest && !hidden && a?.bestUci && a.bestUci !== m.uci && !["book", "forced"].includes(a.classification)) {
       arrows.push({ from: a.bestUci.slice(0, 2), to: a.bestUci.slice(2, 4), brush: "green" });
     }
+    // After a move that went wrong, the reply that punishes it.
+    if (showBest && !hidden && why?.kind === "bad" && why.after?.from && why.after.to) arrows.push({ from: why.after.from, to: why.after.to, brush: "red" });
     return {
       fen: m.fenAfter,
       orientation,
@@ -238,7 +252,7 @@ export function GamePage({ id }: { id: string }) {
       arrows,
       badge: a && !hidden ? { square: m.to, c: a.classification } : undefined,
     };
-  }, [game, ply, calc, calcLine, explore, exploreLine, orientation, showBest, hidden]);
+  }, [game, ply, calc, calcLine, explore, exploreLine, orientation, showBest, hidden, why]);
 
   // ---- sound effects ----
   // The move that put the board where it is, from whichever line is on screen.
@@ -249,7 +263,7 @@ export function GamePage({ id }: { id: string }) {
       return mv ? { san: mv.san, before: exploreLine.fens[explore.step - 1] } : null;
     }
     if (calc && calcLine) {
-      if (!calc.step) return null;
+      if (!calc.step || calcBroken) return null;
       const c = newRules(game.moves[calc.ply - 1].fenBefore, variant);
       for (const san of calcLine.san.slice(0, calc.step - 1)) c.move(san);
       const before = c.fen();
@@ -288,13 +302,28 @@ export function GamePage({ id }: { id: string }) {
     const prev = liveEvents.current;
     liveEvents.current = { illegal, draw: game.drawOffer, result: game.result };
     if (!prev) return;
-    if (illegal > prev.illegal && !hidden) playSfx("illegal", 0.7);
+    if (illegal > prev.illegal && !hidden) {
+      playSfx("illegal", 0.7);
+      // Watching live: the attempt is played on the board for a moment, then taken back.
+      const fen = game.moves[game.moves.length - 1]?.fenAfter ?? startFen;
+      const attempt = game.pendingIllegal?.[fen.split(" ")[1] as Color]?.at(-1);
+      const move = attempt && illegalMovePath(fen, attempt);
+      if (move && viewPly === null && !calc && !explore) setFlash({ fen, move });
+    }
     if (game.drawOffer && !prev.draw) playSfx("draw", 0.7);
     if (game.result && !prev.result) {
       if (/resign/i.test(game.termination ?? "")) playSfx("resign", 0.8);
       if (game.result !== "1/2-1/2") setTimeout(() => playSfx("victory", 0.7), 700);
     }
   }, [game]);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1400);
+    return () => clearTimeout(t);
+  }, [flash]);
+  useEffect(() => {
+    if (calcBroken) playSfx("illegal", 0.7);
+  }, [calcBroken, calc?.ply, calc?.line]);
   const material = useMemo(() => {
     if (!game) return null;
     const start = game.moves[0]?.fenBefore ?? startFen;
@@ -406,7 +435,8 @@ export function GamePage({ id }: { id: string }) {
     }
     if (explore) {
       if (explore.moves[explore.step] === san) return stepExplore(1); // same as the next move already in the line
-      setExplore({ ...explore, moves: [...explore.moves.slice(0, explore.step), san], step: explore.step + 1 });
+      // A different move turns an engine line into the viewer's own analysis.
+      setExplore({ ...explore, moves: [...explore.moves.slice(0, explore.step), san], step: explore.step + 1, label: undefined, playing: false });
       return;
     }
     if (!calc && ply < total && game.moves[ply].san === san) return go(ply + 1); // the move the game actually went on with
@@ -414,6 +444,11 @@ export function GamePage({ id }: { id: string }) {
       calc && calcLine ? [...game.moves.slice(0, calc.ply - 1).map((m) => m.san), ...calcLine.san.slice(0, calc.step)] : game.moves.slice(0, ply).map((m) => m.san);
     setExplore({ baseFen: view.fen, preSans, basePly: calc ? null : ply, moves: [san], step: 1 });
     setCalc(null);
+  };
+  /** An engine line from the verdict card, on the board to step through (from the game position after basePly moves). */
+  const playEngineLine = (line: EngineLine, basePly: number, label: string) => {
+    setCalc(null);
+    setExplore({ baseFen: line.fen, preSans: game.moves.slice(0, basePly).map((m) => m.san), basePly, moves: line.san, step: 0, label, playing: true });
   };
   // Like the game view: the rating badge on the moved piece, and the engine's better move when there was one.
   const exploreBestUci = lastCls ? lastCls.bestUci : undefined;
@@ -427,6 +462,8 @@ export function GamePage({ id }: { id: string }) {
         badge: lastExplored && lastCls ? { square: lastExplored.to, c: lastCls.classification } : undefined,
       }
     : view;
+  // A live attempt stays on the board only while the board still shows the position it was tried in.
+  const illegalShown = view.illegal ?? (flash && isLive && flash.fen === view.fen ? flash.move : undefined);
 
   const thinkMs = (c: Color) =>
     game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c && game.turnStartedAt ? now - game.turnStartedAt : 0);
@@ -510,6 +547,7 @@ export function GamePage({ id }: { id: string }) {
           <Board
             key={boardNonce}
             {...boardView}
+            illegal={illegalShown}
             onUserMove={hidden && !(mine && playing && isLive) ? undefined : onUserMove}
             premoveColor={mine && playing && isLive ? mine : undefined}
             variant={variant}
@@ -574,6 +612,9 @@ export function GamePage({ id }: { id: string }) {
             </p>
           </div>
         )}
+        {!hidden && !calc && !explore && ply > 0 && (
+          <WhyCard game={game} ply={ply} why={why} pending={raw?.moves[ply - 1]?.analysis?.unavailable ? "none" : "pending"} onPlay={playEngineLine} />
+        )}
         {calc && calcLine && calcMove && (
           <div className="calc-banner">
             <div className="head">
@@ -593,7 +634,11 @@ export function GamePage({ id }: { id: string }) {
                 </span>
               ))}
               {calcLine.brokenAt && (
-                <span className="broken" title="The line breaks here: this move is illegal in the calculated position">
+                <span
+                  className={`broken ${calcBroken ? "on" : ""}`}
+                  title="The line breaks here: this move is illegal in the calculated position"
+                  onClick={() => setCalc({ ...calc, step: calcEnd, playing: false })}
+                >
                   ✕ {calcLine.brokenAt} — illegal: {lineBreakReason(calcMove.fenBefore, calcLine, variant)}
                 </span>
               )}
@@ -608,7 +653,7 @@ export function GamePage({ id }: { id: string }) {
               </button>
               <button
                 className="btn green"
-                onClick={() => setCalc({ ...calc, playing: !calc.playing, step: calc.step >= calcLine.san.length ? 0 : calc.step })}
+                onClick={() => setCalc({ ...calc, playing: !calc.playing, step: calc.step >= calcEnd ? 0 : calc.step })}
               >
                 {calc.playing ? "⏸ Pause" : "▶ Play"}
               </button>
@@ -616,7 +661,7 @@ export function GamePage({ id }: { id: string }) {
                 ▶
               </button>
               <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)" }}>
-                {calc.step}/{calcLine.san.length}
+                {calc.step}/{calcEnd}
               </span>
             </div>
           </div>
@@ -624,7 +669,7 @@ export function GamePage({ id }: { id: string }) {
         {explore && (
           <div className="calc-banner">
             <div className="head">
-              <span>🔍 Your analysis · from move {movePrefixes(explore.baseFen, 1)[0].replace(/[.… ]+$/, "")}</span>
+              <span>{explore.label ? `⚙️ ${explore.label}` : `🔍 Your analysis · from move ${movePrefixes(explore.baseFen, 1)[0].replace(/[.… ]+$/, "")}`}</span>
               <button className="icon-btn" onClick={() => setExplore(null)} title="Back to the game (Esc)">
                 ✕
               </button>
@@ -633,7 +678,7 @@ export function GamePage({ id }: { id: string }) {
               {explore.moves.map((s, i) => {
                 const cls = exploreLine && exploreCls[exploreLine.moves[i].key];
                 return (
-                  <span key={i} className={i + 1 === explore.step ? "on" : i + 1 > explore.step ? "future" : ""} onClick={() => setExplore({ ...explore, step: i + 1 })}>
+                  <span key={i} className={i + 1 === explore.step ? "on" : i + 1 > explore.step ? "future" : ""} onClick={() => setExplore({ ...explore, step: i + 1, playing: false })}>
                     {explorePrefixes[i]}
                     {s}
                     {cls && <ClassIcon c={cls.classification} size={14} />}
@@ -669,17 +714,25 @@ export function GamePage({ id }: { id: string }) {
               )}
             </div>
             <div className="calc-controls">
-              <button className="btn" onClick={() => setExplore({ ...explore, step: 0 })} title="Start of your line">
+              <button className="btn" onClick={() => setExplore({ ...explore, step: 0, playing: false })} title="Start of the line">
                 ⏮
               </button>
               <button className="btn" onClick={() => stepExplore(-1)} title="Back (←)">
                 ◀
               </button>
+              {explore.label && (
+                <button
+                  className="btn green"
+                  onClick={() => setExplore({ ...explore, playing: !explore.playing, step: explore.step >= explore.moves.length ? 0 : explore.step })}
+                >
+                  {explore.playing ? "⏸ Pause" : "▶ Play"}
+                </button>
+              )}
               <button className="btn" onClick={() => stepExplore(1)} title="Forward (→)">
                 ▶
               </button>
-              <button className="btn green" onClick={() => setExplore(null)} title="Esc">
-                Back to game
+              <button className={`btn ${explore.label ? "" : "green"}`} onClick={() => setExplore(null)} title="Back to the game (Esc)">
+                {explore.label ? "Back" : "Back to game"}
               </button>
               <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)" }}>
                 {explore.step}/{explore.moves.length}
@@ -781,7 +834,7 @@ export function GamePage({ id }: { id: string }) {
             ⇅
           </button>
           {!hidden && (
-            <button className={`icon-btn`} style={{ color: showBest ? "var(--green)" : undefined }} onClick={() => setShowBest(!showBest)} title="Show engine's best-move arrow">
+            <button className={`icon-btn`} style={{ color: showBest ? "var(--green)" : undefined }} onClick={() => setShowBest(!showBest)} title="Show the engine's arrows (best move, and the reply that punishes a bad one)">
               ➚
             </button>
           )}

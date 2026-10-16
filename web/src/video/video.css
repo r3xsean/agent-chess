@@ -106,10 +106,15 @@
   background-size: 25% 25%;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
 }
-.v-board.illegal {
-  box-shadow:
-    0 0 0 6px #fa412d,
-    0 8px 30px rgba(0, 0, 0, 0.45);
+/* The red ring sits inside the board, over the squares, so the board itself doesn't change size. */
+.v-board.illegal::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 6px #fa412d;
+  pointer-events: none;
+  z-index: 6;
 }
 .v-hl,
 .v-check,

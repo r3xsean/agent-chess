@@ -1,7 +1,7 @@
 // Render a game replay to MP4 for YouTube (16:9) and/or TikTok (9:16).
 //
 //   node scripts/render-video.mjs <gameId> [--format landscape|portrait|both] [--fps 30]
-//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only]
+//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only] [--package]
 //
 // The server must be running with a fresh build (dist/). The video page at #/video/<id> lays out
 // every frame as a pure function of time; this script seeks it frame by frame in headless Chrome and
@@ -9,6 +9,7 @@
 // timeline (see sfxCues), over a music bed that dips under them. With no --music it uses the first
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
+// --package redoes just the YouTube upload text and thumbnail (after a change to the plan's packaging or chapters).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -38,6 +39,7 @@ const stills = opt("stills", "")
   .filter(Boolean)
   .map(Number);
 const audioOnly = flag("audio-only");
+const packageOnly = flag("package");
 mkdirSync(outDir, { recursive: true });
 
 function findMusic() {
@@ -218,7 +220,10 @@ function chapters(scenes, g, duration) {
   return kept.length >= 3 ? kept : [];
 }
 
-/** The YouTube upload text: title, the TikTok caption, a line about the game, and the chapters. */
+/**
+ * The YouTube upload text: title, the TikTok caption, a line about the game, and the chapters. No
+ * result: the description shows before anyone presses play, and the ending is what they're watching for.
+ */
 function description(g, scenes, duration) {
   const pk = g.video?.packaging;
   const name = (ref) => ref.modelLabel;
@@ -231,11 +236,31 @@ function description(g, scenes, duration) {
     g.white.provider === "human" || g.black.provider === "human"
       ? `${name(g.white)} (White) vs ${name(g.black)} (Black): a human against an AI model on Agent Chess. Every thought on screen is the model's own commentary, written during the game; the engine judges every move.`
       : `${name(g.white)} (White) vs ${name(g.black)} (Black), two AI models playing chess on Agent Chess. Every thought on screen is the model's own commentary, written during the game; the engine judges every move.`,
-    `${g.opening?.name ? `Opening: ${g.opening.name}. ` : ""}Result: ${g.result} (${g.termination}).`,
+    ...(g.opening?.name ? [`Opening: ${g.opening.name}.`] : []),
   ];
   const ch = chapters(scenes, g, duration);
   if (ch.length) lines.push("", ...ch.map((c) => `${stamp(c.t)} ${c.title}`));
   return lines.join("\n") + "\n";
+}
+
+/** With the YouTube cut come its upload text (chapters need its timeline) and the thumbnail. */
+async function writePackaging(scenes, duration) {
+  if (!game.video) return;
+  const txt = join(outDir, `${gameId}-youtube.txt`);
+  writeFileSync(txt, description(game, scenes, duration));
+  if (packageOnly) console.log(txt);
+  if (!game.video.packaging) return;
+  const tp = await browser.newPage();
+  await tp.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+  await tp.goto(`${SERVER}/#/video/${gameId}?render=1&thumb=1`, { waitUntil: "load" });
+  // Once its text has been sized to fit (see Thumbnail in VideoPage.tsx).
+  await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
+  if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${game.video.packaging.thumbnail.text}" doesn't fit, so part of it may be cut off.`);
+  await tp.evaluate(() => document.fonts.ready);
+  const thumb = join(outDir, `${gameId}-thumb.png`);
+  await tp.screenshot({ path: thumb });
+  await tp.close();
+  if (packageOnly) console.log(thumb);
 }
 
 /* ------------------------------ render ------------------------------ */
@@ -258,6 +283,11 @@ try {
     await page.evaluate(() => document.fonts.ready);
     const duration = await page.evaluate(() => window.__video.duration);
     const scenes = await page.evaluate(() => window.__video.scenes);
+    if (packageOnly) {
+      await page.close();
+      if (format === "landscape") await writePackaging(scenes, duration);
+      continue;
+    }
     const cdp = await page.createCDPSession();
     const shot = async (type) =>
       Buffer.from((await cdp.send("Page.captureScreenshot", { format: type, quality: type === "jpeg" ? 92 : undefined, optimizeForSpeed: true })).data, "base64");
@@ -339,21 +369,7 @@ try {
     writeFileSync(timingFile, timing);
     console.log(`\r${format}: ${out}  (${duration.toFixed(1)}s, ${note}${((Date.now() - started) / 1000).toFixed(0)}s)${music ? "" : "  [no music]"}`);
 
-    // With the YouTube cut come its upload text (chapters need its timeline) and the thumbnail.
-    if (format === "landscape" && game.video) {
-      writeFileSync(join(outDir, `${gameId}-youtube.txt`), description(game, scenes, duration));
-      if (game.video.packaging) {
-        const tp = await browser.newPage();
-        await tp.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
-        await tp.goto(`${SERVER}/#/video/${gameId}?render=1&thumb=1`, { waitUntil: "load" });
-        // Once its text has been sized to fit (see Thumbnail in VideoPage.tsx).
-        await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
-        if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${game.video.packaging.thumbnail.text}" doesn't fit, so part of it may be cut off.`);
-        await tp.evaluate(() => document.fonts.ready);
-        await tp.screenshot({ path: join(outDir, `${gameId}-thumb.png`) });
-        await tp.close();
-      }
-    }
+    if (format === "landscape") await writePackaging(scenes, duration);
   }
 } finally {
   await browser.close();

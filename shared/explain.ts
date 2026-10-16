@@ -12,6 +12,76 @@ export function lineBreakReason(fenBefore: string, line: { san: string[]; broken
   return explainIllegal(c.fen(), line.brokenAt);
 }
 
+/** Whether a piece could go from one square to another on an empty board (pawns move up the board for White). */
+function shape(type: string, color: "w" | "b", from: Square, to: Square, capture: boolean): boolean {
+  const dx = to.charCodeAt(0) - from.charCodeAt(0);
+  const dy = (Number(to[1]) - Number(from[1])) * (color === "w" ? 1 : -1);
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  if (!ax && !ay) return false;
+  if (type === "n") return ax * ay === 2;
+  if (type === "b") return ax === ay;
+  if (type === "r") return !ax || !ay;
+  if (type === "q") return ax === ay || !ax || !ay;
+  if (type === "k") return ax <= 1 && ay <= 1;
+  return capture ? ax === 1 && dy === 1 : !ax && (dy === 1 || (dy === 2 && Number(from[1]) === (color === "w" ? 2 : 7)));
+}
+
+/**
+ * The move an illegal attempt would have made if the rules didn't apply, like a premove on the board:
+ * which of the mover's pieces goes where. The piece is picked leniently — the one matching the
+ * notation that could reach the square on an open board, else the nearest one of its kind. Null when
+ * the token names no square or the mover has no such piece.
+ */
+export function illegalMovePath(fen: string, raw: string): { from: string; to: string; promo?: string; rook?: [string, string] } | null {
+  const token = raw.trim().replace(/[+#!?]+$/, "");
+  let c: Chess;
+  try {
+    c = looseChess(fen);
+  } catch {
+    return null;
+  }
+  const us = c.turn();
+  const mine = c.board().flat().filter((s) => s && s.color === us) as { square: Square; type: string }[];
+
+  const castle = /^(O-O(-O)?|0-0(-0)?)$/i.exec(token);
+  if (castle) {
+    const king = mine.find((s) => s.type === "k");
+    if (!king) return null;
+    const rank = king.square[1];
+    const kingside = !castle[2];
+    // The rook on that side of the king, on its rank, farthest out (the corner in standard chess).
+    const rooks = mine.filter((s) => s.type === "r" && s.square[1] === rank && (s.square[0] > king.square[0]) === kingside);
+    rooks.sort((a, b) => (kingside ? b.square.localeCompare(a.square) : a.square.localeCompare(b.square)));
+    const to = `${kingside ? "g" : "c"}${rank}`;
+    return { from: king.square, to, rook: rooks[0] ? [rooks[0].square, `${kingside ? "f" : "d"}${rank}`] : undefined };
+  }
+
+  const uci = /^([a-h][1-8])-?([a-h][1-8])([qrbn])?$/i.exec(token);
+  if (uci && mine.some((s) => s.square === uci[1].toLowerCase())) return { from: uci[1].toLowerCase(), to: uci[2].toLowerCase(), promo: uci[3]?.toLowerCase() };
+
+  const m = /^([KQRBN])?([a-h])?([1-8])?(x)?([a-h][1-8])(=?([QRBN]))?$/.exec(token);
+  if (!m) return null;
+  const [, pieceLetter, file, rank, x, target, , promoLetter] = m;
+  const type = pieceLetter ? LETTER[pieceLetter] : "p";
+  const to = target as Square;
+  // A pawn move names its file only when capturing; otherwise the pawn comes from the target's own file.
+  const fromFile = file ?? (type === "p" && !x ? to[0] : undefined);
+  const capture = !!x || (type === "p" && !!file && file !== to[0]);
+  let cands = mine.filter((s) => s.type === type && s.square !== to);
+  const exact = cands.filter((s) => (!fromFile || s.square[0] === fromFile) && (!rank || s.square[1] === rank));
+  if (exact.length) cands = exact;
+  if (!cands.length) return null;
+  const dx = (s: Square) => s.charCodeAt(0) - to.charCodeAt(0);
+  const dy = (s: Square) => Number(s[1]) - Number(to[1]);
+  // A bishop that can't reach the square is still more plausible on its colour.
+  const offColour = (s: Square) => type === "b" && (dx(s) + dy(s)) % 2 !== 0;
+  const score = (s: Square) => (shape(type, us, s, to, capture) ? 0 : 20) + (offColour(s) ? 10 : 0) + Math.hypot(dx(s), dy(s));
+  const from = cands.reduce((a, b) => (score(b.square) < score(a.square) ? b : a)).square;
+  const lastRank = to[1] === (us === "w" ? "8" : "1");
+  return { from, to, promo: promoLetter ? LETTER[promoLetter] : type === "p" && lastRank ? "q" : undefined };
+}
+
 /**
  * Human-readable reason a move token is illegal in a position. For spectators only —
  * agents are never told why a move was rejected.

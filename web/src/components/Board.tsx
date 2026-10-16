@@ -4,7 +4,7 @@ import { Chessground } from "chessground";
 import type { Api } from "chessground/api";
 import type { Config } from "chessground/config";
 import type { DrawShape } from "chessground/draw";
-import type { Key, Pieces } from "chessground/types";
+import type { Key, Pieces, Role } from "chessground/types";
 import { read as readFen, write as writeFen } from "chessground/fen";
 import type { Classification, Color } from "../../../shared/types";
 import { ClassIcon } from "./ClassIcon";
@@ -22,6 +22,11 @@ export interface BoardProps {
   premoveColor?: Color;
   /** Chess960: castling is played by dropping the king on its rook. */
   variant?: Variant;
+  /**
+   * An illegal attempt, shown as played on top of `fen` (rules ignored, like a premove) with the
+   * board in red. Clearing it slides the pieces back. Nothing is movable meanwhile.
+   */
+  illegal?: { from: string; to: string; promo?: string; rook?: [string, string] };
   children?: React.ReactNode;
 }
 
@@ -69,6 +74,21 @@ function withPremove(pieces: Pieces, [orig, dest, promo]: Premove): Pieces {
   return out;
 }
 
+const ROLE: Record<string, Role> ={ q: "queen", r: "rook", b: "bishop", n: "knight" };
+
+/** A position with an illegal attempt played on it anyway: the piece (and a castling rook) just goes there. */
+function withIllegal(pieces: Pieces, m: NonNullable<BoardProps["illegal"]>): Pieces {
+  const out = new Map(pieces);
+  const p = out.get(m.from as Key);
+  if (!p) return out;
+  const rook = m.rook && out.get(m.rook[0] as Key);
+  out.delete(m.from as Key);
+  if (m.rook) out.delete(m.rook[0] as Key);
+  out.set(m.to as Key, m.promo ? { role: ROLE[m.promo] ?? "queen", color: p.color, promoted: true } : p);
+  if (m.rook && rook) out.set(m.rook[1] as Key, rook);
+  return out;
+}
+
 /*
  * Arrows: the engine's (best move, calculations) and the viewer's own, drawn with right-click.
  * Chessground draws right-click arrows with its "green"/"red"/"blue"/"yellow" brushes (plain,
@@ -99,7 +119,7 @@ const sqPos = (sq: string, orientation: Color) => {
   return orientation === "w" ? { left: f * 12.5, top: (7 - r) * 12.5 } : { left: (7 - f) * 12.5, top: r * 12.5 };
 };
 
-export function Board({ fen, orientation, lastMove, check, arrows, badge, onUserMove, premoveColor, variant = "standard", children }: BoardProps) {
+export function Board({ fen, orientation, lastMove, check, arrows, badge, onUserMove, premoveColor, variant = "standard", illegal, children }: BoardProps) {
   const el = useRef<HTMLDivElement>(null);
   const cg = useRef<Api | null>(null);
   const onMoveRef = useRef(onUserMove);
@@ -175,7 +195,7 @@ export function Board({ fen, orientation, lastMove, check, arrows, badge, onUser
     };
   }, []);
 
-  const canMove = !!onUserMove;
+  const canMove = !!onUserMove && !illegal;
   useEffect(() => {
     const shapes: DrawShape[] = (arrows ?? []).map((a) => ({ orig: a.from as Key, dest: a.to as Key, brush: ENGINE_BRUSH[a.brush] }));
     const c = newRules(fen, variant);
@@ -206,15 +226,15 @@ export function Board({ fen, orientation, lastMove, check, arrows, badge, onUser
     // Your pieces stay movable on the opponent's turn: chessground turns those moves into premoves.
     const movable: Config["movable"] = mine ? { color: mine, dests: legalDests(c, variant) } : canMove ? { color: turnColor, dests: legalDests(c, variant) } : { color: undefined, dests: new Map() };
     cg.current?.set({
-      // While the opponent thinks, the board shows your premoves as played.
-      fen: queue.current.length ? writeFen(shownPieces()) : realFen.current,
+      // While the opponent thinks, the board shows your premoves as played; an illegal attempt shows as played too.
+      fen: illegal ? writeFen(withIllegal(readFen(realFen.current), illegal)) : queue.current.length ? writeFen(shownPieces()) : realFen.current,
       orientation: orientation === "w" ? "white" : "black",
       turnColor,
-      lastMove: last as Key[] | undefined,
+      lastMove: (illegal ? [] : last) as Key[] | undefined,
       check: inCheck ? (inCheck === "w" ? "white" : "black") : false,
       movable,
       premovable: { enabled: !!mine },
-      highlight: { custom: premoveSquares() },
+      highlight: { custom: illegal ? new Map([[illegal.from as Key, "illegal-from"], [illegal.to as Key, "illegal-to"]]) : premoveSquares() },
       // Your arrows stay until the position changes (or you left-click the board).
       drawable: { shapes: samePosition ? userShapes() : [] },
     });
@@ -222,10 +242,10 @@ export function Board({ fen, orientation, lastMove, check, arrows, badge, onUser
     // Chessground skips SVG redraws while pieces animate, so arrows set together with the fen
     // lag behind fast arrow-key navigation. Setting them separately redraws them on the next frame.
     cg.current?.setAutoShapes(shapes);
-  }, [fen, orientation, lastMove?.[0], lastMove?.[1], check, JSON.stringify(arrows), canMove, premoveColor, variant]);
+  }, [fen, orientation, lastMove?.[0], lastMove?.[1], check, JSON.stringify(arrows), canMove, premoveColor, variant, JSON.stringify(illegal)]);
 
   return (
-    <div className="board-size">
+    <div className={`board-size ${illegal ? "illegal" : ""}`}>
       <div ref={el} className="cg-wrap" />
       <div className="board-overlay">
         {badge && (

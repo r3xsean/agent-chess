@@ -451,6 +451,21 @@ cg-board square.oc.premove-dest {
 cg-board square.current-premove {
   background-color: rgba(235, 97, 80, 0.75);
 }
+/* An illegal attempt shown as played: the board rings red, the target square burns. */
+.board-size.illegal::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 4px #fa412d;
+  pointer-events: none;
+  z-index: 5;
+}
+cg-board square.illegal-from {
+  background-color: rgba(250, 65, 45, 0.3);
+}
+cg-board square.illegal-to {
+  background-color: rgba(250, 65, 45, 0.75);
+}
 cg-board square.check {
   background: radial-gradient(ellipse at center, rgba(255, 0, 0, 1) 0%, rgba(231, 0, 0, 1) 25%, rgba(169, 0, 0, 0) 89%, rgba(158, 0, 0, 0) 100%);
 }
@@ -562,8 +577,16 @@ cg-board square.check {
 }
 .calc-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+}
+.calc-controls .btn {
+  white-space: nowrap;
+  padding-inline: 11px;
+}
+.calc-controls > span:last-child {
+  white-space: nowrap;
 }
 .explore-verdict {
   display: flex;
@@ -593,6 +616,94 @@ cg-board square.check {
 .explore-pv {
   color: var(--text-2);
   line-height: 1.45;
+}
+
+/* Why a move got its verdict: the engine's line before it, the line after it, and the reason. */
+.why {
+  margin: 10px 12px 2px;
+  background: #1f1e1b;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cls, var(--line));
+  border-radius: 8px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.why.quiet {
+  color: var(--muted);
+  font-size: 12px;
+  border-left-color: var(--line);
+}
+.why-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  min-width: 0;
+}
+.why-cls {
+  color: var(--cls);
+  font-weight: 800;
+}
+.why-win {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.why-reason {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.why-line {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  background: #262421;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.why-line:hover {
+  border-color: var(--line);
+  background: #2c2a26;
+}
+.why-play {
+  color: var(--muted);
+  font-size: 10px;
+}
+.why-line:hover .why-play {
+  color: var(--green);
+}
+.why-label {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.why-line.good .why-label {
+  color: var(--green);
+}
+.why-line.bad .why-label {
+  color: #ff8a7a;
+}
+.why-moves {
+  color: var(--text-2);
+  line-height: 1.4;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* side panel */
@@ -856,7 +967,7 @@ cg-board square.check {
   background: #403d39;
   color: white;
 }
-.illegal {
+.illegal-try {
   margin-top: 6px;
   font-size: 12px;
   font-weight: 700;

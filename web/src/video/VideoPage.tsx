@@ -9,6 +9,7 @@ import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
+import { illegalMovePath } from "../../../shared/explain";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
@@ -54,6 +55,25 @@ function fenBoard(fen: string): Map<string, Piece> {
       }
     });
   return board;
+}
+
+/** A FEN with its piece placement replaced by `board`. */
+function withBoard(fen: string, board: Map<string, Piece>): string {
+  const rows = [];
+  for (let r = 8; r >= 1; r--) {
+    let row = "";
+    let gap = 0;
+    for (let f = 0; f < 8; f++) {
+      const pc = board.get(String.fromCharCode(97 + f) + r);
+      if (!pc) gap++;
+      else {
+        row += (gap || "") + (pc.color === "w" ? pc.type.toUpperCase() : pc.type);
+        gap = 0;
+      }
+    }
+    rows.push(row + (gap || ""));
+  }
+  return [rows.join("/"), ...fen.split(" ").slice(1)].join(" ");
 }
 
 const sqXY = (sq: string, o: Color) => {
@@ -285,15 +305,39 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     const m = g.moves[s.i];
     const prev = g.moves[s.i - 1];
     const score = scoreAt(g, m.fenBefore, prev?.analysis?.evalAfter);
-    const target = s.attempt.match(/[a-h][1-8](?!.*[a-h][1-8])/)?.[0];
+    // The attempt is played on the board anyway, like a premove (any piece of the named kind, legal or
+    // not), then slides back as it's rejected.
+    const path = illegalMovePath(m.fenBefore, s.attempt);
+    let fen = m.fenBefore;
+    let anim: BoardView["anim"];
+    if (path) {
+      const board = fenBoard(m.fenBefore);
+      const pc = board.get(path.from)!;
+      const rook = path.rook && board.get(path.rook[0]);
+      board.delete(path.from);
+      if (path.rook) board.delete(path.rook[0]);
+      const captured = board.get(path.to);
+      board.set(path.to, path.promo ? { type: path.promo, color: pc.color } : pc);
+      if (path.rook && rook) board.set(path.rook[1], rook);
+      fen = withBoard(m.fenBefore, board);
+      const p = ease(Math.min(clamp01(local / 0.25), clamp01((s.dur - local) / 0.3)));
+      anim = {
+        from: path.from,
+        to: path.to,
+        p: r3(p),
+        rook: path.rook && rook ? path.rook : undefined,
+        captured: captured && { sq: path.to, piece: captured, p: r3(p) },
+      };
+    }
     v.board = {
       i: s.i - 1,
-      fen: m.fenBefore,
+      fen,
+      anim,
       lastMove: prev && [prev.from, prev.to],
       check: prep.check[s.i - 1],
       evalW: r3(score ? winPercentWhite(score) : 50),
       evalText: formatScore(score),
-      illegal: { attempt: s.attempt, sq: target, color: m.color, p: r3(clamp01(local / 0.25)) },
+      illegal: { attempt: s.attempt, sq: path?.to ?? s.attempt.match(/[a-h][1-8](?!.*[a-h][1-8])/)?.[0], color: m.color, p: r3(clamp01(local / 0.25)) },
     };
     // Illegal attempts come at the end of their thinking.
     v.clocks = prep.clocks[s.i + 1];
