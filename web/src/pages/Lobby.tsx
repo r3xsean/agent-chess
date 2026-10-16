@@ -1,6 +1,8 @@
 import type { PlayerRef, PlayerStats } from "../../../shared/types";
 import { PROVISIONAL_RD } from "../../../shared/rating";
-import { useStream, type GameSummary, type Lobby as LobbyData } from "../api";
+import { useEffect, useState } from "react";
+import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from "../api";
+import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
@@ -76,8 +78,70 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
   );
 }
 
-export function Lobby({ onNewGame, onPlay, onNewTournament }: { onNewGame: () => void; onPlay: () => void; onNewTournament: () => void }) {
+interface Predictor {
+  rank: number;
+  name: string;
+  points: number;
+  right: number;
+  calls: number;
+}
+
+/** The viewers who call games best, with your own standing. */
+function Predictors({ base, live }: { base: string; live: number }) {
+  const [rows, setRows] = useState<Predictor[] | null>(null);
+  const [viewer] = useViewer(base);
+  useEffect(() => {
+    let alive = true;
+    const load = () => crowdApi<Predictor[]>(base, "/api/predictors").then((r) => alive && setRows(r)).catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [base, live]);
+  if (!rows) return null;
+  return (
+    <>
+      <h2>🔮 Top predictors</h2>
+      <div className="card">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Viewer</th>
+              <th>Points</th>
+              <th>Correct</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.rank} className={viewer && r.name === viewer.name ? "me" : ""}>
+                <td style={{ color: "var(--muted)", fontWeight: 700 }}>{r.rank}</td>
+                <td style={{ fontWeight: 700 }}>{r.name}</td>
+                <td style={{ fontWeight: 800 }}>{r.points}</td>
+                <td>
+                  {r.right} / {r.calls}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={4} className="empty">
+                  No predictions yet. Open a live game and call the result in the 🔮 Predict tab.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: boolean; onNewGame: () => void; onPlay: () => void; onNewTournament: () => void }) {
   const lobby = useStream<LobbyData>("/api/lobby/stream");
+  const meta = useMeta();
   if (!lobby) return <div className="empty">Loading…</div>;
   const ratings = Object.fromEntries(lobby.players.map((p) => [p.id, p.rating]));
   const live = lobby.games.filter((g) => g.phase !== "finished");
@@ -87,17 +151,25 @@ export function Lobby({ onNewGame, onPlay, onNewTournament }: { onNewGame: () =>
       <div className="hero">
         <div style={{ flex: 1 }}>
           <h1>Agent Chess</h1>
-          <p className="sub">AI agents play each other — or you — with live thinking, engine review and a broadcaster.</p>
+          <p className="sub">
+            {local
+              ? "AI agents play each other — or you — with live thinking, engine review and a broadcaster."
+              : "AI models play chess against each other, live: watch them think, see every move reviewed by Stockfish, and call the result before they do."}
+          </p>
         </div>
-        <button className="btn" onClick={onNewTournament}>
-          🏆 New tournament
-        </button>
-        <button className="btn" onClick={onPlay}>
-          🧑 Play an agent
-        </button>
-        <button className="btn green big" onClick={onNewGame}>
-          ♞ New game
-        </button>
+        {local && (
+          <>
+            <button className="btn" onClick={onNewTournament}>
+              🏆 New tournament
+            </button>
+            <button className="btn" onClick={onPlay}>
+              🧑 Play an agent
+            </button>
+            <button className="btn green big" onClick={onNewGame}>
+              ♞ New game
+            </button>
+          </>
+        )}
       </div>
 
       {live.length > 0 && (
@@ -154,6 +226,8 @@ export function Lobby({ onNewGame, onPlay, onNewTournament }: { onNewGame: () =>
           </tbody>
         </table>
       </div>
+
+      {meta && <Predictors base={meta.crowdBase} live={live.length} />}
 
       {lobby.tournaments.length > 0 && (
         <>

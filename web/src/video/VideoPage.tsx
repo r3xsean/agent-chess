@@ -12,6 +12,7 @@ import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
 import { buildTimeline, FRAME, sceneAt, type Format, type Scene, type Timeline } from "./timeline";
 import { RenderPanel } from "./RenderPanel";
+import { useMeta } from "../api";
 import "./video.css";
 
 /** Width of the render panel beside the preview. */
@@ -915,6 +916,7 @@ declare global {
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export function VideoPage({ id, query }: { id: string; query: URLSearchParams }) {
+  const meta = useMeta();
   const format: Format = query.get("format") === "portrait" ? "portrait" : "landscape";
   const render = query.get("render") === "1";
   const [game, setGame] = useState<Game | null>(null);
@@ -1035,7 +1037,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
         <a href={`#/game/${id}`}>Back to game</a>
       </div>
       </div>
-      <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />
+      {meta && !meta.publicMode && <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />}
     </div>
   );
 }

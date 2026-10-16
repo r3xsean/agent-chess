@@ -1403,3 +1403,79 @@ input[type="text"] {
   background: rgba(129, 182, 76, 0.18);
   color: white;
 }
+
+/* predictions */
+.crowd {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.crowd .muted { color: var(--muted); font-weight: 500; }
+.crowd .small { font-size: 12px; }
+.crowd .good { color: var(--green); }
+.crowd-you {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.crowd-you form { display: flex; gap: 8px; flex: 1; }
+.crowd-you input { flex: 1; }
+.crowd-block { display: flex; flex-direction: column; gap: 6px; }
+.crowd-title { font-weight: 800; font-size: 14px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.crowd-title .muted { font-size: 12px; }
+.crowd-option {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+}
+.crowd-option:disabled { cursor: default; }
+.crowd-option:not(:disabled):hover { border-color: var(--green); }
+.crowd-option.mine { border-color: var(--green); }
+.crowd-option.won { border-color: #e6b422; }
+.crowd-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(129, 182, 76, 0.18);
+  transition: width 0.4s ease;
+}
+.crowd-label, .crowd-share { position: relative; font-weight: 700; }
+.crowd-label small { color: var(--green); font-weight: 600; }
+.crowd-arm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.crowd-arm.on { background: rgba(129, 182, 76, 0.15); font-weight: 700; }
+.crowd-last { font-size: 13px; color: var(--text-2); }
+.crowd-top { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.crowd-top span:not(.muted) { padding: 3px 8px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); font-weight: 700; }
+.crowd-top span.mine { background: rgba(129, 182, 76, 0.25); }
+.crowd-top small { color: var(--muted); font-weight: 600; }
+.tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  vertical-align: middle;
+}
+.table tr.me td { background: rgba(129, 182, 76, 0.1); }

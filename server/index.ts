@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
-import { DATA, PORT, ROOT } from "./paths";
+import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
 import { adminToken, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournament, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
@@ -41,30 +41,80 @@ import { loadOpenings } from "./openings";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
+import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, setGameSource, viewerInfo } from "./predictions";
+import { ingest, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
-rebuildRatings();
-loadOpenings();
-engine.start();
-for (const g of games.values()) {
-  // Retry anything the engine failed on last time.
-  let retry = false;
-  for (const [fen, a] of Object.entries(g.analysis)) if (a.failed) (delete g.analysis[fen], (retry = true));
-  for (const m of g.moves) if (m.analysis?.unavailable) (delete m.analysis, (retry = true));
-  // Classification rules changed since these verdicts were stored: re-classify from the saved engine analysis.
-  if ((g.classifierVersion ?? 1) < CLASSIFIER_VERSION) {
-    for (const m of g.moves) delete m.analysis;
-    g.classifierVersion = CLASSIFIER_VERSION;
-    retry = true;
-    touch(g);
+setGameSource(() => games.values());
+// The public mirror only shows what the local server sends it: no engine, no agents, no clock.
+if (!PUBLIC_MODE) startLocal();
+
+function startLocal() {
+  rebuildRatings();
+  loadOpenings();
+  engine.start();
+  for (const g of games.values()) {
+    // Retry anything the engine failed on last time.
+    let retry = false;
+    for (const [fen, a] of Object.entries(g.analysis)) if (a.failed) (delete g.analysis[fen], (retry = true));
+    for (const m of g.moves) if (m.analysis?.unavailable) (delete m.analysis, (retry = true));
+    // Classification rules changed since these verdicts were stored: re-classify from the saved engine analysis.
+    if ((g.classifierVersion ?? 1) < CLASSIFIER_VERSION) {
+      for (const m of g.moves) delete m.analysis;
+      g.classifierVersion = CLASSIFIER_VERSION;
+      retry = true;
+      touch(g);
+    }
+    if (retry) g.review = null;
+    if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
-  if (retry) g.review = null;
-  if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
+  setInterval(tick, 1000);
+  startMirror();
 }
-setInterval(tick, 1000);
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+// Behind Railway's proxy, so rate limits see the viewer's address rather than the proxy's.
+if (PUBLIC_MODE) app.set("trust proxy", 1);
+const smallJson = express.json({ limit: "1mb" });
+app.use((req, res, next) => (req.path === "/api/mirror/sync" ? next() : smallJson(req, res, next)));
+
+/* ------------------------------ the public, read-only site ------------------------------ */
+
+// Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
+// creates games, launches agents, renders or reveals local paths stays on the local server.
+const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/render$/, /^\/api\/music/];
+app.use((req, res, next) => {
+  if (!PUBLIC_MODE || !req.path.startsWith("/api/")) return next();
+  const blocked = req.method === "GET" || req.method === "HEAD" ? PUBLIC_GET_BLOCKED.some((r) => r.test(req.path)) : req.method !== "OPTIONS" && !PUBLIC_POSTS.some((r) => r.test(req.path));
+  if (blocked) return void res.status(403).json({ error: "This is the read-only public site." });
+  next();
+});
+// The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
+const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
+app.use((req, res, next) => {
+  if (!PUBLIC_MODE || !CROWD.test(req.path)) return next();
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-headers", "content-type");
+  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") return void res.status(204).end();
+  next();
+});
+
+/** A sliding-window limit per client address and bucket. */
+const hits = new Map<string, number[]>();
+function rateLimit(req: Request, bucket: string, max: number, windowMs: number) {
+  const key = `${bucket}|${req.ip}`;
+  const now = Date.now();
+  const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (recent.length >= max) throw new ActionError("Slow down a little — too many requests.");
+  recent.push(now);
+  hits.set(key, recent);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of hits) if (!v.some((t) => now - t < 3_600_000)) hits.delete(k);
+}, 600_000).unref();
 
 /* ------------------------------ helpers ------------------------------ */
 
@@ -168,7 +218,98 @@ function sse(req: Request, res: Response, event: string, payload: () => unknown)
 
 app.get(
   "/api/meta",
-  handle(() => ({ models: MODELS, personalities: PERSONALITIES, defaultBroadcaster: DEFAULT_BROADCASTER, summonAvailable: summonAvailable() })),
+  handle(() => ({
+    models: MODELS,
+    personalities: PERSONALITIES,
+    defaultBroadcaster: DEFAULT_BROADCASTER,
+    summonAvailable: !PUBLIC_MODE && summonAvailable(),
+    publicMode: PUBLIC_MODE,
+    // Where viewers' predictions live: the public mirror when there is one, so local and public viewers share them.
+    crowdBase: PUBLIC_MODE ? "" : (mirrorConfig()?.url ?? ""),
+    publicUrl: PUBLIC_MODE ? null : (mirrorConfig()?.url ?? null),
+    mirror: PUBLIC_MODE ? null : mirrorStatus(),
+  })),
+);
+
+/* ------------------------------ viewer predictions ------------------------------ */
+
+const crowdHandle =
+  (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response) =>
+    handle(() => {
+      try {
+        return fn(req, res);
+      } catch (e) {
+        throw e instanceof PredictionError ? new ActionError(e.message) : e;
+      }
+    })(req, res);
+
+app.post(
+  "/api/viewers",
+  crowdHandle((req) => {
+    rateLimit(req, "viewer", 10, 3_600_000);
+    return viewerInfo(createViewer(req.body?.name).id);
+  }),
+);
+app.get("/api/viewers/:id", crowdHandle((req) => viewerInfo(String(req.params.id))));
+app.post(
+  "/api/viewers/:id",
+  crowdHandle((req) => {
+    rateLimit(req, "rename", 20, 3_600_000);
+    renameViewer(String(req.params.id), req.body?.name);
+    return viewerInfo(String(req.params.id));
+  }),
+);
+app.get("/api/predictors", crowdHandle(() => leaderboard()));
+app.get("/api/games/:id/crowd", crowdHandle((req) => crowd(getGame(String(req.params.id)), String(req.query.viewer ?? ""))));
+app.post(
+  "/api/games/:id/predict",
+  crowdHandle((req) => {
+    rateLimit(req, "predict", 60, 60_000);
+    const g = getGame(String(req.params.id));
+    predict(g, req.body?.viewer, req.body?.kind, req.body?.pick);
+    bus.emit(`crowd:${g.id}`);
+    return crowd(g, String(req.body?.viewer ?? ""));
+  }),
+);
+// Live crowd: re-sent when anyone predicts, and when the game moves on (guesses lock, results score).
+app.get("/api/games/:id/crowd/stream", (req, res) => {
+  const g = games.get(String(req.params.id));
+  if (!g) return void res.status(404).end();
+  const viewer = String(req.query.viewer ?? "");
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+  let timer: NodeJS.Timeout | null = null;
+  const write = () => res.write(`data: ${JSON.stringify(crowd(games.get(g.id) ?? g, viewer))}\n\n`);
+  const send = () => {
+    if (!timer) timer = setTimeout(() => ((timer = null), write()), 400);
+  };
+  write();
+  const ping = setInterval(() => res.write(": ping\n\n"), 20000);
+  bus.on(`crowd:${g.id}`, send);
+  bus.on(`game:${g.id}`, send);
+  req.on("close", () => {
+    clearInterval(ping);
+    if (timer) clearTimeout(timer);
+    bus.off(`crowd:${g.id}`, send);
+    bus.off(`game:${g.id}`, send);
+  });
+});
+
+/* ------------------------------ the mirror's inbox ------------------------------ */
+
+app.post(
+  "/api/mirror/sync",
+  express.json({ limit: "200mb" }),
+  handle((req) => {
+    const secret = process.env.MIRROR_SECRET;
+    if (!PUBLIC_MODE || !secret || req.get("authorization") !== `Bearer ${secret}`) throw new ActionError("Not allowed.");
+    const changed = ingest(req.body ?? {});
+    for (const id of changed) {
+      const g = games.get(id);
+      if (g) bus.emit(`game:${id}`, g);
+    }
+    bus.emit("lobby");
+    return { ok: true, games: changed.length };
+  }),
 );
 
 /* ------------------------------ summoning agents through T3 ------------------------------ */
@@ -698,7 +839,10 @@ app.post(
 // The viewer's own analysis board runs on a second, lighter Stockfish so it never waits behind the
 // games' review queue. Only the newest request matters: a new position cancels the one in progress.
 const explorer = new Engine({ label: "explorer", depth: 20, maxMs: 3000, threads: 4, hashMb: 128 });
-explorer.start();
+if (!PUBLIC_MODE) explorer.start();
+
+/** The public site runs no engine: positions the games already analysed still show, others come back offline. */
+class EngineOffline extends Error {}
 const exploreCache = new Map<string, PositionAnalysis>();
 
 /** A position's analysis: game over, already known (cache or any game's review), or a fresh explorer search. */
@@ -713,6 +857,7 @@ async function analyzeExplore(fen: string, variant: Variant): Promise<PositionAn
     const a = variantOf(g) === variant ? g.analysis[fen] : undefined;
     if (a && !a.failed && a.depth > 0) return a;
   }
+  if (PUBLIC_MODE) throw new EngineOffline();
   explorer.supersede();
   const a = await explorer.analyze(fen, variant);
   if (!a.failed) {
@@ -737,6 +882,7 @@ const parseFen = (fen: unknown, variant: Variant) => {
 app.post(
   "/api/explore",
   handle(async (req) => {
+    if (PUBLIC_MODE) rateLimit(req, "explore", 120, 60_000);
     const variant: Variant = req.body?.variant === "chess960" ? "chess960" : "standard";
     const fen = parseFen(req.body?.fen, variant).fen();
     const mv = req.body?.move;
@@ -762,6 +908,7 @@ app.post(
       return { ...after, move: classifyMove(record, before, after.score, prev, !!mv.bookSoFar, variant) };
     } catch (e) {
       if (e instanceof SupersededError) return { superseded: true };
+      if (e instanceof EngineOffline) return { offline: true };
       throw e;
     }
   }),
@@ -773,10 +920,14 @@ if (existsSync(dist)) {
   app.get(/^\/(?!api).*/, (_req, res) => res.send(readFileSync(path.join(dist, "index.html"), "utf8")));
 }
 
-const server = app.listen(PORT, "127.0.0.1", () => console.log(`[agent-chess] http://127.0.0.1:${PORT}`));
+// Locally the agent API must never be reachable from the network; the public mirror has to be.
+const HOST = PUBLIC_MODE ? "0.0.0.0" : "127.0.0.1";
+const server = app.listen(PORT, HOST, () => console.log(`[agent-chess] http://${HOST}:${PORT}${PUBLIC_MODE ? " (public read-only mirror)" : ""}`));
+bus.on("lobby", () => mirrorChangedLobby());
 
 function shutdown() {
   flushAll();
+  flushPredictions();
   engine.stop();
   explorer.stop();
   server.close();

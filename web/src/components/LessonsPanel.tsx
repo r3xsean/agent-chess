@@ -1,12 +1,13 @@
 import { useState } from "react";
 import type { Lessons } from "../../../shared/types";
-import { api, useFetch } from "../api";
+import { api, useFetch, useMeta } from "../api";
 
 /** A model's self-written playbook, shared by all its personalities, with revision history and reset. */
 export function LessonsPanel({ model, modelLabel }: { model: string; modelLabel: string }) {
   const [rev, setRev] = useState(0);
   const lessons = useFetch<Lessons>(`/api/lessons/${encodeURIComponent(model)}`, [model, rev]);
   const [showHistory, setShowHistory] = useState(false);
+  const meta = useMeta();
   if (!lessons) return null;
   const history = [...lessons.history].reverse();
   return (
@@ -19,6 +20,7 @@ export function LessonsPanel({ model, modelLabel }: { model: string; modelLabel:
               {showHistory ? "Hide history" : `History (${history.length})`}
             </button>
           )}
+          {meta && !meta.publicMode && (
           <button
             className="btn"
             disabled={!lessons.text}
@@ -30,6 +32,7 @@ export function LessonsPanel({ model, modelLabel }: { model: string; modelLabel:
           >
             Reset memory
           </button>
+          )}
         </span>
       </h2>
       <div className="card" style={{ padding: "12px 14px" }}>

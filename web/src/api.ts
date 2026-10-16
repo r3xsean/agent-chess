@@ -27,6 +27,28 @@ export interface Meta {
   defaultBroadcaster: { provider: string; model: string; effort: string };
   /** A T3 webhook is configured, so the site can summon agents itself. */
   summonAvailable: boolean;
+  /** The read-only public mirror: no game creation, agents, renders or engine. */
+  publicMode: boolean;
+  /** Where viewers' predictions live ("" = this server). */
+  crowdBase: string;
+  /** The public mirror's address, when this local server pushes to one. */
+  publicUrl: string | null;
+  mirror: { configured: boolean; url: string | null; synced: boolean; failures: number } | null;
+}
+
+let metaPromise: Promise<Meta> | null = null;
+/** The server's settings, fetched once per page load. */
+export function useMeta(): Meta | null {
+  const [meta, setMeta] = useState<Meta | null>(null);
+  useEffect(() => {
+    metaPromise ??= api<Meta>("/api/meta");
+    let alive = true;
+    metaPromise.then((m) => alive && setMeta(m)).catch(() => (metaPromise = null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return meta;
 }
 
 export interface LaunchSpec {

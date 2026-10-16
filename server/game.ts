@@ -5,6 +5,7 @@ import { Engine } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
 import { glickoUpdate } from "./glicko";
+import { mirrorChanged } from "./mirror";
 import { triggerOrchestrator } from "./summon";
 import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
@@ -59,6 +60,7 @@ export function touch(g: Game) {
   saveGame(g);
   bus.emit(`game:${g.id}`, g);
   bus.emit("lobby");
+  mirrorChanged(g);
 }
 
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36).slice(-5)}${randomBytes(2).toString("hex")}`;

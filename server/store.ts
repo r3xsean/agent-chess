@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, Tournament } from "../shared/types";
@@ -65,6 +65,12 @@ export function saveGameNow(g: Game) {
   pending.delete(`g:${g.id}`);
   writeJson(path.join(DATA, "games", `${safe(g.id)}.json`), g);
 }
+/** The public mirror drops a game the local server no longer has. */
+export function deleteGameFile(id: string) {
+  clearTimeout(pending.get(`g:${id}`));
+  pending.delete(`g:${id}`);
+  rmSync(path.join(DATA, "games", `${safe(id)}.json`), { force: true });
+}
 export function saveSeatsNow() {
   clearTimeout(pending.get("seats"));
   pending.delete("seats");
@@ -113,6 +119,8 @@ export function ensurePlayer(ref: PlayerRef): PlayerStats {
 
 const journalFile = (playerId: string) => path.join(DATA, "journals", `${safe(playerId)}.json`);
 export const readJournal = (playerId: string): JournalEntry[] => readJson(journalFile(playerId), []);
+/** Replace a player's whole journal (the public mirror, receiving it). */
+export const writeJournal = (playerId: string, entries: JournalEntry[]) => writeJson(journalFile(playerId), entries);
 export function appendJournal(playerId: string, entry: JournalEntry) {
   const all = readJournal(playerId).filter((e) => !(e.gameId === entry.gameId && e.color === entry.color));
   all.push(entry);
@@ -135,6 +143,12 @@ export function writeLessons(model: string, text: string, gameId: string | null)
   mkdirSync(path.join(DATA, "lessons"), { recursive: true });
   writeJson(lessonsFile(model), next);
   return next;
+}
+
+/** Store a model's lessons as they are (the public mirror, receiving them). */
+export function writeLessonsFile(model: string, lessons: Lessons) {
+  mkdirSync(path.join(DATA, "lessons"), { recursive: true });
+  writeJson(lessonsFile(model), lessons);
 }
 
 export const agentDir = (gameId: string, role: string) => {

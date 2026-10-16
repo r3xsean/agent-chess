@@ -7,7 +7,9 @@ import { humanSide, sideName } from "../../../shared/naming";
 import { seatKey } from "../seat";
 import { materialInfo } from "../../../shared/material";
 import { lineBreakReason } from "../../../shared/explain";
-import { api, useFetch, useStream, type Lobby, type Meta } from "../api";
+import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
+import { CrowdPanel, useCrowd } from "../components/Crowd";
+import { crowdApi, useViewer } from "../viewer";
 import { SummonButton } from "../components/NewGame";
 import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
@@ -18,7 +20,7 @@ import { Studio } from "../components/Studio";
 import { Review, engineScoreAt } from "../components/Review";
 import { playMoveSound, playSfx, STING, useSfxToggle } from "../sfx";
 
-type Tab = "moves" | "thinking" | "studio" | "review";
+type Tab = "moves" | "thinking" | "studio" | "review" | "predict";
 interface CalcState {
   ply: number;
   line: number;
@@ -100,7 +102,13 @@ export function GamePage({ id }: { id: string }) {
   const variant = variantOf(game);
   const startFen = game?.startFen ?? START_FEN;
   const lobby = useFetch<Lobby>("/api/lobby", [game?.result]);
-  const meta = useFetch<Meta>("/api/meta");
+  const meta = useMeta();
+  // Predictions live on the public mirror when there is one (so everyone shares a crowd), else here.
+  const crowdBase = meta ? meta.crowdBase : null;
+  const [viewer, setViewer] = useViewer(crowdBase);
+  const crowd = useCrowd(crowdBase, id, viewer);
+  const [guessing, setGuessing] = useState(false);
+  const [engineOff, setEngineOff] = useState(false);
   const [viewPly, setViewPly] = useState<number | null>(null);
   const [orientation, setOrientation] = useState<Color>("w");
   const [tab, setTab] = useState<Tab>("thinking");
@@ -329,6 +337,7 @@ export function GamePage({ id }: { id: string }) {
           if (cancelled) return;
           // Another viewer's request took the engine; ask again.
           if (a.superseded) return void (tries++ < 5 && setTimeout(run, 400));
+          if (a.offline) return void setEngineOff(true);
           if (a.error || a.failed) return;
           const { move: cls, ...pos } = a;
           setExploreAn((m) => ({ ...m, [exploreFen]: pos }));
@@ -367,6 +376,15 @@ export function GamePage({ id }: { id: string }) {
 
   /** A move the viewer played on the board: extends their analysis (or starts one from the shown position). */
   const onUserMove = (from: string, to: string, promotion?: string) => {
+    // Guessing the next move: the move becomes your prediction, and the board goes back to the game.
+    if (guessing && isLive && viewer && crowdBase !== null) {
+      setGuessing(false);
+      setBoardNonce((n) => n + 1);
+      crowdApi(crowdBase, `/api/games/${game.id}/predict`, { viewer: viewer.id, kind: "move", pick: from + to + (promotion ?? (newRules(view.fen, variant).moves().some((m) => m.from === from && m.promotion) ? "q" : "")) }).catch(
+        (e) => setPlayErr(e instanceof Error ? e.message : String(e)),
+      );
+      return;
+    }
     if (myTurn && isLive) {
       // A premove already knows its promotion piece (a queen, as on chess.com).
       if (promotion) return playMove(from + to + promotion);
@@ -496,11 +514,13 @@ export function GamePage({ id }: { id: string }) {
               ["moves", "♟", "Moves"],
               ["studio", "🎙", "Studio"],
               ["review", "⭐", "Review"],
+              ...(hidden || mine ? [] : [["predict", "🔮", "Predict"]]),
             ] as [Tab, string, string][]
           ).map(([k, ico, label]) => (
             <button key={k} className={`tab ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}>
               <span className="t-ico">{ico}</span>
               {label}
+              {k === "predict" && crowd?.open.result && !crowd.result.mine && <i className="tab-dot" title="Result calls are open" />}
             </button>
           ))}
         </div>
@@ -606,7 +626,7 @@ export function GamePage({ id }: { id: string }) {
                   )}
                 </>
               ) : (
-                <span className="explore-pv">Engine thinking…</span>
+                <span className="explore-pv">{engineOff ? "The engine is off on the public site — positions from the game still show their analysis." : "Engine thinking…"}</span>
               )}
             </div>
             <div className="calc-controls">
@@ -688,6 +708,20 @@ export function GamePage({ id }: { id: string }) {
             ))}
           {tab === "studio" && <Studio game={game} hideBroadcast={hidden} />}
           {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
+          {tab === "predict" && crowdBase !== null && (
+            <CrowdPanel
+              game={game}
+              base={crowdBase}
+              viewer={viewer}
+              setViewer={setViewer}
+              crowd={crowd}
+              guessing={guessing}
+              setGuessing={(on) => {
+                setGuessing(on);
+                if (on) go(total); // guesses are about the live position
+              }}
+            />
+          )}
         </div>
         <div className="panel-footer">
           <div className="nav-btns">
