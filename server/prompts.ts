@@ -4,8 +4,8 @@ import { CLI } from "./paths";
 import { agentDir } from "./store";
 import { seatKeysFor } from "./game";
 import { describePlayer } from "./briefing";
-import { fullName, sideName } from "../shared/naming";
-import { DEFAULT_BROADCASTER } from "../shared/models";
+import { fullName, humanSide, isHuman, sideName } from "../shared/naming";
+import { DEFAULT_DIRECTOR } from "../shared/models";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const riskOf = (personality: string) => {
@@ -22,15 +22,17 @@ export function playerPrompt(g: Game, color: Color): string {
     key: seatKeysFor(g.id)[color],
     dir: agentDir(g.id, color),
     learning: !!g.options?.learning,
+    vsHuman: isHuman(color === "w" ? g.black : g.white),
   });
 }
 
 /** The exact player prompt, as a pure template (the Personalities page renders it with placeholders). */
-export function renderPlayerPrompt(o: { color: Color; personality: string; opponent: string; key: string; dir: string; learning: boolean }): string {
+export function renderPlayerPrompt(o: { color: Color; personality: string; opponent: string; key: string; dir: string; learning: boolean; vsHuman?: boolean }): string {
   const { color, opponent, key, dir, learning } = o;
   const p = personalityById(o.personality);
   const cli = `node "${CLI}"`;
-  return `You are a chess player in Agent Chess Arena, playing a real game of chess against another AI agent. A website streams the game live to a human audience, with an engine review of every move and a broadcaster commentating.
+  const against = o.vsHuman ? "a human, who plays their moves on the website" : "another AI agent";
+  return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move and a broadcaster commentating.
 
 ## Who you are
 You play ${colorName(color)}. You are **${p.name}** — ${p.tagline}.
@@ -96,13 +98,19 @@ export function broadcasterPrompt(g: Game): string {
   const key = seatKeysFor(g.id).x;
   const dir = agentDir(g.id, "x");
   const cli = `node "${CLI}"`;
-  return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words are turned into speech and played live to the audience as two AI agents play chess.
+  const human = humanSide(g);
+  const agents = (["w", "b"] as Color[]).filter((c) => c !== human);
+  const risk = agents.map((c) => `${colorName(c)} is ${riskOf((c === "w" ? g.white : g.black).personality)}`).join("; ");
+  const cast = human
+    ? `A human is playing tonight: ${colorName(human)} is ${sideName(g, human)}, playing their own moves on the website — call them by name. They don't share their thinking, so their moves come with no commentary or self-evaluation: read their play from the moves and the engine. ${colorName(agents[0])} is an AI agent: call it by its model ("${sideName(g, agents[0])}"); its personality is the style it plays in tonight, good for colour. Human versus machine is the story.`
+    : `The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}") — the personality is just the style each one is playing in tonight, good for colour ("Opus, in full Magician mode…").`;
+  return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words are turned into speech and played live to the audience as ${human ? "a human takes on an AI agent" : "two AI agents play chess"}.
 
 Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.
-Risk appetite: White is ${riskOf(g.white.personality)}; Black is ${riskOf(g.black.personality)}.
-The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}") — the personality is just the style each one is playing in tonight, good for colour ("Opus, in full Magician mode…"). Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
+Risk appetite: ${risk}.
+${cast} Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
 
-You see everything: the engine's verdict on each move (brilliant, great, best, excellent, good, book, inaccuracy, mistake, miss, blunder) and its evaluation, each player's private thinking, calculations and self-evaluation, illegal-move attempts, draw offers and interviews. The players cannot hear you.
+You see everything: the engine's verdict on each move (brilliant, great, best, excellent, good, book, inaccuracy, mistake, miss, blunder) and its evaluation, each agent's private thinking, calculations and self-evaluation, illegal-move attempts, draw offers and interviews. The players cannot hear you.
 
 ## CLI
 Run every command as:  ${cli} <command> --key ${key}
@@ -118,7 +126,7 @@ Run every command as:  ${cli} <command> --key ${key}
 - In quiet stretches, cover two or three moves in one segment. If events pile up, summarize — stay close to live.
 
 ## Flow
-1. Pre-game: introduce the matchup and personalities, react to the pre-game interviews. The first move waits for your intro (after both interviews are in).
+1. Pre-game: introduce the matchup and personalities, react to the pre-game interviews. The first move waits for your intro (after ${human ? "the agent's interview is" : "both interviews are"} in).
 2. During the game: commentate.
 3. After the game: react to the result and the review, then to the post-game interviews, then sign off.
 4. Then \`bc-wait\` hands you a VIDEO DIRECTOR brief: pick the moments for the replay video and submit them with \`direct <plan.json>\` (details in the brief).
@@ -138,8 +146,8 @@ Run every command as:  ${cli} <command> --key ${key}
 }
 
 export function directorLaunch(g: Game, effort?: string) {
-  const base = g.broadcaster ?? { provider: DEFAULT_BROADCASTER.provider, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort };
-  const bc = { ...base, effort: effort ?? base.effort };
+  // A standalone director is always the default director model, whoever broadcast the game.
+  const bc = { ...DEFAULT_DIRECTOR, effort: effort ?? DEFAULT_DIRECTOR.effort };
   return {
     gameId: g.id,
     tasks: [
@@ -158,7 +166,8 @@ const effortOption = (provider: string, effort: string) =>
   provider === "codex" ? { reasoningEffort: effort } : { effort };
 
 export function launchSpec(g: Game) {
-  const tasks = (["w", "b"] as Color[]).map((c) => {
+  // A human seat plays from the website: only the agents are launched.
+  const tasks = (["w", "b"] as Color[]).filter((c) => !isHuman(c === "w" ? g.white : g.black)).map((c) => {
     const p = c === "w" ? g.white : g.black;
     return {
       role: c === "w" ? "white" : "black",

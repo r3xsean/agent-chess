@@ -2,10 +2,12 @@ import { useRef } from "react";
 import type { Color, Score } from "../../../shared/types";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 
-export function EvalBar({ score: incoming, orientation, result }: { score?: Score; orientation: Color; result?: string | null }) {
+export function EvalBar({ score: incoming, orientation, result, hidden }: { score?: Score; orientation: Color; result?: string | null; hidden?: boolean }) {
   // While a new position is still being analyzed, hold the last known evaluation instead of snapping to equal.
   const last = useRef<Score | undefined>(undefined);
   if (incoming) last.current = incoming;
+  // You're playing this game: no engine until it's over.
+  if (hidden) return <div className="eval-bar off" style={{ height: "var(--size)" }} title="The engine is hidden while you play" />;
   const score = last.current;
   let white = score ? winPercentWhite(score) : 50;
   if (result === "1-0") white = 100;

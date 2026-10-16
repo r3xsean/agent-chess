@@ -9,10 +9,11 @@ type Item =
   | { kind: "bc"; ts: number; id: number; text: string; audio?: string }
   | { kind: "iv"; ts: number; color: Color; when: "pre" | "post"; text: string };
 
-export function Studio({ game, audio }: { game: Game; audio: ReturnType<typeof useBroadcastAudio> }) {
+export function Studio({ game, audio, hideBroadcast }: { game: Game; audio: ReturnType<typeof useBroadcastAudio>; hideBroadcast?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const items: Item[] = [
-    ...game.broadcast.map((l) => ({ kind: "bc" as const, ts: l.ts, id: l.id, text: l.text, audio: l.audio })),
+    // The broadcaster talks engine verdicts and the agent's thinking: not for a player's ears mid-game.
+    ...(hideBroadcast ? [] : game.broadcast.map((l) => ({ kind: "bc" as const, ts: l.ts, id: l.id, text: l.text, audio: l.audio }))),
     ...(["pre", "post"] as const).flatMap((when) =>
       (["w", "b"] as Color[]).flatMap((c) => {
         const iv = game.interviews[when][c];
@@ -29,8 +30,10 @@ export function Studio({ game, audio }: { game: Game; audio: ReturnType<typeof u
   return (
     <div ref={ref}>
       <div className="studio-controls">
-        <span>{game.broadcaster?.enabled ? "🎙 Live broadcast" : "No broadcaster for this game"}</span>
-        {game.broadcaster?.enabled && (
+        <span>
+          {!game.broadcaster?.enabled ? "No broadcaster for this game" : hideBroadcast ? "🎙 The broadcast unlocks when your game ends" : "🎙 Live broadcast"}
+        </span>
+        {game.broadcaster?.enabled && !hideBroadcast && (
           <span className={`toggle ${audio.enabled ? "on" : ""}`} onClick={() => audio.setEnabled(!audio.enabled)}>
             Voice <span className="sw" />
           </span>

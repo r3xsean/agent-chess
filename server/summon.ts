@@ -18,7 +18,7 @@ function webhookUrl(): string | null {
 
 export const summonAvailable = () => !!webhookUrl();
 
-export async function triggerOrchestrator(body: { action: "start-game" | "tournament-next"; gameId?: string; tournamentId?: string }) {
+export async function triggerOrchestrator(body: { action: "start-game" | "tournament-next" | "direct-video"; gameId?: string; tournamentId?: string }) {
   const url = webhookUrl();
   if (!url) throw new Error("No T3 webhook configured (data/webhook.json).");
   const r = await fetch(url, {

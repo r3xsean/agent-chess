@@ -1,5 +1,5 @@
 import type { Color, Game, VideoMoment, VideoPlan } from "../shared/types";
-import { sideName } from "../shared/naming";
+import { humanSide, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { describePlayer, pvSan } from "./briefing";
 import { ActionError } from "./game";
@@ -18,6 +18,7 @@ export const needsDirection = (g: Game) => !g.video && !!g.review && g.moves.len
 
 export function directorBrief(g: Game): string {
   const name = (c: Color) => sideName(g, c);
+  const human = humanSide(g);
   const out: string[] = [
     "VIDEO DIRECTOR — the broadcast is over. One last job: plan the replay video of this game.",
     "",
@@ -28,6 +29,7 @@ export function directorBrief(g: Game): string {
     "Also pick the single best line from each interview for the short cut: funny, bold, or what came true (or didn't).",
     "",
     `Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.`,
+    ...(human ? [`${name(human)} is a human: their moves come without commentary, so moments on their moves have no quote (the board, the verdict and the agent's reaction tell those).`] : []),
     `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
     g.review ? `Accuracy: White ${g.review.w.accuracy ?? "—"}, Black ${g.review.b.accuracy ?? "—"}.` : "",
     "",
@@ -106,6 +108,7 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
     const q = x.quote ?? x.thought;
     if (q !== undefined && q !== null && String(q).trim()) {
       thought = String(q).trim();
+      if (!m.commentary.trim()) throw new ActionError(`${where}: ${sideName(g, m.color)} is a human and shared no commentary on ply ${ply} — leave the quote out.`);
       if (!isExcerpt(thought, m.commentary))
         throw new ActionError(`${where}: the quote must match that move's commentary exactly (ply ${ply}, ${m.san}). It doesn't.`);
       if (words(thought) > 70) throw new ActionError(`${where}: the quote is ${words(thought)} words; keep it to at most 60.`);

@@ -19,7 +19,7 @@ function numbered(sans: string[], firstPly: number): string {
 }
 
 export function gameToPgn(g: Game): string {
-  const name = (p: Game["white"]) => `${fullName(p)} (${p.effort})`;
+  const name = (p: Game["white"]) => (p.effort ? `${fullName(p)} (${p.effort})` : fullName(p));
   const date = new Date(g.createdAt).toISOString().slice(0, 10).replace(/-/g, ".");
   const headers: Record<string, string> = {
     Event: g.tournamentId ? `Agent Chess Tournament ${g.tournamentId}` : "Agent Chess Arena",
@@ -48,7 +48,7 @@ export function gameToPgn(g: Game): string {
     const real = m.analysis && !m.analysis.unavailable ? m.analysis : undefined;
     const notes: string[] = [];
     if (real) notes.push(`[%eval ${scoreToPawns(real.evalAfter, 99).toFixed(2)}] ${real.classification}`);
-    notes.push(`(self-eval ${m.selfEvalRaw}) ${esc(m.commentary)}`);
+    if (m.commentary) notes.push(`(self-eval ${m.selfEvalRaw}) ${esc(m.commentary)}`);
     if (m.illegalAttempts.length) notes.push(`Illegal attempts: ${m.illegalAttempts.join(", ")}`);
     // Lines that add nothing beyond the played move go into the comment; the rest become variations.
     const variations: string[] = [];

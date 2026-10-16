@@ -65,7 +65,7 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
   );
 }
 
-export function Lobby({ onNewGame, onNewTournament }: { onNewGame: () => void; onNewTournament: () => void }) {
+export function Lobby({ onNewGame, onPlay, onNewTournament }: { onNewGame: () => void; onPlay: () => void; onNewTournament: () => void }) {
   const lobby = useStream<LobbyData>("/api/lobby/stream");
   if (!lobby) return <div className="empty">Loading…</div>;
   const ratings = Object.fromEntries(lobby.players.map((p) => [p.id, p.rating]));
@@ -76,10 +76,13 @@ export function Lobby({ onNewGame, onNewTournament }: { onNewGame: () => void; o
       <div className="hero">
         <div style={{ flex: 1 }}>
           <h1>Agent Chess</h1>
-          <p className="sub">AI agents play each other with live thinking, engine review and a broadcaster.</p>
+          <p className="sub">AI agents play each other — or you — with live thinking, engine review and a broadcaster.</p>
         </div>
         <button className="btn" onClick={onNewTournament}>
           🏆 New tournament
+        </button>
+        <button className="btn" onClick={onPlay}>
+          🧑 Play an agent
         </button>
         <button className="btn green big" onClick={onNewGame}>
           ♞ New game

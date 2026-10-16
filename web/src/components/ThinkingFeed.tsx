@@ -38,11 +38,14 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
             {sideName(game, m.color)} · {Math.round(m.thinkMs / 1000)}s
           </span>
         </div>
-        <div className="bubble">{m.commentary}</div>
+        {/* A human's moves come without commentary or self-evaluation. */}
+        {m.commentary && <div className="bubble">{m.commentary}</div>}
         <div className="evals">
-          <span className="eval-chip" title="The player's own evaluation (White's point of view)">
-            Self-eval {self !== null ? (self > 0 ? "+" : "") + self.toFixed(1) : m.selfEvalRaw}
-          </span>
+          {(self !== null || m.selfEvalRaw) && (
+            <span className="eval-chip" title="The player's own evaluation (White's point of view)">
+              Self-eval {self !== null ? (self > 0 ? "+" : "") + self.toFixed(1) : m.selfEvalRaw}
+            </span>
+          )}
           {a && (
             <span className={`eval-chip engine ${formatScore(a.evalAfter).startsWith("-") ? "neg" : ""}`} title="Stockfish after this move">
               Engine {formatScore(a.evalAfter)}
@@ -90,8 +93,12 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
 
 export function ThinkingFeed(props: { game: Game; ply: number; calc: CalcRef | null; onSelect: (ply: number) => void; onPlayLine: (ply: number, line: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Opening the tab jumps straight to the current move; after that, following the game scrolls smoothly.
+  const opened = useRef(false);
   useEffect(() => {
-    ref.current?.querySelector(`.thought[data-ply="${props.ply}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const el = ref.current?.querySelector(`.thought[data-ply="${props.ply}"]`);
+    el?.scrollIntoView(opened.current ? { block: "nearest", behavior: "smooth" } : { block: "center", behavior: "instant" });
+    opened.current = true;
   }, [props.ply, props.game.moves.length]);
   const pre = props.game.phase === "pregame";
   return (

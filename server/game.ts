@@ -9,6 +9,7 @@ import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./c
 import { lookupOpening } from "./openings";
 import { synthesize } from "./tts";
 import { triggerOrchestrator } from "./summon";
+import { isHuman } from "../shared/naming";
 import {
   appendJournal,
   audioDir,
@@ -182,15 +183,21 @@ function maybeFinishReview(g: Game) {
 
 /* ------------------------------ phases ------------------------------ */
 
+/** A human seat: plays its moves on the website and owes nothing else (no interviews, commentary or journal). */
+export const seatIsHuman = (g: Game, c: Color) => isHuman(playerOf(g, c));
+
 /** A player's post-game duties: interview, journal, and (when learning is on) their lessons rewrite. */
 export const playerFinished = (g: Game, c: Color) =>
-  !!g.interviews.post[c] && !!g.journalDone[c] && (!g.options?.learning || !!g.lessonsDone?.[c]);
+  seatIsHuman(g, c) || (!!g.interviews.post[c] && !!g.journalDone[c] && (!g.options?.learning || !!g.lessonsDone?.[c]));
+
+/** Ready to start: the pre-game interview is in (a human is always ready). */
+const preReady = (g: Game, c: Color) => seatIsHuman(g, c) || !!g.interviews.pre[c];
 
 /** Periodic housekeeping: phase gates that depend on time. */
 export function tick() {
   const now = Date.now();
   for (const g of games.values()) {
-    if (g.phase === "pregame" && g.interviews.pre.w && g.interviews.pre.b) {
+    if (g.phase === "pregame" && preReady(g, "w") && preReady(g, "b")) {
       g.interviewsCompleteAt ??= now;
       const bcSpoke = g.broadcast.some((l) => l.ts >= g.interviewsCompleteAt!);
       if (!g.broadcaster?.enabled || bcSpoke || now - g.interviewsCompleteAt > BROADCAST_GATE_MS) {
@@ -203,7 +210,7 @@ export function tick() {
     if (g.phase === "postgame" && g.review) {
       const playersDone = playerFinished(g, "w") && playerFinished(g, "b");
       if (playersDone) {
-        const lastPlayerTs = Math.max(g.interviews.post.w!.ts, g.interviews.post.b!.ts);
+        const lastPlayerTs = Math.max(g.interviews.post.w?.ts ?? g.endedAt ?? 0, g.interviews.post.b?.ts ?? g.endedAt ?? 0);
         const bcWrapped = g.broadcast.some((l) => l.ts >= lastPlayerTs);
         if (!g.broadcaster?.enabled || bcWrapped || g.broadcasterDone || now - lastPlayerTs > BROADCAST_GATE_MS) {
           g.phase = "finished";
@@ -358,10 +365,12 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
   if (g.phase !== "playing" || g.result) throw new ActionError("The game is not in progress.");
   const c = board(g);
   if (c.turn() !== color) throw new ActionError("It is not your turn. Run `wait`.");
-  const commentary = String(input.commentary ?? "").trim();
-  if (!commentary) throw new ActionError("`commentary` is required: explain your thinking for this move.");
-  const selfEval = parseEval(input.eval ?? "");
-  if (selfEval === null) throw new ActionError('`eval` is required: your evaluation from White\'s point of view, e.g. "+0.8", "-1.5", "0.0", "#3", "-#2".');
+  // Agents explain every move; a human just plays it.
+  const human = seatIsHuman(g, color);
+  const commentary = human ? "" : String(input.commentary ?? "").trim();
+  if (!commentary && !human) throw new ActionError("`commentary` is required: explain your thinking for this move.");
+  const selfEval = human ? null : parseEval(input.eval ?? "");
+  if (selfEval === null && !human) throw new ActionError('`eval` is required: your evaluation from White\'s point of view, e.g. "+0.8", "-1.5", "0.0", "#3", "-#2".');
   if (!input.move || typeof input.move !== "string") throw new ActionError("`move` is required.");
 
   const fenBefore = c.fen();
@@ -376,7 +385,7 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     throw new ActionError("Illegal move.");
   }
 
-  const lines = (Array.isArray(input.lines) ? input.lines : [])
+  const lines = (Array.isArray(input.lines) && !human ? input.lines : [])
     .slice(0, 6)
     .filter((l) => l && typeof l.moves === "string" && l.moves.trim())
     .map((l) => parseLine(fenBefore, l.moves, String(l.note ?? "")));
@@ -393,7 +402,7 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     fenAfter: c.fen(),
     commentary: commentary.slice(0, MAX_COMMENTARY),
     selfEval,
-    selfEvalRaw: String(input.eval).slice(0, 12),
+    selfEvalRaw: human ? "" : String(input.eval).slice(0, 12),
     lines,
     illegalAttempts: g.pendingIllegal[color],
     offeredDraw: !!input.offerDraw,
@@ -437,7 +446,7 @@ export function submitInterview(g: Game, color: Color, text: string) {
     if (g.interviews.pre[color]) throw new ActionError("You already gave your pre-game interview.");
     g.interviews.pre[color] = { text, ts: Date.now() };
     // The broadcaster's intro counts from the moment the second interview lands.
-    if (g.interviews.pre.w && g.interviews.pre.b) g.interviewsCompleteAt = Date.now();
+    if (preReady(g, "w") && preReady(g, "b")) g.interviewsCompleteAt = Date.now();
   } else if (g.phase === "postgame") {
     if (g.interviews.post[color]) throw new ActionError("You already gave your post-game interview.");
     g.interviews.post[color] = { text, ts: Date.now() };

@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
@@ -22,13 +23,17 @@ import {
   submitJournal,
   submitLessons,
   playerFinished,
+  seatIsHuman,
+  seatKeysFor,
   submitTurn,
   tick,
   touch,
 } from "./game";
+import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec } from "./prompts";
 import { directorBrief, needsDirection, validatePlan } from "./director";
+import { directorDone, jobsFor, MUSIC_DIR, musicTracks, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
 import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { gameToPgn } from "./pgn";
@@ -65,7 +70,13 @@ app.use(express.json({ limit: "1mb" }));
 
 /* ------------------------------ helpers ------------------------------ */
 
-function playerRef(input: { model?: string; effort?: string; personality?: string }): PlayerRef {
+function humanRef(name: unknown): PlayerRef {
+  const label = String(name ?? "").replace(/[^\p{L}\p{N} ._'-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 24) || "Human";
+  return { id: `human:${label.toLowerCase()}`, provider: "human", model: "human", modelLabel: label, effort: "", personality: "human" };
+}
+
+function playerRef(input: { model?: string; effort?: string; personality?: string; human?: boolean; name?: string }): PlayerRef {
+  if (input.human) return humanRef(input.name);
   const m = MODELS.find((x) => x.model === input.model);
   if (!m) throw new ActionError(`Unknown model: ${input.model}`);
   const effort = m.efforts.includes(String(input.effort)) ? String(input.effort) : m.defaultEffort;
@@ -222,9 +233,13 @@ app.post(
   handle((req) => {
     const white = playerRef(req.body.white ?? {});
     const black = playerRef(req.body.black ?? {});
+    if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model, effort and personality). Change one of them.");
     const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false });
-    return isAdmin(req) ? { game: g, launch: launchSpec(g) } : { game: g };
+    // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
+    const human = humanSide(g);
+    const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
+    return isAdmin(req) ? { game: g, launch: launchSpec(g), humanKey } : { game: g, humanKey };
   }),
 );
 app.get("/api/games/:id", handle((req) => getGame(String(req.params.id))));
@@ -263,12 +278,14 @@ app.get(
     const now = Date.now();
     const ago = (r: Color | "x") => (g.seen[r] ? Math.round((now - g.seen[r]!) / 1000) : null);
     const playerDone = (c: Color) => g.phase === "finished" || playerFinished(g, c);
+    // A human seat is played from the website: nothing for an orchestrator to launch or revive.
+    const seatInfo = (c: Color) => (seatIsHuman(g, c) ? { human: true, done: true } : { secondsSinceSeen: ago(c), done: playerDone(c) });
     return {
       phase: g.phase,
       result: g.result,
       seats: {
-        white: { secondsSinceSeen: ago("w"), done: playerDone("w") },
-        black: { secondsSinceSeen: ago("b"), done: playerDone("b") },
+        white: seatInfo("w"),
+        black: seatInfo("b"),
         broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" && !needsDirection(g) } : null,
       },
     };
@@ -328,7 +345,7 @@ app.post(
 app.get(
   "/api/memory",
   handle(() => {
-    const models = new Set(Object.values(players).map((p) => p.ref.model));
+    const models = new Set(Object.values(players).filter((p) => !isHuman(p.ref)).map((p) => p.ref.model));
     for (const m of MODELS) if (readLessons(m.model).version > 0) models.add(m.model);
     return [...models]
       .map((model) => {
@@ -370,6 +387,7 @@ app.post(
   "/api/tournaments",
   handle((req) => {
     const refs: PlayerRef[] = (req.body.players ?? []).map(playerRef);
+    if (refs.some(isHuman)) throw new ActionError("Tournaments are for agents; play an agent yourself from New game.");
     const unique = [...new Map(refs.map((r) => [r.id, r])).values()];
     if (unique.length < 2) throw new ActionError("A tournament needs at least two different players.");
     const t: Tournament = {
@@ -416,6 +434,29 @@ app.post(
     next.gameId = g.id;
     saveTournamentNow(t);
     return { game: g, launch: launchSpec(g) };
+  }),
+);
+
+/* ------------------------------ a human at the board (the website) ------------------------------ */
+
+// Body: { key, action: "move" | "resign" | "accept-draw", move?, offerDraw? }. The key is the human seat's,
+// handed to the browser that created the game, so the agent (or anyone else) can't move for them.
+app.post(
+  "/api/games/:id/play",
+  handle((req) => {
+    const g = getGame(String(req.params.id));
+    const s = seatKeys[String(req.body?.key ?? "")];
+    if (!s || s.gameId !== g.id || s.role === "x" || !seatIsHuman(g, s.role)) throw new ActionError("This browser isn't seated in this game.");
+    const c = s.role;
+    g.seen[c] = Date.now();
+    const action = String(req.body?.action ?? "");
+    if (action === "move") {
+      const rec = submitTurn(g, c, { move: String(req.body?.move ?? ""), commentary: "", eval: "", offerDraw: !!req.body?.offerDraw });
+      return { ok: true, san: rec.san };
+    }
+    if (action === "resign") return resign(g, c), { ok: true };
+    if (action === "accept-draw") return acceptDraw(g, c), { ok: true };
+    throw new ActionError('action must be "move", "resign" or "accept-draw".');
   }),
 );
 
@@ -500,9 +541,11 @@ app.post(
       if (cmd === "bc-wait") {
         const pending = () => {
           const fresh = broadcasterEvents(g).filter((e) => !g.bcDelivered.includes(e.id));
-          if (fresh.length) return { kind: "events" as const, fresh };
-          // Once the show is over, the broadcaster plans the replay video before signing off.
+          // Once the show is over, the broadcaster plans the replay video before signing off. A standalone
+          // director (a game without a broadcaster) goes straight to its brief, not the old event feed.
           if (g.phase === "finished" && needsDirection(g)) return { kind: "direct" as const, fresh };
+          if (g.phase === "finished" && g.broadcasterDone) return { kind: "done" as const, fresh };
+          if (fresh.length) return { kind: "events" as const, fresh };
           if (g.phase === "finished") return { kind: "done" as const, fresh };
           return null;
         };
@@ -536,6 +579,7 @@ app.post(
         g.video = validatePlan(g, req.body?.plan);
         saveGameNow(g);
         touch(g);
+        directorDone(g.id);
         return text(`OK — video plan saved (${g.video.moments.length} moments). Run \`bc-wait\`.`);
       }
       throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait, say or direct.`);
@@ -579,6 +623,60 @@ app.post(
 /* ------------------------------ static ------------------------------ */
 
 app.use("/audio", express.static(path.join(DATA, "audio"), { maxAge: "1h" }));
+app.use("/videos", express.static(VIDEO_DIR));
+// The site plays the same sound effects as the videos.
+const SFX_DIR = path.join(ROOT, "vendor", "sfx");
+app.use("/sfx", express.static(SFX_DIR, { maxAge: "1d" }));
+app.get(
+  "/api/sfx",
+  handle(() => (existsSync(SFX_DIR) ? readdirSync(SFX_DIR).filter((n) => /\.(ogg|wav|mp3)$/i.test(n)).sort() : [])),
+);
+
+/* ------------------------------ video renders ------------------------------ */
+
+const renderState = (id: string) => {
+  const g = getGame(id);
+  return { jobs: jobsFor(id), videos: videosFor(id), music: musicTracks(), directed: !!g.video, summonAvailable: summonAvailable() };
+};
+app.get("/api/games/:id/render", handle((req) => renderState(String(req.params.id))));
+app.post(
+  "/api/games/:id/render",
+  handle(async (req) => {
+    const id = String(req.params.id);
+    const want = req.body?.formats;
+    const formats = (Array.isArray(want) ? want : ["landscape", "portrait"]).filter((f: string): f is RenderFormat => f === "landscape" || f === "portrait");
+    if (!formats.length) throw new ActionError('formats must include "landscape" and/or "portrait".');
+    await startRender(id, formats, req.body?.music ? String(req.body.music) : null).catch((e) => {
+      throw new ActionError(e.message);
+    });
+    return renderState(id);
+  }),
+);
+// Show a finished video in Explorer / Finder.
+app.post(
+  "/api/games/:id/videos/open",
+  handle((req) => {
+    const v = videosFor(String(req.params.id))[0];
+    const target = v ? path.join(VIDEO_DIR, v.file) : VIDEO_DIR;
+    const [cmd, args] =
+      process.platform === "win32" ? ["explorer.exe", [`/select,${target}`]] : process.platform === "darwin" ? ["open", ["-R", target]] : ["xdg-open", [path.dirname(target)]];
+    spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+    return { ok: true };
+  }),
+);
+// Add a background-music track (raw upload; the file name comes in a header).
+app.post(
+  "/api/music",
+  express.raw({ type: "*/*", limit: "200mb" }),
+  handle((req) => {
+    const name = path.basename(decodeURIComponent(String(req.headers["x-filename"] ?? ""))).replace(/[^\w.\- ()]/g, "_");
+    if (!/\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(name)) throw new ActionError("Upload an audio file: mp3, m4a, aac, wav, ogg or flac.");
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new ActionError("The upload was empty.");
+    mkdirSync(MUSIC_DIR, { recursive: true });
+    writeFileSync(path.join(MUSIC_DIR, name), req.body);
+    return { ok: true, name, music: musicTracks() };
+  }),
+);
 /* ------------------------- viewer's analysis board ------------------------- */
 
 // The viewer's own analysis board runs on a second, lighter Stockfish so it never waits behind the

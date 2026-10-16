@@ -3,7 +3,7 @@ import path from "node:path";
 import { Chess } from "chess.js";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { personalityById } from "../shared/personalities";
-import { fullName, sideName } from "../shared/naming";
+import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
@@ -20,6 +20,7 @@ const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r:
 
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
+  if (isHuman(p)) return `${p.modelLabel} (a human player, rating ${ratingOf(p)})`;
   return `${fullName(p)} (${p.effort} effort, rating ${ratingOf(p)})`;
 }
 
@@ -151,7 +152,9 @@ export function pregameBrief(g: Game, color: Color): string {
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
-    `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
+    isHuman(playerOf(g, other(color)))
+      ? "Your opponent is a human, playing their own moves on the website."
+      : `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
     headToHead(g, color),
     "",
     journal.length ? "Your journal — recent games, plus your notes on this opponent (oldest first):" : "Your journal is empty — this is your first game.",
@@ -298,15 +301,18 @@ export function broadcasterEvents(g: Game): FeedEvent[] {
   for (const m of g.moves) {
     if (!m.analysis) break; // wait for the engine so every move event carries its review
     const a = m.analysis;
-    const who = `${colorName(m.color)} (${sideName(g, m.color)})`;
+    const human = isHuman(playerOf(g, m.color));
+    const who = `${colorName(m.color)} (${sideName(g, m.color)}${human ? ", the human" : ""})`;
     const no = `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
+    // A human shares no thinking or self-evaluation, only the move.
+    const own = human ? "" : ` Player's own eval: ${m.selfEvalRaw}.`;
     const parts = [
       `[MOVE ${no} ${m.san}] by ${who}, thought for ${Math.round(m.thinkMs / 1000)}s.`,
       a.unavailable
-        ? `Engine: analysis unavailable for this move. Player's own eval: ${m.selfEvalRaw}.`
-        : `Engine: ${a.classification.toUpperCase()}; eval now ${formatScore(a.evalAfter)}${a.bestSan && a.bestSan !== m.san ? `; engine preferred ${a.bestSan}` : ""}. Player's own eval: ${m.selfEvalRaw}.`,
-      `Player's thinking: "${m.commentary.slice(0, 700)}${m.commentary.length > 700 ? "…" : ""}"`,
+        ? `Engine: analysis unavailable for this move.${own}`
+        : `Engine: ${a.classification.toUpperCase()}; eval now ${formatScore(a.evalAfter)}${a.bestSan && a.bestSan !== m.san ? `; engine preferred ${a.bestSan}` : ""}.${own}`,
     ];
+    if (!human) parts.push(`Player's thinking: "${m.commentary.slice(0, 700)}${m.commentary.length > 700 ? "…" : ""}"`);
     if (m.lines.length)
       parts.push(
         `Calculated lines: ${m.lines.map((l, i) => `(${i + 1}) ${l.san.join(" ")}${l.brokenAt ? ` [breaks: ${l.brokenAt} is illegal — ${lineBreakReason(m.fenBefore, l)}]` : ""}${l.note ? ` — ${l.note.slice(0, 160)}` : ""}`).join(" | ")}`,

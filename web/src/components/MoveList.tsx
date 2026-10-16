@@ -4,7 +4,7 @@ import { ClassIcon } from "./ClassIcon";
 
 const SHOW_ICON = new Set(["brilliant", "great", "best", "book", "inaccuracy", "mistake", "miss", "blunder", "excellent", "good", "forced"]);
 
-export function MoveList({ game, ply, onSelect }: { game: Game; ply: number; onSelect: (ply: number) => void }) {
+export function MoveList({ game, ply, onSelect, hideVerdicts }: { game: Game; ply: number; onSelect: (ply: number) => void; hideVerdicts?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.querySelector(".move-cell.on")?.scrollIntoView({ block: "nearest" });
@@ -16,7 +16,7 @@ export function MoveList({ game, ply, onSelect }: { game: Game; ply: number; onS
   const cell = (m?: MoveRecord) =>
     m ? (
       <div className={`move-cell ${m.ply === ply ? "on" : ""}`} onClick={() => onSelect(m.ply)}>
-        {m.analysis && SHOW_ICON.has(m.analysis.classification) && <ClassIcon c={m.analysis.classification} />}
+        {!hideVerdicts && m.analysis && SHOW_ICON.has(m.analysis.classification) && <ClassIcon c={m.analysis.classification} />}
         {m.san}
       </div>
     ) : (

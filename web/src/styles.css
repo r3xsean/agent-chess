@@ -385,6 +385,16 @@ cg-board {
 cg-board square.last-move {
   background-color: rgba(255, 255, 51, 0.5);
 }
+/* premoves (your own game): where the piece can go, and the move you've queued */
+cg-board square.premove-dest {
+  background: radial-gradient(rgba(20, 30, 85, 0.45) 22%, transparent 0);
+}
+cg-board square.oc.premove-dest {
+  background: radial-gradient(transparent 0%, transparent 80%, rgba(20, 30, 85, 0.35) 80%);
+}
+cg-board square.current-premove {
+  background-color: rgba(235, 97, 80, 0.75);
+}
 cg-board square.check {
   background: radial-gradient(ellipse at center, rgba(255, 0, 0, 1) 0%, rgba(231, 0, 0, 1) 25%, rgba(169, 0, 0, 0) 89%, rgba(158, 0, 0, 0) 100%);
 }
@@ -1288,4 +1298,114 @@ input[type="text"] {
 }
 .player-fullname .as span {
   font-weight: 700;
+}
+
+/* ---- playing an agent yourself ---- */
+.eval-bar.off {
+  background: repeating-linear-gradient(45deg, #2b2a27 0 6px, #33312e 6px 12px);
+  opacity: 0.6;
+}
+.play-panel {
+  margin: 10px 12px 2px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #1f1e1b;
+  border: 1px solid #5d9bd5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.play-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-2);
+  font-weight: 700;
+}
+.play-status.go {
+  color: white;
+  font-size: 16px;
+}
+.play-offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-weight: 700;
+}
+.play-offer .muted {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+.play-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.play-err {
+  color: var(--c-blunder);
+  font-size: 13px;
+}
+.promo-pick {
+  position: absolute;
+  z-index: 20;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: auto !important;
+  height: auto !important;
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  background: rgba(30, 29, 26, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+.promo-pick button {
+  width: 72px;
+  height: 72px;
+  border: 0;
+  border-radius: 8px;
+  background: #403d39;
+  cursor: pointer;
+  position: relative;
+}
+.promo-pick button:hover {
+  background: var(--green);
+}
+.promo-pick piece {
+  position: absolute;
+  inset: 4px;
+  width: auto;
+  height: auto;
+  background-size: cover;
+}
+.promo-pick .promo-cancel {
+  width: 32px;
+  color: var(--muted);
+  font-size: 16px;
+}
+.segmented {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.segmented button {
+  flex: 1;
+  padding: 8px 6px;
+  border-radius: 6px;
+  border: 1px solid #4b4844;
+  background: #2b2a27;
+  color: var(--text-2);
+  font-weight: 700;
+  cursor: pointer;
+}
+.segmented button.on {
+  border-color: var(--green);
+  background: rgba(129, 182, 76, 0.18);
+  color: white;
 }

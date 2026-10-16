@@ -20,7 +20,9 @@ export const MODELS: ModelOption[] = [
   { provider: "codex", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: CODEX_EFFORTS, defaultEffort: "high" },
 ];
 
-export const DEFAULT_BROADCASTER = { provider: "claudeAgent", model: "claude-sonnet-5-5", effort: "low" };
+export const DEFAULT_BROADCASTER = { provider: "claudeAgent", model: "claude-opus-5-5", effort: "high" };
+/** Who plans the replay video when a game has no broadcaster to do it (or a plan is redone). */
+export const DEFAULT_DIRECTOR = DEFAULT_BROADCASTER;
 
 export const modelLabel = (model: string) => MODELS.find((m) => m.model === model)?.label ?? model;
 
@@ -28,5 +30,6 @@ export const modelLabel = (model: string) => MODELS.find((m) => m.model === mode
 const MAKERS: Record<string, { name: string; color: string }> = {
   claudeAgent: { name: "Claude", color: "#d97757" },
   codex: { name: "OpenAI", color: "#10a37f" },
+  human: { name: "Human", color: "#5d9bd5" },
 };
 export const makerOf = (provider: string) => MAKERS[provider] ?? { name: provider, color: "#8b8987" };

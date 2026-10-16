@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Chess } from "chess.js";
 import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from "../../../shared/types";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { formatScore, scoreToCp } from "../../../shared/evalmath";
-import { sideName } from "../../../shared/naming";
+import { humanSide, sideName } from "../../../shared/naming";
+import { seatKey } from "../seat";
 import { materialInfo } from "../../../shared/material";
 import { lineBreakReason } from "../../../shared/explain";
-import { useFetch, useStream, type Lobby, type Meta } from "../api";
+import { api, useFetch, useStream, type Lobby, type Meta } from "../api";
 import { SummonButton } from "../components/NewGame";
 import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
@@ -16,6 +17,7 @@ import { ThinkingFeed } from "../components/ThinkingFeed";
 import { Studio } from "../components/Studio";
 import { Review, engineScoreAt } from "../components/Review";
 import { useBroadcastAudio } from "../useBroadcastAudio";
+import { playMoveSound, playSfx, STING, useSfxToggle } from "../sfx";
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 type Tab = "moves" | "thinking" | "studio" | "review";
@@ -109,15 +111,35 @@ export function GamePage({ id }: { id: string }) {
   const [exploreCls, setExploreCls] = useState<Record<string, MoveAnalysis>>({});
   const [showBest, setShowBest] = useState(true);
   const [now, setNow] = useState(Date.now());
-  const audio = useBroadcastAudio(game);
+  // Playing an agent yourself: this browser holds your seat's key.
+  const human = game ? humanSide(game) : null;
+  const myKey = useMemo(() => seatKey(id), [id]);
+  const mine: Color | null = human && myKey ? human : null;
+  // While you play, the engine, the agent's thinking and the broadcaster stay hidden; all of it unlocks at the end.
+  const hidden = !!mine && !!game && !game.result && game.termination !== "aborted";
+  const audio = useBroadcastAudio(hidden ? null : game);
+  const sfx = useSfxToggle();
+  const [offerDraw, setOfferDraw] = useState(false);
+  const [promo, setPromo] = useState<{ from: string; to: string } | null>(null);
+  const [playErr, setPlayErr] = useState("");
+  /** Bumped to put the board back when a move of yours doesn't go through. */
+  const [boardNonce, setBoardNonce] = useState(0);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
   useEffect(() => {
-    if (game?.phase === "finished" && game.review && tab === "thinking" && viewPly === null) setTab("review");
+    if (game?.phase === "finished" && game.review && (tab === "thinking" || (mine && tab === "moves")) && viewPly === null) setTab("review");
   }, [game?.phase]);
+  // Your own game opens from your side of the board, on the move list.
+  const seated = useRef(false);
+  useEffect(() => {
+    if (!game || seated.current) return;
+    seated.current = true;
+    if (mine) setOrientation(mine);
+    if (hidden) setTab("moves");
+  }, [game]);
 
   const total = game?.moves.length ?? 0;
   const ply = viewPly === null ? total : Math.min(viewPly, total);
@@ -197,7 +219,7 @@ export function GamePage({ id }: { id: string }) {
     const m = game.moves[ply - 1];
     const a = m.analysis;
     const arrows: BoardProps["arrows"] = [];
-    if (showBest && a?.bestUci && a.bestUci !== m.uci && !["book", "forced"].includes(a.classification)) {
+    if (showBest && !hidden && a?.bestUci && a.bestUci !== m.uci && !["book", "forced"].includes(a.classification)) {
       arrows.push({ from: a.bestUci.slice(0, 2), to: a.bestUci.slice(2, 4), brush: "green" });
     }
     return {
@@ -206,10 +228,65 @@ export function GamePage({ id }: { id: string }) {
       lastMove: [m.from, m.to],
       check: checkColor(m.fenAfter),
       arrows,
-      badge: a ? { square: m.to, c: a.classification } : undefined,
+      badge: a && !hidden ? { square: m.to, c: a.classification } : undefined,
     };
-  }, [game, ply, calc, calcLine, explore, exploreLine, orientation, showBest]);
+  }, [game, ply, calc, calcLine, explore, exploreLine, orientation, showBest, hidden]);
 
+  // ---- sound effects ----
+  // The move that put the board where it is, from whichever line is on screen.
+  const shownMove = useMemo((): { san: string; before: string } | null => {
+    if (!game) return null;
+    if (explore && exploreLine) {
+      const mv = exploreLine.moves[explore.step - 1];
+      return mv ? { san: mv.san, before: exploreLine.fens[explore.step - 1] } : null;
+    }
+    if (calc && calcLine) {
+      if (!calc.step) return null;
+      const c = new Chess(game.moves[calc.ply - 1].fenBefore);
+      for (const san of calcLine.san.slice(0, calc.step - 1)) c.move(san);
+      const before = c.fen();
+      return { san: c.move(calcLine.san[calc.step - 1]).san, before };
+    }
+    const m = game.moves[ply - 1];
+    return m ? { san: m.san, before: m.fenBefore } : null;
+  }, [view?.fen]);
+  // A board sound when the position moves on by one move (live, arrow keys, lines, your own moves).
+  const lastBoard = useRef<{ fen: string; before?: string } | null>(null);
+  useEffect(() => {
+    const fen = view?.fen;
+    if (!fen) return;
+    const prev = lastBoard.current;
+    lastBoard.current = { fen, before: shownMove?.before };
+    if (!prev || prev.fen === fen) return;
+    if (shownMove && shownMove.before === prev.fen) playMoveSound(shownMove.san);
+    else if (prev.before === fen) playSfx("move", 0.35);
+  }, [view?.fen]);
+  // A sting for the verdicts that matter: when you step onto the move, or when its verdict arrives live.
+  const stingAt = explore ? 1000 + explore.step : calc ? -1 : ply;
+  const stingCls = explore && exploreLine ? exploreCls[exploreLine.moves[explore.step - 1]?.key]?.classification : !calc ? game?.moves[ply - 1]?.analysis?.classification : undefined;
+  const lastSting = useRef<{ at: number; cls?: string } | null>(null);
+  useEffect(() => {
+    const prev = lastSting.current;
+    lastSting.current = { at: stingAt, cls: stingCls };
+    const sting = !hidden && stingCls && STING[stingCls];
+    if (!prev || !sting) return;
+    if (stingAt === prev.at + 1 || (stingAt === prev.at && !prev.cls)) setTimeout(() => playSfx(sting[0], sting[1]), 150);
+  }, [stingAt, stingCls]);
+  // The game's own events, as they happen.
+  const liveEvents = useRef<{ illegal: number; draw: Color | null; result: string | null } | null>(null);
+  useEffect(() => {
+    if (!game) return;
+    const illegal = game.moves.reduce((n, m) => n + m.illegalAttempts.length, 0) + (game.pendingIllegal?.w?.length ?? 0) + (game.pendingIllegal?.b?.length ?? 0);
+    const prev = liveEvents.current;
+    liveEvents.current = { illegal, draw: game.drawOffer, result: game.result };
+    if (!prev) return;
+    if (illegal > prev.illegal && !hidden) playSfx("illegal", 0.7);
+    if (game.drawOffer && !prev.draw) playSfx("draw", 0.7);
+    if (game.result && !prev.result) {
+      if (/resign/i.test(game.termination ?? "")) playSfx("resign", 0.8);
+      if (game.result !== "1/2-1/2") setTimeout(() => playSfx("victory", 0.7), 700);
+    }
+  }, [game]);
   const material = useMemo(() => {
     if (!game) return null;
     const start = game.moves[0]?.fenBefore ?? START_FEN;
@@ -268,8 +345,37 @@ export function GamePage({ id }: { id: string }) {
 
   if (!game || !view || !material) return <div className="empty">Loading game…</div>;
 
+  const turn: Color = new Chess(game.moves[total - 1]?.fenAfter ?? START_FEN).turn();
+  const playing = game.phase === "playing";
+  const isLive = viewPly === null && !calc && !explore;
+  const agentSide: Color | null = human ? (human === "w" ? "b" : "w") : null;
+  const myTurn = !!mine && playing && turn === mine;
+
+  /** Your actions in your own game: a move, resigning, accepting a draw. */
+  const act = async (body: Record<string, unknown>) => {
+    setPlayErr("");
+    try {
+      await api(`/api/games/${game.id}/play`, { key: myKey, ...body });
+    } catch (e) {
+      setPlayErr(e instanceof Error ? e.message : String(e));
+      setBoardNonce((n) => n + 1);
+    }
+  };
+  const playMove = (uci: string) => {
+    act({ action: "move", move: uci, offerDraw });
+    setOfferDraw(false);
+  };
+
   /** A move the viewer played on the board: extends their analysis (or starts one from the shown position). */
-  const onUserMove = (from: string, to: string) => {
+  const onUserMove = (from: string, to: string, promotion?: string) => {
+    if (myTurn && isLive) {
+      // A premove already knows its promotion piece (a queen, as on chess.com).
+      if (promotion) return playMove(from + to + promotion);
+      // Your move in your own game: ask which piece a pawn becomes, then send it.
+      const promotes = new Chess(view.fen).moves({ verbose: true }).some((m) => m.from === from && m.to === to && m.promotion);
+      return promotes ? setPromo({ from, to }) : playMove(from + to);
+    }
+    if (hidden) return; // no analysis board (and its engine) during your own game
     let san: string;
     try {
       san = new Chess(view.fen).move({ from, to, promotion: "q" }).san;
@@ -300,13 +406,12 @@ export function GamePage({ id }: { id: string }) {
       }
     : view;
 
-  const turn: Color = new Chess(game.moves[total - 1]?.fenAfter ?? START_FEN).turn();
-  const playing = game.phase === "playing";
   const thinkMs = (c: Color) =>
     game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c && game.turnStartedAt ? now - game.turnStartedAt : 0);
   const rating = (c: Color) => lobby?.players.find((p) => p.id === (c === "w" ? game.white : game.black).id)?.rating;
   const status = (c: Color) => {
-    if (game.phase === "pregame") return game.interviews.pre[c] ? { text: "Ready", kind: "plain" as const } : { text: "In the studio", kind: "plain" as const };
+    if (game.phase === "pregame") return game.interviews.pre[c] || c === human ? { text: "Ready", kind: "plain" as const } : { text: "In the studio", kind: "plain" as const };
+    if (playing && turn === c && c === human) return { text: c === mine ? "Your move" : "Thinking", kind: "thinking" as const };
     if (playing && turn === c) {
       const seen = game.seen[c];
       if (!seen || now - seen > 150_000) return { text: "Agent idle", kind: "idle" as const };
@@ -329,7 +434,12 @@ export function GamePage({ id }: { id: string }) {
     />
   );
   const evalScore = explore ? exploreA?.score : calc ? undefined : engineScoreAt(game, ply);
-  const isLive = viewPly === null && !calc && !explore;
+  const agentName = agentSide ? sideName(game, agentSide) : "";
+  const hiddenNote = (what: string) => (
+    <div className="empty">
+      🙈 {what} hidden while you play — everything unlocks when the game ends, with the full engine review.
+    </div>
+  );
   const explorePrefixes = explore ? movePrefixes(explore.baseFen, explore.moves.length) : [];
   const exploreBest = exploreFen && exploreA?.pv.length ? pvToSan(exploreFen, exploreA.pv) : [];
   const calcMove = calc ? game.moves[calc.ply - 1] : null;
@@ -338,10 +448,42 @@ export function GamePage({ id }: { id: string }) {
   return (
     <div className="game-page">
       <div className="board-col">
-        <EvalBar score={evalScore} orientation={orientation} result={ply === total && !calc && !explore ? game.result : null} />
+        <EvalBar score={evalScore} orientation={orientation} result={ply === total && !calc && !explore ? game.result : null} hidden={hidden} />
         <div className="board-stack">
           {bar(top)}
-          <Board {...boardView} onUserMove={onUserMove} />
+          <Board
+            key={boardNonce}
+            {...boardView}
+            onUserMove={hidden && !(mine && playing && isLive) ? undefined : onUserMove}
+            premoveColor={mine && playing && isLive ? mine : undefined}
+          >
+            {promo && mine && (
+              <div className="promo-pick cg-wrap">
+                {["queen", "rook", "bishop", "knight"].map((p) => (
+                  <button
+                    key={p}
+                    title={p}
+                    onClick={() => {
+                      setPromo(null);
+                      playMove(promo.from + promo.to + (p === "knight" ? "n" : p[0]));
+                    }}
+                  >
+                    <piece className={`${p} ${mine === "w" ? "white" : "black"}`} />
+                  </button>
+                ))}
+                <button
+                  className="promo-cancel"
+                  title="Cancel"
+                  onClick={() => {
+                    setPromo(null);
+                    setBoardNonce((n) => n + 1);
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </Board>
           {bar(bottom)}
         </div>
       </div>
@@ -486,7 +628,46 @@ export function GamePage({ id }: { id: string }) {
             </div>
           </div>
         )}
-        {game.phase === "pregame" && !game.seen.w && !game.seen.b && (
+        {mine && (game.phase === "pregame" || playing) && (
+          <div className="play-panel">
+            {game.phase === "pregame" ? (
+              <div className="play-status">
+                You're {mine === "w" ? "White" : "Black"} against {agentName}. The game starts once they've answered their pre-game interview
+                {game.broadcaster?.enabled ? " and the broadcaster has introduced the match" : ""}.
+              </div>
+            ) : (
+              <>
+                <div className={`play-status ${myTurn ? "go" : ""}`}>
+                  {myTurn ? "♟ Your move — drag a piece on the board" : `${agentName} is thinking… (you can premove)`}
+                  {myTurn && !isLive && (
+                    <button className="btn" onClick={() => go(total)}>
+                      Back to the game ↩
+                    </button>
+                  )}
+                </div>
+                {myTurn && game.drawOffer === agentSide && (
+                  <div className="play-offer">
+                    🤝 {agentName} offers a draw.
+                    <button className="btn green" onClick={() => act({ action: "accept-draw" })}>
+                      Accept
+                    </button>
+                    <span className="muted">or play a move to decline</span>
+                  </div>
+                )}
+                <div className="play-actions">
+                  <button className={`btn ${offerDraw ? "green" : ""}`} disabled={!myTurn} onClick={() => setOfferDraw(!offerDraw)} title="Your offer goes with your next move">
+                    🤝 {offerDraw ? "Offering a draw with your move" : "Offer draw"}
+                  </button>
+                  <button className="btn" onClick={() => confirm("Resign this game?") && act({ action: "resign" })}>
+                    🏳️ Resign
+                  </button>
+                </div>
+              </>
+            )}
+            {playErr && <div className="play-err">{playErr}</div>}
+          </div>
+        )}
+        {game.phase === "pregame" && (["w", "b"] as Color[]).every((c) => c === human || !game.seen[c]) && (
           <div className="result-banner" style={{ textAlign: "left" }}>
             <h3 style={{ fontSize: 17 }}>Waiting for the players</h3>
             <p style={{ marginBottom: 10 }}>
@@ -498,12 +679,15 @@ export function GamePage({ id }: { id: string }) {
           </div>
         )}
         <div className="panel-body">
-          {tab === "moves" && <MoveList game={game} ply={ply} onSelect={go} />}
-          {tab === "thinking" && (
-            <ThinkingFeed game={game} ply={ply} calc={calc} onSelect={go} onPlayLine={(p, line) => (setExplore(null), setCalc({ ply: p, line, step: 0, playing: true }))} />
-          )}
-          {tab === "studio" && <Studio game={game} audio={audio} />}
-          {tab === "review" && <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />}
+          {tab === "moves" && <MoveList game={game} ply={ply} onSelect={go} hideVerdicts={hidden} />}
+          {tab === "thinking" &&
+            (hidden ? (
+              hiddenNote(`${agentName}'s thinking is`)
+            ) : (
+              <ThinkingFeed game={game} ply={ply} calc={calc} onSelect={go} onPlayLine={(p, line) => (setExplore(null), setCalc({ ply: p, line, step: 0, playing: true }))} />
+            ))}
+          {tab === "studio" && <Studio game={game} audio={audio} hideBroadcast={hidden} />}
+          {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
         </div>
         <div className="panel-footer">
           <div className="nav-btns">
@@ -523,10 +707,15 @@ export function GamePage({ id }: { id: string }) {
           <button className="icon-btn" onClick={() => setOrientation((o) => (o === "w" ? "b" : "w"))} title="Flip board (f)">
             ⇅
           </button>
-          <button className={`icon-btn`} style={{ color: showBest ? "var(--green)" : undefined }} onClick={() => setShowBest(!showBest)} title="Show engine's best-move arrow">
-            ➚
+          {!hidden && (
+            <button className={`icon-btn`} style={{ color: showBest ? "var(--green)" : undefined }} onClick={() => setShowBest(!showBest)} title="Show engine's best-move arrow">
+              ➚
+            </button>
+          )}
+          <button className="icon-btn" onClick={sfx.toggle} title={sfx.on ? "Mute sound effects" : "Unmute sound effects"}>
+            {sfx.on ? "🔔" : "🔕"}
           </button>
-          {game.broadcaster?.enabled && (
+          {game.broadcaster?.enabled && !hidden && (
             <button className="icon-btn" onClick={() => audio.setEnabled(!audio.enabled)} title={audio.enabled ? "Mute broadcaster" : "Unmute broadcaster"}>
               {audio.enabled ? "🔊" : "🔇"}
             </button>

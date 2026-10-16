@@ -141,7 +141,19 @@ export const PERSONALITIES: Personality[] = [
   },
 ];
 
+/** Not a style an agent can pick: stands in for a human player wherever a personality is shown. */
+export const HUMAN_PERSONA: Personality = {
+  id: "human",
+  name: "Human",
+  emoji: "🧑",
+  color: "#5d9bd5",
+  tagline: "A human at the board",
+  risk: "calm",
+  style: "Plays their own moves on the website. No commentary, no calculations shown — just the moves.",
+  voice: "",
+};
+
 export const personalityById = (id: string) =>
-  PERSONALITIES.find((p) => p.id === id) ?? PERSONALITIES[0];
+  id === HUMAN_PERSONA.id ? HUMAN_PERSONA : PERSONALITIES.find((p) => p.id === id) ?? PERSONALITIES[0];
 
 export const riskRule = (p: Personality) => RISK_RULES[p.risk];

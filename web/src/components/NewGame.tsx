@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Game, Tournament } from "../../../shared/types";
 import { api, useFetch, type LaunchSpec, type Meta } from "../api";
 import { SeatPicker, type SeatChoice } from "./SeatPicker";
+import { saveName, saveSeat, savedName } from "../seat";
+import { DEFAULT_BROADCASTER } from "../../../shared/models";
 
 export function BroadcasterPicker({ meta, value, onChange }: { meta: Meta; value: { enabled: boolean; model: string; effort: string }; onChange: (v: { enabled: boolean; model: string; effort: string }) => void }) {
   return (
@@ -142,7 +144,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const meta = useFetch<Meta>("/api/meta");
   const [white, setWhite] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
   const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high", personality: "python" });
-  const [bc, setBc] = useState({ enabled: true, model: "claude-sonnet-5-5", effort: "low" });
+  const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [learning, setLearning] = useState(true);
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -193,6 +195,109 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** You against an agent: you only play the moves — no commentary, evals or interviews. */
+export function PlayAgentModal({ onClose }: { onClose: () => void }) {
+  const meta = useFetch<Meta>("/api/meta");
+  const [name, setName] = useState(savedName);
+  const [side, setSide] = useState<"w" | "b" | "random">("w");
+  const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
+  const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
+  const [learning, setLearning] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  if (!meta) return null;
+  const create = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const me = side === "random" ? (Math.random() < 0.5 ? "w" : "b") : side;
+      const human = { human: true, name: name.trim() || "Human" };
+      saveName(name.trim());
+      const r = await api<{ game: Game; humanKey: string }>("/api/games", {
+        white: me === "w" ? human : agent,
+        black: me === "b" ? human : agent,
+        broadcaster: bc,
+        learning,
+      });
+      saveSeat(r.game.id, r.humanKey);
+      if (!meta.summonAvailable) return setCreated(r.game.id);
+      try {
+        await api(`/api/games/${r.game.id}/summon`, {});
+      } catch (e) {
+        setErr(`Summoning the agent failed: ${e instanceof Error ? e.message : e}`);
+        return setCreated(r.game.id);
+      }
+      // Straight to the board; the agent (and broadcaster) are on their way.
+      location.hash = `#/game/${r.game.id}`;
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>{created ? "Game created" : "Play an agent"}</h2>
+        {created ? (
+          <>
+            {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
+            <SummonInfo gameId={created} />
+          </>
+        ) : (
+          <>
+            <p style={{ color: "var(--text-2)", lineHeight: 1.5, marginTop: 0 }}>
+              You just play your moves on the board. The engine, the agent's thinking and the broadcaster stay hidden from you until the game ends.
+            </p>
+            <div className="seat-grid">
+              <div className="seat">
+                <h3>🧑 You</h3>
+                <label className="field">
+                  Your name
+                  <input type="text" value={name} maxLength={24} placeholder="Human" onChange={(e) => setName(e.target.value)} />
+                </label>
+                <div className="field">
+                  You play
+                  <div className="segmented">
+                    {(
+                      [
+                        ["w", "♔ White"],
+                        ["b", "♚ Black"],
+                        ["random", "🎲 Random"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <button key={k} className={side === k ? "on" : ""} onClick={() => setSide(k)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="seat">
+                <h3>🤖 Your opponent</h3>
+                <SeatPicker meta={meta} value={agent} compact onChange={setAgent} />
+              </div>
+            </div>
+            <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
+            <LearningToggle value={learning} onChange={setLearning} />
+            {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
+            <div className="row-actions">
+              <button className="btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button className="btn green big" disabled={busy} onClick={create}>
+                {busy ? "Setting up…" : meta.summonAvailable ? "Play" : "Create game"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   const meta = useFetch<Meta>("/api/meta");
   const [name, setName] = useState("Agent Invitational");
@@ -204,7 +309,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   ]);
   const [double, setDouble] = useState(false);
   const [learning, setLearning] = useState(true);
-  const [bc, setBc] = useState({ enabled: true, model: "claude-sonnet-5-5", effort: "low" });
+  const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
   if (!meta) return null;

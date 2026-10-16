@@ -938,3 +938,131 @@
   color: #bab9b8;
   font-weight: 600;
 }
+
+/* ---------- render panel (preview page) ---------- */
+
+.v-preview {
+  flex-direction: row;
+  gap: 24px;
+}
+.v-preview-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.render-panel {
+  width: 316px;
+  align-self: center;
+  background: #262522;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.render-panel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.rp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rp-formats label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.rp-label {
+  color: #bab9b8;
+  font-weight: 700;
+}
+.render-panel select {
+  flex: 1;
+  min-width: 0;
+  background: #1e1d1a;
+  color: #fff;
+  border: 1px solid #3c3a37;
+  border-radius: 6px;
+  padding: 5px;
+}
+.rp-small {
+  background: #3c3a37;
+  color: #e8e6e3;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+.rp-go {
+  background: #81b64c;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rp-go:disabled,
+.rp-small:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rp-ok {
+  color: #81b64c;
+  font-weight: 700;
+}
+.rp-muted {
+  color: #8b8987;
+}
+.rp-job {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rp-stage {
+  font-weight: 700;
+}
+.rp-job.done .rp-stage {
+  color: #81b64c;
+}
+.rp-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #1e1d1a;
+  overflow: hidden;
+}
+.rp-bar i {
+  display: block;
+  height: 100%;
+  background: #81b64c;
+}
+.rp-error {
+  color: #fa412d;
+  white-space: pre-wrap;
+  font-size: 12px;
+  margin: 0;
+}
+.rp-videos {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid #3c3a37;
+  padding-top: 10px;
+}
+.rp-video {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #bab9b8;
+}

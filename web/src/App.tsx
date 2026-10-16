@@ -5,7 +5,7 @@ import { PlayerPage } from "./pages/PlayerPage";
 import { TournamentPage } from "./pages/TournamentPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { PersonalitiesPage } from "./pages/PersonalitiesPage";
-import { NewGameModal, NewTournamentModal } from "./components/NewGame";
+import { NewGameModal, NewTournamentModal, PlayAgentModal } from "./components/NewGame";
 import { VideoPage } from "./video/VideoPage";
 
 function useHash() {
@@ -20,7 +20,7 @@ function useHash() {
 
 export function App() {
   const route = useHash();
-  const [modal, setModal] = useState<"game" | "tournament" | null>(null);
+  const [modal, setModal] = useState<"game" | "play" | "tournament" | null>(null);
   const [path, search = ""] = route.split("?");
   const [, section, arg] = path.split("/");
   const id = arg ? decodeURIComponent(arg) : "";
@@ -34,7 +34,7 @@ export function App() {
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
   else if (section === "memory") page = <MemoryPage />;
   else if (section === "personalities") page = <PersonalitiesPage />;
-  else page = <Lobby onNewGame={() => setModal("game")} onNewTournament={() => setModal("tournament")} />;
+  else page = <Lobby onNewGame={() => setModal("game")} onPlay={() => setModal("play")} onNewTournament={() => setModal("tournament")} />;
 
   return (
     <div className="app">
@@ -58,12 +58,16 @@ export function App() {
         <button className="nav-item" onClick={() => setModal("game")}>
           <span className="ico">♟️</span> New game
         </button>
+        <button className="nav-item" onClick={() => setModal("play")}>
+          <span className="ico">🧑</span> Play an agent
+        </button>
         <button className="nav-item" onClick={() => setModal("tournament")}>
           <span className="ico">🏆</span> Tournament
         </button>
       </nav>
       <main className="main">{page}</main>
       {modal === "game" && <NewGameModal onClose={() => setModal(null)} />}
+      {modal === "play" && <PlayAgentModal onClose={() => setModal(null)} />}
       {modal === "tournament" && <NewTournamentModal onClose={() => setModal(null)} />}
     </div>
   );

@@ -1,11 +1,9 @@
 import type { Color, Game, Score } from "../../../shared/types";
 import { winPercentWhite } from "../../../shared/evalmath";
-import { sideName } from "../../../shared/naming";
+import { selfEvalColors, sideName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
 import { Avatar } from "./PlayerBar";
 import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
-
-const SELF_COLORS: Record<Color, string> = { w: "#5fb6ff", b: "#ff9f43" };
 
 /** Engine score for a ply, or undefined while pending / if the engine failed (never a made-up 0.00). */
 export function engineScoreAt(game: Game, ply: number): Score | undefined {
@@ -38,6 +36,7 @@ export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; p
       .map((m) => [x(m.ply), y(winPercentWhite({ cp: m.selfEval! * 100 }))] as [number, number]);
     return sp;
   };
+  const selfColors = selfEvalColors(game);
   const notable = game.moves.filter((m) => m.analysis && ["brilliant", "great", "blunder", "mistake", "miss", "inaccuracy"].includes(m.analysis.classification));
 
   return (
@@ -58,9 +57,9 @@ export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; p
         if (sp.length < 1) return null;
         return (
           <g key={c}>
-            <polyline points={sp.map(([a, b]) => `${a},${b}`).join(" ")} fill="none" stroke={SELF_COLORS[c]} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+            <polyline points={sp.map(([a, b]) => `${a},${b}`).join(" ")} fill="none" stroke={selfColors[c]} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
             {sp.map(([a, b], i) => (
-              <circle key={i} cx={a} cy={b} r="1.8" fill={SELF_COLORS[c]} />
+              <circle key={i} cx={a} cy={b} r="1.8" fill={selfColors[c]} />
             ))}
           </g>
         );
@@ -76,6 +75,7 @@ export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; p
 export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: number; onSelect: (p: number) => void; ratings: Record<Color, number | undefined> }) {
   const rv = game.review;
   const counts = (c: Color, k: string) => game.moves.filter((m) => m.color === c && m.analysis?.classification === k).length;
+  const selfColors = selfEvalColors(game);
   const pending = game.moves.filter((m) => !m.analysis && !game.analysis[m.fenAfter]?.failed && !game.analysis[m.fenBefore]?.failed).length;
   const failed = game.moves.length - pending - game.moves.filter((m) => m.analysis).length;
   return (
@@ -87,14 +87,14 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
           <i style={{ background: "#fff" }} />
           Engine (Stockfish)
         </span>
-        <span>
-          <i style={{ background: SELF_COLORS.w }} />
-          {sideName(game, "w")}'s self-eval
-        </span>
-        <span>
-          <i style={{ background: SELF_COLORS.b }} />
-          {sideName(game, "b")}'s self-eval
-        </span>
+        {(["w", "b"] as Color[])
+          .filter((c) => game.moves.some((m) => m.color === c && m.selfEval !== null))
+          .map((c) => (
+            <span key={c}>
+              <i style={{ background: selfColors[c] }} />
+              {sideName(game, c)}'s self-eval
+            </span>
+          ))}
       </div>
       {pending > 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Engine is analyzing {pending} move(s)…</div>}
       {failed > 0 && (
@@ -127,7 +127,7 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
           Self-eval error
         </div>
         {(["w", "b"] as Color[]).map((c) => (
-          <div key={c} className="val" style={{ color: SELF_COLORS[c] }}>
+          <div key={c} className="val" style={{ color: selfColors[c] }}>
             {rv?.[c].selfEvalError != null ? `±${rv[c].selfEvalError!.toFixed(2)}` : "–"}
           </div>
         ))}

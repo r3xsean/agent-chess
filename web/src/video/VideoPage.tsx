@@ -9,9 +9,13 @@ import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
-import { fullName, sideName } from "../../../shared/naming";
+import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
 import { buildTimeline, FRAME, sceneAt, type Format, type Scene, type Timeline } from "./timeline";
+import { RenderPanel } from "./RenderPanel";
 import "./video.css";
+
+/** Width of the render panel beside the preview. */
+const PANEL_W = 340;
 
 /*
  * A game replay laid out as a video frame (1920×1080 for YouTube, 1080×1920 for TikTok).
@@ -590,15 +594,16 @@ function MoveList({ g, ply }: { g: Game; ply: number }) {
 }
 
 function ChartLegend({ g }: { g: Game }) {
-  const p = (c: Color) => personalityById((c === "w" ? g.white : g.black).personality);
+  const colors = selfEvalColors(g);
   return (
     <div className="v-legend">
       <span>
         <i className="v-swatch engine" /> Engine
       </span>
-      {(["w", "b"] as Color[]).map((c) => (
+      {/* Only players who gave their own evals (a human doesn't). */}
+      {(["w", "b"] as Color[]).filter((c) => g.moves.some((m) => m.color === c && m.selfEval !== null)).map((c) => (
         <span key={c}>
-          <i className="v-swatch" style={{ background: p(c).color }} /> {sideName(g, c)}'s own eval
+          <i className="v-swatch" style={{ background: colors[c] }} /> {sideName(g, c)}'s own eval
         </span>
       ))}
     </div>
@@ -612,7 +617,7 @@ function EvalGraph({ prep, g, ply, width, height }: { prep: Prep; g: Game; ply: 
   // Drawn only up to the current move, so the chart never spoils what's coming.
   const shown = prep.graph.slice(0, ply + 1);
   const area = `M0,${height} ` + shown.map((w, i) => `L${x(i)},${y(w)}`).join(" ") + ` L${x(shown.length - 1)},${height} Z`;
-  const color = (c: Color) => personalityById((c === "w" ? g.white : g.black).personality).color;
+  const colors = selfEvalColors(g);
   return (
     <svg className="v-graph" width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
       <rect width={width} height={height} fill="#403d39" />
@@ -626,7 +631,7 @@ function EvalGraph({ prep, g, ply, width, height }: { prep: Prep; g: Game; ply: 
             key={c}
             points={pts.map((p) => `${x(p.ply)},${y(p.w)}`).join(" ")}
             fill="none"
-            stroke={color(c)}
+            stroke={colors[c]}
             strokeWidth={3.5}
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -726,14 +731,12 @@ function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: numb
       <div className="v-hero-name" style={{ color: makerOf(ref.provider).color }}>
         {ref.modelLabel}
       </div>
-      <div className="v-hero-as">
-        as <span style={{ color: p.color }}>{p.name}</span>
-      </div>
+      <div className="v-hero-as">{isHuman(ref) ? "Human player" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</div>
       <div className="v-hero-tags">
         <span className={`v-side ${color}`}>{color === "w" ? "White" : "Black"}</span>
-        <span className="v-chip">{ref.effort} effort</span>
+        {!isHuman(ref) && <span className="v-chip">{ref.effort} effort</span>}
         {rating !== undefined && <span className="v-chip">Rated {rating}</span>}
-        <span className={`v-risk ${p.risk}`}>{RISK_LABEL[p.risk].label}</span>
+        {!isHuman(ref) && <span className={`v-risk ${p.risk}`}>{RISK_LABEL[p.risk].label}</span>}
       </div>
       <div className="v-hero-tagline">“{p.tagline}”</div>
     </div>
@@ -769,9 +772,7 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
             {ref.modelLabel}
           </div>
           <div className="v-interview-sub">
-            <span className="v-hero-as">
-              as <span style={{ color: p.color }}>{p.name}</span>
-            </span>
+            <span className="v-hero-as">{isHuman(ref) ? "Human player" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</span>
             <span className={`v-side ${s.color}`}>{s.color === "w" ? "White" : "Black"}</span>
           </div>
         </div>
@@ -803,7 +804,7 @@ function ResultScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean;
           {ref.modelLabel}
         </div>
         <div className="v-hero-as small">
-          as <span style={{ color: personalityById(ref.personality).color }}>{personalityById(ref.personality).name}</span>
+          {isHuman(ref) ? "Human player" : <>as <span style={{ color: personalityById(ref.personality).color }}>{personalityById(ref.personality).name}</span></>}
         </div>
         <div className="v-time-total">
           ⏱ {clock(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0))} thinking · {took(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0) / Math.max(1, g.moves.filter((m) => m.color === c).length))} a move
@@ -914,8 +915,10 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   const [game, setGame] = useState<Game | null>(null);
   const [ratings, setRatings] = useState<Ratings | undefined>(undefined);
   const [error, setError] = useState("");
-  const [t, setT] = useState(Number(query.get("t")) || 0);
+  // The preview opens just past the intro's fade-in rather than on a blank frame.
+  const [t, setT] = useState(Number(query.get("t")) || (render ? 0 : 0.5));
   const [playing, setPlaying] = useState(false);
+  const [reload, setReload] = useState(0);
   const keyRef = useRef("");
 
   useEffect(() => {
@@ -926,7 +929,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       })
       .then((r) => setRatings(r ?? null))
       .catch((e) => setError(String(e.message ?? e)));
-  }, [id]);
+  }, [id, reload]);
 
   const thoughts = query.get("thoughts") !== "off";
   const pace = Number(query.get("pace")) || 1;
@@ -1004,10 +1007,11 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   if (render) return <div className="v-render">{frame}</div>;
 
   const { w, h } = FRAME[format];
-  const scale = Math.min((win.w - 48) / w, (win.h - 130) / h);
+  const scale = Math.min((win.w - 48 - PANEL_W) / w, (win.h - 130) / h);
   const swap = (f: Format) => `#/video/${id}?format=${f}${thoughts ? "" : "&thoughts=off"}${pace !== 1 ? `&pace=${pace}` : ""}`;
   return (
     <div className="v-preview">
+      <div className="v-preview-main">
       <div className="v-stage" style={{ width: w * scale, height: h * scale }}>
         <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0" }}>{frame}</div>
       </div>
@@ -1025,6 +1029,8 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
         </a>
         <a href={`#/game/${id}`}>Back to game</a>
       </div>
+      </div>
+      <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />
     </div>
   );
 }

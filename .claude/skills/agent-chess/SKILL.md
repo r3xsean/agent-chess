@@ -17,10 +17,12 @@ The website (http://127.0.0.1:5170) is the referee. Players and the broadcaster 
 Launch specs contain every seat's key, so these endpoints need the orchestrator token: send header `x-admin-token: <contents of C:\Users\User\agent-chess\data\admin-token.txt>` on `/launch`, `POST /api/games` (to get `launch` back), `/api/tournaments/<tid>/next` and `/abort`. Never put the token in an agent prompt.
 
 - Existing game: `Invoke-RestMethod http://127.0.0.1:5170/api/games/<id>/launch`
-- New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-sonnet-5-5", effort:"low"} }` → `{ game, launch }`
+- New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }` → `{ game, launch }`
 - Tournament: `POST /api/tournaments/<tid>/next` → `{ game, launch }`, `{ finished:true }`, or `alreadyRunning:true` (then use that game's launch spec — do not re-delegate seats that are still running).
 
 `launch.tasks` has one entry per seat (white, black, optional broadcaster): `title`, `clientRequestId`, `target` (`providerInstanceId`, `model`, `options`) and the full `prompt`. `launch.launched` maps seats (`w`, `b`, `x`) that some orchestrator run already delegated to a timestamp.
+
+When the user plays an agent themselves, their seat is human: it has no task in `launch.tasks` (they move on the website) and `/agents` reports it as `{ human: true, done: true }`. Launch only the tasks you're given.
 
 ## 2. Delegate every seat in one message
 
@@ -42,6 +44,21 @@ Completion notifications wake you. On each one, check `GET /api/games/<id>/agent
 ## 4. Tournaments
 
 When every seat of a tournament game is done (phase `finished`), call `/api/tournaments/<tid>/next` and repeat from step 2 until `{finished:true}`. Then report the standings (`GET /api/tournaments/<tid>`).
+
+## 5. Video director
+
+After a game, its broadcaster plans the replay video (which moments to slow down for) and submits it with `direct`. A finished game without a plan — no broadcaster, or one from before directors existed — gets a standalone director, usually because the website's video page asked for a render (webhook action `direct-video`):
+
+1. `GET /api/games/<id>/director-launch` with the admin token → `{ tasks: [one task] }`. Add `?redo=1` only to replace an existing plan.
+2. Delegate that task exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). No `/launched` record is needed.
+3. When it finishes, check `GET /api/games/<id>` has a `video` field. If not, re-delegate once with `clientRequestId` `<id>-director-r2` (a model's safety filter occasionally refuses a long brief; a second try usually works). The website renders on its own once the plan is saved.
+
+## 6. When you're done
+
+Once the work is complete — every seat of the game done, the tournament finished, or the director's plan saved — tidy up so the threads leave the inbox:
+- Settle each finished child task's thread: `t3_thread_organize` with `action:"settle"` and its `childThreadId`.
+- Then settle your own thread as the very last step: `t3_thread_organize` with `action:"settle"` and no `threadId` (it takes effect when your turn ends).
+Don't settle while anything still needs you (a seat running, failed or stalled), and leave threads the user is reading alone if they were not started by a webhook.
 
 ## Rules
 - Never play moves or write commentary for an agent yourself; never give agents engine output.
