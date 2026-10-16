@@ -15,8 +15,11 @@ export function humanSide(g: Pick<Game, "white" | "black">): Color | null {
   return isHuman(g.white) ? "w" : isHuman(g.black) ? "b" : null;
 }
 
-/** "Opus 5.5 as The Magician" (or a human's name). */
-export const fullName = (p: PlayerRef) => (isHuman(p) ? p.modelLabel : `${p.modelLabel} as ${personalityById(p.personality).name}`);
+/** "Opus 5.5 as The Magician", plain "Opus 5.5" with no personality, or a human's name. */
+export const fullName = (p: PlayerRef) => {
+  const persona = personalityById(p.personality);
+  return isHuman(p) || persona.plain ? p.modelLabel : `${p.modelLabel} as ${persona.name}`;
+};
 
 /**
  * Colours that tell the two sides' self-eval lines apart: the maker's colour (Claude vs OpenAI vs human),
@@ -30,10 +33,15 @@ export function selfEvalColors(g: Pick<Game, "white" | "black">): Record<Color, 
   return { w: "#5fb6ff", b: "#ff9f43" };
 }
 
-/** What to call one side in running text: its model, or its personality when both sides are the same model. */
+/**
+ * What to call one side in running text: its model; when both sides are the same model, its personality
+ * (a model with no personality keeps its model name); when even that matches, the model and its effort.
+ */
 export function sideName(g: Pick<Game, "white" | "black">, c: Color): string {
   const me = c === "w" ? g.white : g.black;
   const opp = c === "w" ? g.black : g.white;
-  if (isHuman(me)) return me.modelLabel;
-  return me.modelLabel === opp.modelLabel ? personalityById(me.personality).name : me.modelLabel;
+  if (isHuman(me) || me.modelLabel !== opp.modelLabel) return me.modelLabel;
+  if (me.personality === opp.personality) return `${me.modelLabel} (${me.effort})`;
+  const persona = personalityById(me.personality);
+  return persona.plain ? me.modelLabel : persona.name;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chess } from "chess.js";
+import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from "../../../shared/types";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { formatScore, scoreToCp } from "../../../shared/evalmath";
@@ -16,10 +16,8 @@ import { MoveList } from "../components/MoveList";
 import { ThinkingFeed } from "../components/ThinkingFeed";
 import { Studio } from "../components/Studio";
 import { Review, engineScoreAt } from "../components/Review";
-import { useBroadcastAudio } from "../useBroadcastAudio";
 import { playMoveSound, playSfx, STING, useSfxToggle } from "../sfx";
 
-const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 type Tab = "moves" | "thinking" | "studio" | "review";
 interface CalcState {
   ply: number;
@@ -39,7 +37,7 @@ interface ExploreState {
 }
 
 function checkColor(fen: string): Color | false {
-  const c = new Chess(fen);
+  const c = looseChess(fen);
   return c.inCheck() ? c.turn() : false;
 }
 
@@ -71,12 +69,12 @@ const VERDICT: Record<Classification, string> = {
   blunder: "a blunder",
 };
 
-function pvToSan(fen: string, pv: string[], max = 10): string[] {
-  const c = new Chess(fen);
+function pvToSan(fen: string, pv: string[], variant: Variant, max = 10): string[] {
+  const c = newRules(fen, variant);
   const out: string[] = [];
   for (const uci of pv.slice(0, max)) {
     try {
-      out.push(c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
+      out.push(c.move(uci).san);
     } catch {
       break;
     }
@@ -99,6 +97,8 @@ export function GamePage({ id }: { id: string }) {
     () => raw && { ...raw, moves: raw.moves.map((m) => (m.analysis?.unavailable ? { ...m, analysis: undefined } : m)) },
     [raw],
   );
+  const variant = variantOf(game);
+  const startFen = game?.startFen ?? START_FEN;
   const lobby = useFetch<Lobby>("/api/lobby", [game?.result]);
   const meta = useFetch<Meta>("/api/meta");
   const [viewPly, setViewPly] = useState<number | null>(null);
@@ -117,7 +117,6 @@ export function GamePage({ id }: { id: string }) {
   const mine: Color | null = human && myKey ? human : null;
   // While you play, the engine, the agent's thinking and the broadcaster stay hidden; all of it unlocks at the end.
   const hidden = !!mine && !!game && !game.result && game.termination !== "aborted";
-  const audio = useBroadcastAudio(hidden ? null : game);
   const sfx = useSfxToggle();
   const [offerDraw, setOfferDraw] = useState(false);
   const [promo, setPromo] = useState<{ from: string; to: string } | null>(null);
@@ -182,12 +181,12 @@ export function GamePage({ id }: { id: string }) {
   // Every position and move of the viewer's line, worked out once.
   const exploreLine = useMemo(() => {
     if (!explore) return null;
-    const c = new Chess(explore.baseFen);
+    const c = newRules(explore.baseFen, variant);
     const fens = [c.fen()];
     const moves = explore.moves.map((san) => {
       const mv = c.move(san);
       fens.push(c.fen());
-      return { san: mv.san, from: mv.from, to: mv.to, uci: mv.from + mv.to + (mv.promotion ?? ""), key: `${mv.before}|${mv.san}` };
+      return { san: mv.san, from: mv.from, to: mv.to, uci: mv.uci, key: `${mv.before}|${mv.san}` };
     });
     return { fens, moves };
   }, [explore?.baseFen, explore?.moves.join(" ")]);
@@ -201,7 +200,7 @@ export function GamePage({ id }: { id: string }) {
     }
     if (calc && calcLine) {
       const m = game.moves[calc.ply - 1];
-      const c = new Chess(m.fenBefore);
+      const c = newRules(m.fenBefore, variant);
       let last: [string, string] | undefined;
       for (const san of calcLine.san.slice(0, calc.step)) {
         const mv = c.move(san);
@@ -210,12 +209,12 @@ export function GamePage({ id }: { id: string }) {
       const arrows: BoardProps["arrows"] = [];
       const nextSan = calcLine.san[calc.step];
       if (nextSan) {
-        const mv = new Chess(c.fen()).move(nextSan);
+        const mv = newRules(c.fen(), variant).move(nextSan);
         arrows.push({ from: mv.from, to: mv.to, brush: "blue" });
       }
       return { fen: c.fen(), orientation, lastMove: last, check: checkColor(c.fen()), arrows };
     }
-    if (ply === 0) return { fen: game.moves[0]?.fenBefore ?? START_FEN, orientation };
+    if (ply === 0) return { fen: game.moves[0]?.fenBefore ?? startFen, orientation };
     const m = game.moves[ply - 1];
     const a = m.analysis;
     const arrows: BoardProps["arrows"] = [];
@@ -242,7 +241,7 @@ export function GamePage({ id }: { id: string }) {
     }
     if (calc && calcLine) {
       if (!calc.step) return null;
-      const c = new Chess(game.moves[calc.ply - 1].fenBefore);
+      const c = newRules(game.moves[calc.ply - 1].fenBefore, variant);
       for (const san of calcLine.san.slice(0, calc.step - 1)) c.move(san);
       const before = c.fen();
       return { san: c.move(calcLine.san[calc.step - 1]).san, before };
@@ -289,10 +288,10 @@ export function GamePage({ id }: { id: string }) {
   }, [game]);
   const material = useMemo(() => {
     if (!game) return null;
-    const start = game.moves[0]?.fenBefore ?? START_FEN;
-    if (explore) return materialInfo(start, [...explore.preSans, ...explore.moves.slice(0, explore.step)]);
-    if (calc && calcLine) return materialInfo(start, [...game.moves.slice(0, calc.ply - 1).map((m) => m.san), ...calcLine.san.slice(0, calc.step)]);
-    return materialInfo(start, game.moves.slice(0, ply).map((m) => m.san));
+    const start = game.moves[0]?.fenBefore ?? startFen;
+    if (explore) return materialInfo(start, [...explore.preSans, ...explore.moves.slice(0, explore.step)], variant);
+    if (calc && calcLine) return materialInfo(start, [...game.moves.slice(0, calc.ply - 1).map((m) => m.san), ...calcLine.san.slice(0, calc.step)], variant);
+    return materialInfo(start, game.moves.slice(0, ply).map((m) => m.san), variant);
   }, [game?.moves.length, ply, calc, calcLine, explore]);
 
   // Engine analysis of the viewer's own positions, plus a rating for the move that reached each one.
@@ -324,7 +323,7 @@ export function GamePage({ id }: { id: string }) {
     let cancelled = false;
     let tries = 0;
     const run = () =>
-      fetch("/api/explore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fen: exploreFen, move }) })
+      fetch("/api/explore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fen: exploreFen, move, variant }) })
         .then((r) => r.json())
         .then((a) => {
           if (cancelled) return;
@@ -345,7 +344,7 @@ export function GamePage({ id }: { id: string }) {
 
   if (!game || !view || !material) return <div className="empty">Loading game…</div>;
 
-  const turn: Color = new Chess(game.moves[total - 1]?.fenAfter ?? START_FEN).turn();
+  const turn: Color = ((game.moves[total - 1]?.fenAfter ?? startFen).split(" ")[1] as Color) ?? "w";
   const playing = game.phase === "playing";
   const isLive = viewPly === null && !calc && !explore;
   const agentSide: Color | null = human ? (human === "w" ? "b" : "w") : null;
@@ -372,13 +371,13 @@ export function GamePage({ id }: { id: string }) {
       // A premove already knows its promotion piece (a queen, as on chess.com).
       if (promotion) return playMove(from + to + promotion);
       // Your move in your own game: ask which piece a pawn becomes, then send it.
-      const promotes = new Chess(view.fen).moves({ verbose: true }).some((m) => m.from === from && m.to === to && m.promotion);
+      const promotes = newRules(view.fen, variant).moves().some((m) => m.from === from && m.to === to && m.promotion);
       return promotes ? setPromo({ from, to }) : playMove(from + to);
     }
     if (hidden) return; // no analysis board (and its engine) during your own game
     let san: string;
     try {
-      san = new Chess(view.fen).move({ from, to, promotion: "q" }).san;
+      san = newRules(view.fen, variant).move({ from, to, promotion: "q" }).san;
     } catch {
       return;
     }
@@ -441,7 +440,7 @@ export function GamePage({ id }: { id: string }) {
     </div>
   );
   const explorePrefixes = explore ? movePrefixes(explore.baseFen, explore.moves.length) : [];
-  const exploreBest = exploreFen && exploreA?.pv.length ? pvToSan(exploreFen, exploreA.pv) : [];
+  const exploreBest = exploreFen && exploreA?.pv.length ? pvToSan(exploreFen, exploreA.pv, variant) : [];
   const calcMove = calc ? game.moves[calc.ply - 1] : null;
   const res = game.result || game.termination === "aborted" ? resultText(game) : null;
 
@@ -456,6 +455,7 @@ export function GamePage({ id }: { id: string }) {
             {...boardView}
             onUserMove={hidden && !(mine && playing && isLive) ? undefined : onUserMove}
             premoveColor={mine && playing && isLive ? mine : undefined}
+            variant={variant}
           >
             {promo && mine && (
               <div className="promo-pick cg-wrap">
@@ -535,7 +535,7 @@ export function GamePage({ id }: { id: string }) {
               ))}
               {calcLine.brokenAt && (
                 <span className="broken" title="The line breaks here: this move is illegal in the calculated position">
-                  ✕ {calcLine.brokenAt} — illegal: {lineBreakReason(calcMove.fenBefore, calcLine)}
+                  ✕ {calcLine.brokenAt} — illegal: {lineBreakReason(calcMove.fenBefore, calcLine, variant)}
                 </span>
               )}
             </div>
@@ -686,7 +686,7 @@ export function GamePage({ id }: { id: string }) {
             ) : (
               <ThinkingFeed game={game} ply={ply} calc={calc} onSelect={go} onPlayLine={(p, line) => (setExplore(null), setCalc({ ply: p, line, step: 0, playing: true }))} />
             ))}
-          {tab === "studio" && <Studio game={game} audio={audio} hideBroadcast={hidden} />}
+          {tab === "studio" && <Studio game={game} hideBroadcast={hidden} />}
           {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
         </div>
         <div className="panel-footer">
@@ -715,11 +715,6 @@ export function GamePage({ id }: { id: string }) {
           <button className="icon-btn" onClick={sfx.toggle} title={sfx.on ? "Mute sound effects" : "Unmute sound effects"}>
             {sfx.on ? "🔔" : "🔕"}
           </button>
-          {game.broadcaster?.enabled && !hidden && (
-            <button className="icon-btn" onClick={() => audio.setEnabled(!audio.enabled)} title={audio.enabled ? "Mute broadcaster" : "Unmute broadcaster"}>
-              {audio.enabled ? "🔊" : "🔇"}
-            </button>
-          )}
           <a className="icon-btn" href={`/api/games/${game.id}/pgn`} title="Download PGN">
             ⤓
           </a>

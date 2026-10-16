@@ -58,7 +58,7 @@ export function SeatPicker({ meta, value, onChange, compact }: { meta: Meta; val
                 <Avatar personality={p.id} />
                 <div>
                   <b>
-                    {p.name} <RiskBadge risk={p.risk} />
+                    {p.name} {!p.plain && <RiskBadge risk={p.risk} />}
                   </b>
                   <span>{p.tagline}</span>
                 </div>

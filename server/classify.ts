@@ -1,12 +1,13 @@
-import { Chess, type Move } from "chess.js";
+import type { Move } from "chess.js";
 import type { Classification, Color, Game, MoveAnalysis, MoveRecord, PositionAnalysis, Score, SideReview } from "../shared/types";
 import { moveAccuracy, scoreToCp, scoreToPawns, winPercentFor, winPercentWhite } from "../shared/evalmath";
 import { isTheory } from "./openings";
 import { isBrilliantMove, isGreatMove, type MoveContext } from "./wintr";
+import { looseChess, newRules, type Variant } from "../shared/rules";
 
 /** Score for a position that is already over (no engine call needed). */
 export function terminalScore(fen: string): Score | null {
-  const c = new Chess(fen);
+  const c = looseChess(fen);
   if (c.isCheckmate()) return { mate: 0, cp: c.turn() === "w" ? -10000 : 10000 };
   if (c.isStalemate() || c.isInsufficientMaterial()) return { cp: 0 };
   return null;
@@ -26,6 +27,7 @@ export function classifyMove(
   afterScore: Score,
   prev: MoveRecord | undefined,
   allBookSoFar: boolean,
+  variant: Variant = "standard",
 ): MoveAnalysis {
   const mover = m.color;
   const playedBest = before.bestUci === m.uci;
@@ -35,18 +37,21 @@ export function classifyMove(
   const cpLoss = playedBest ? 0 : Math.max(0, moverCp(before.score, mover) - moverCp(afterScore, mover));
   const accuracy = moveAccuracy(winBefore, winBefore - drop);
 
-  const legalCount = new Chess(m.fenBefore).moves().length;
+  const legalCount = newRules(m.fenBefore, variant).moves().length;
   let classification: Classification;
 
-  const board = new Chess(m.fenBefore);
+  // The brilliancy checks inspect the position with chess.js. A Chess960 castle can't be replayed there,
+  // and is never a sacrifice anyway, so it simply skips them.
+  const board = looseChess(m.fenBefore);
   let played: Move | null = null;
   try {
     played = board.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] });
+    if (board.fen().split(" ")[0] !== m.fenAfter.split(" ")[0]) played = null;
   } catch {}
 
   if (legalCount === 1) {
     classification = "forced";
-  } else if (allBookSoFar && isTheory(m.fenAfter)) {
+  } else if (variant === "standard" && allBookSoFar && isTheory(m.fenAfter)) {
     classification = "book";
   } else if (played && board.isCheckmate()) {
     classification = "best"; // delivering mate is simply best
@@ -54,7 +59,7 @@ export function classifyMove(
     classification = playedBest ? "best" : "excellent";
     // Great and Brilliant follow WintrChess's rules (see wintr.ts).
     if (played) {
-      const ctx: MoveContext = { before: new Chess(m.fenBefore), after: board, played, bestBefore: before.score, secondBefore: before.second, evalAfter: afterScore };
+      const ctx: MoveContext = { before: looseChess(m.fenBefore), after: board, played, bestBefore: before.score, secondBefore: before.second, evalAfter: afterScore };
       if (playedBest && isGreatMove(ctx)) classification = "great";
       if ((playedBest || drop < 1) && isBrilliantMove(ctx)) classification = "brilliant";
     }

@@ -23,9 +23,11 @@ export function PlayerAvatar({ player, size = 40 }: { player: PlayerRef; size?: 
   return (
     <div className="player-avatar" style={{ width: size, height: size, background: maker.color }} title={fullName(player)}>
       <span style={{ fontSize: size * (mark.length > 5 ? 0.22 : 0.27) }}>{mark}</span>
-      <i className="persona-badge" style={{ background: persona.color, width: size * 0.48, height: size * 0.48, fontSize: size * 0.28 }}>
-        {persona.emoji}
-      </i>
+      {!persona.plain && (
+        <i className="persona-badge" style={{ background: persona.color, width: size * 0.48, height: size * 0.48, fontSize: size * 0.28 }}>
+          {persona.emoji}
+        </i>
+      )}
     </div>
   );
 }
@@ -45,9 +47,11 @@ export function PlayerName({ player, effort = true, className = "" }: { player: 
     <span className={`player-fullname ${className}`}>
       <b style={{ color: maker.color }}>{player.modelLabel}</b>
       {effort && <small className="effort">{player.effort}</small>}
-      <span className="as">
-        as <span style={{ color: persona.color }}>{persona.name}</span>
-      </span>
+      {!persona.plain && (
+        <span className="as">
+          as <span style={{ color: persona.color }}>{persona.name}</span>
+        </span>
+      )}
     </span>
   );
 }

@@ -3,7 +3,7 @@ import { isHuman } from "../../../shared/naming";
 import { useFetch, type PlayerPage as Data } from "../api";
 import { Avatar } from "../components/PlayerBar";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
-import { GamesTable } from "./Lobby";
+import { GamesTable, RatingText } from "./Lobby";
 import { LessonsPanel } from "../components/LessonsPanel";
 
 export function PlayerPage({ id }: { id: string }) {
@@ -24,7 +24,9 @@ export function PlayerPage({ id }: { id: string }) {
           </p>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 34, fontWeight: 800 }}>{player.rating}</div>
+          <div style={{ fontSize: 34, fontWeight: 800 }}>
+            <RatingText p={player} />
+          </div>
           <div style={{ color: "var(--muted)", fontSize: 13 }}>
             {player.wins}W / {player.draws}D / {player.losses}L
           </div>
@@ -33,11 +35,13 @@ export function PlayerPage({ id }: { id: string }) {
       {/* A human has no style prompt, lessons or journal: just their record. */}
       {!isHuman(player.ref) && (
         <>
-          <div className="card" style={{ padding: "12px 14px", color: "var(--text-2)", lineHeight: 1.5, fontSize: 14 }}>
-            <b style={{ color: "white" }}>Style.</b> {p.style}
-            <br />
-            <b style={{ color: "white" }}>Voice.</b> {p.voice}
-          </div>
+          {!p.plain && (
+            <div className="card" style={{ padding: "12px 14px", color: "var(--text-2)", lineHeight: 1.5, fontSize: 14 }}>
+              <b style={{ color: "white" }}>Style.</b> {p.style}
+              <br />
+              <b style={{ color: "white" }}>Voice.</b> {p.voice}
+            </div>
+          )}
           <LessonsPanel model={player.ref.model} modelLabel={player.ref.modelLabel} />
           <h2>📓 Journal</h2>
           <div className="card">

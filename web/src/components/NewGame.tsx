@@ -58,6 +58,41 @@ export function LearningToggle({ value, onChange }: { value: boolean; onChange: 
   );
 }
 
+/** Chess960 on or off; empty position = a random one (0–959) for each game. */
+export interface Chess960Choice {
+  on: boolean;
+  position: string;
+}
+
+export function Chess960Toggle({ value, onChange, tournament }: { value: Chess960Choice; onChange: (v: Chess960Choice) => void; tournament?: boolean }) {
+  return (
+    <div className="seat" style={{ marginTop: 14 }}>
+      <h3>
+        🔀 Chess960
+        <span className={`toggle ${value.on ? "on" : ""}`} style={{ marginLeft: "auto" }} onClick={() => onChange({ ...value, on: !value.on })}>
+          {value.on ? "On" : "Off"} <span className="sw" />
+        </span>
+      </h3>
+      <div style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.45 }}>
+        {value.on
+          ? tournament
+            ? "Every pairing gets its own random start position (a double round-robin replays it with colours swapped). No opening theory — pure calculation from move one."
+            : "The back rank is shuffled, so there's no opening theory to lean on — pure calculation from move one."
+          : "Standard chess from the normal starting position."}
+      </div>
+      {value.on && !tournament && (
+        <label className="field" style={{ marginTop: 8 }}>
+          Start position (0–959, blank = random)
+          <input type="number" min={0} max={959} value={value.position} placeholder="random" onChange={(e) => onChange({ ...value, position: e.target.value })} />
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** What the server expects: false, true (random) or a position number. */
+export const chess960Body = (v: Chess960Choice) => (!v.on ? false : v.position.trim() === "" ? true : Number(v.position));
+
 /** The one-click way: ask T3 (via its webhook) to summon the agents. */
 export function SummonButton({ gameId, tournamentId, compact }: { gameId?: string; tournamentId?: string; compact?: boolean }) {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "already" | "error">("idle");
@@ -146,6 +181,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high", personality: "python" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [learning, setLearning] = useState(true);
+  const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
   if (!meta) return null;
@@ -167,6 +203,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
                 <SeatPicker meta={meta} value={black} onChange={setBlack} />
               </div>
             </div>
+            <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
@@ -178,7 +215,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, learning });
+                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, learning, chess960: chess960Body(c960) });
                     setCreated(r.game.id);
                   } catch (e) {
                     setErr(String(e));
@@ -203,6 +240,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [learning, setLearning] = useState(true);
+  const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -219,6 +257,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
         black: me === "b" ? human : agent,
         broadcaster: bc,
         learning,
+        chess960: chess960Body(c960),
       });
       saveSeat(r.game.id, r.humanKey);
       if (!meta.summonAvailable) return setCreated(r.game.id);
@@ -280,6 +319,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
                 <SeatPicker meta={meta} value={agent} compact onChange={setAgent} />
               </div>
             </div>
+            <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
@@ -309,6 +349,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   ]);
   const [double, setDouble] = useState(false);
   const [learning, setLearning] = useState(true);
+  const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -348,6 +389,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                 Double round-robin <span className="sw" />
               </span>
             </div>
+            <Chess960Toggle value={c960} onChange={setC960} tournament />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
@@ -362,7 +404,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning });
+                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, chess960: c960.on });
                     setCreated(t.id);
                   } catch (e) {
                     setErr(String(e));

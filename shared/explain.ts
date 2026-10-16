@@ -1,12 +1,13 @@
-import { Chess, type Square } from "chess.js";
+import type { Chess, Square } from "chess.js";
+import { looseChess, newRules, type Variant } from "./rules";
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 const LETTER: Record<string, string> = { N: "n", B: "b", R: "r", Q: "q", K: "k" };
 
 /** Why a calculation line stops: the position after its legal prefix, explained at the broken token. */
-export function lineBreakReason(fenBefore: string, line: { san: string[]; brokenAt?: string }): string | null {
+export function lineBreakReason(fenBefore: string, line: { san: string[]; brokenAt?: string }, variant: Variant = "standard"): string | null {
   if (!line.brokenAt) return null;
-  const c = new Chess(fenBefore);
+  const c = newRules(fenBefore, variant);
   for (const s of line.san) c.move(s);
   return explainIllegal(c.fen(), line.brokenAt);
 }
@@ -19,7 +20,7 @@ export function explainIllegal(fen: string, raw: string): string {
   const token = raw.trim().replace(/[+#!?]+$/, "");
   let c: Chess;
   try {
-    c = new Chess(fen);
+    c = looseChess(fen);
   } catch {
     return "illegal";
   }

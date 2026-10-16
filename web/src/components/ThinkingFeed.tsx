@@ -4,6 +4,7 @@ import { sideName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
 import { formatScore } from "../../../shared/evalmath";
 import { explainIllegal, lineBreakReason } from "../../../shared/explain";
+import { variantOf } from "../../../shared/rules";
 import { Avatar } from "./PlayerBar";
 import { CLASS_META, ClassIcon } from "./ClassIcon";
 
@@ -77,7 +78,7 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
                   {l.brokenAt && (
                     <span className="lb">
                       {" "}
-                      ✕ {l.brokenAt} <span className="lbr">({lineBreakReason(m.fenBefore, l)})</span>
+                      ✕ {l.brokenAt} <span className="lbr">({lineBreakReason(m.fenBefore, l, variantOf(game))})</span>
                     </span>
                   )}
                   {l.note && <span className="ln">{l.note}</span>}

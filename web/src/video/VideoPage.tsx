@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Chess } from "chess.js";
+import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, PlayerRef, Score } from "../../../shared/types";
 import { personalityById, RISK_LABEL } from "../../../shared/personalities";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
@@ -23,7 +23,6 @@ const PANEL_W = 340;
  * frame by frame and capture each one; no CSS transitions or timers are involved.
  */
 
-const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const PIECE: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 /** Moves the engine would have played differently: show its choice as an arrow. */
 const SHOW_BEST: Classification[] = ["good", "inaccuracy", "mistake", "miss", "blunder"];
@@ -62,15 +61,15 @@ const sqXY = (sq: string, o: Color) => {
 const moveLabel = (ply: number, san: string) => `${Math.ceil(ply / 2)}${ply % 2 ? "." : "…"} ${san}`;
 
 /** An engine line in SAN with move numbers, from a FEN and UCI moves. */
-function pvText(fen: string, pv: string[] | undefined, n = 6): string {
+function pvText(fen: string, pv: string[] | undefined, variant: Variant, n = 6): string {
   if (!pv?.length) return "";
-  const c = new Chess(fen);
+  const c = newRules(fen, variant);
   let no = Number(fen.split(" ")[5]) || 1;
   const out: string[] = [];
   for (const u of pv.slice(0, n)) {
     const turn = c.turn();
     try {
-      const mv = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+      const mv = c.move(u);
       if (turn === "w") out.push(`${no}.`);
       else if (!out.length) out.push(`${no}…`);
       out.push(mv.san);
@@ -108,19 +107,21 @@ function scoreAt(g: Game, fen: string, fallback?: Score): Score | undefined {
 
 function prepare(g: Game): Prep {
   const sans = g.moves.map((m) => m.san);
+  const variant = variantOf(g);
+  const start = g.startFen ?? START_FEN;
   const check = g.moves.map((m) => {
-    const c = new Chess(m.fenAfter);
+    const c = looseChess(m.fenAfter);
     if (!c.inCheck()) return undefined;
     const turn = c.turn();
     for (const row of c.board()) for (const sq of row) if (sq?.type === "k" && sq.color === turn) return sq.square;
     return undefined;
   });
-  const material = sans.map((_, i) => materialInfo(START_FEN, sans.slice(0, i + 1)));
-  material.unshift(materialInfo(START_FEN, []));
-  const line = g.moves.map((m) => pvText(m.fenAfter, g.analysis[m.fenAfter]?.pv));
-  const bestLine = g.moves.map((m) => pvText(m.fenBefore, g.analysis[m.fenBefore]?.pv));
+  const material = sans.map((_, i) => materialInfo(start, sans.slice(0, i + 1), variant));
+  material.unshift(materialInfo(start, [], variant));
+  const line = g.moves.map((m) => pvText(m.fenAfter, g.analysis[m.fenAfter]?.pv, variant));
+  const bestLine = g.moves.map((m) => pvText(m.fenBefore, g.analysis[m.fenBefore]?.pv, variant));
   let last = 50;
-  const graph = [START_FEN, ...g.moves.map((m) => m.fenAfter)].map((fen, i) => {
+  const graph = [start, ...g.moves.map((m) => m.fenAfter)].map((fen, i) => {
     const s = scoreAt(g, fen, g.moves[i - 1]?.analysis?.evalAfter);
     if (s) last = winPercentWhite(s);
     return last;
@@ -277,9 +278,13 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     if (p < 1) {
       const pre = fenBoard(m.fenBefore);
       const pc = pre.get(m.from);
-      const castle = pc?.type === "k" && Math.abs(m.from.charCodeAt(0) - m.to.charCodeAt(0)) === 2;
+      // Castling: the king lands on g/c and its rook on f/d. In Chess960 the rook starts wherever the
+      // UCI says (king-takes-rook); in standard chess it's the corner.
+      const castle = pc?.type === "k" && m.san.startsWith("O-O");
       const rank = m.from[1];
-      const rook: [string, string] | undefined = castle ? (m.to[0] === "g" ? [`h${rank}`, `f${rank}`] : [`a${rank}`, `d${rank}`]) : undefined;
+      const kingside = m.to[0] === "g";
+      const rookFrom = variantOf(g) === "chess960" ? m.uci.slice(2, 4) : `${kingside ? "h" : "a"}${rank}`;
+      const rook: [string, string] | undefined = castle ? [rookFrom, `${kingside ? "f" : "d"}${rank}`] : undefined;
       const enPassant = pc?.type === "p" && m.from[0] !== m.to[0] && !pre.get(m.to);
       const capSq = enPassant ? m.to[0] + m.from[1] : m.to;
       const capPiece = pre.get(capSq);
@@ -731,12 +736,12 @@ function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: numb
       <div className="v-hero-name" style={{ color: makerOf(ref.provider).color }}>
         {ref.modelLabel}
       </div>
-      <div className="v-hero-as">{isHuman(ref) ? "Human player" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</div>
+      <div className="v-hero-as">{isHuman(ref) ? "Human player" : p.plain ? "No personality" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</div>
       <div className="v-hero-tags">
         <span className={`v-side ${color}`}>{color === "w" ? "White" : "Black"}</span>
         {!isHuman(ref) && <span className="v-chip">{ref.effort} effort</span>}
         {rating !== undefined && <span className="v-chip">Rated {rating}</span>}
-        {!isHuman(ref) && <span className={`v-risk ${p.risk}`}>{RISK_LABEL[p.risk].label}</span>}
+        {!isHuman(ref) && !p.plain && <span className={`v-risk ${p.risk}`}>{RISK_LABEL[p.risk].label}</span>}
       </div>
       <div className="v-hero-tagline">“{p.tagline}”</div>
     </div>
@@ -772,7 +777,7 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
             {ref.modelLabel}
           </div>
           <div className="v-interview-sub">
-            <span className="v-hero-as">{isHuman(ref) ? "Human player" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</span>
+            <span className="v-hero-as">{isHuman(ref) ? "Human player" : p.plain ? "No personality" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</span>
             <span className={`v-side ${s.color}`}>{s.color === "w" ? "White" : "Black"}</span>
           </div>
         </div>
@@ -804,7 +809,7 @@ function ResultScene({ g, v, wide, ratings }: { g: Game; v: View; wide: boolean;
           {ref.modelLabel}
         </div>
         <div className="v-hero-as small">
-          {isHuman(ref) ? "Human player" : <>as <span style={{ color: personalityById(ref.personality).color }}>{personalityById(ref.personality).name}</span></>}
+          {isHuman(ref) ? "Human player" : personalityById(ref.personality).plain ? "No personality" : <>as <span style={{ color: personalityById(ref.personality).color }}>{personalityById(ref.personality).name}</span></>}
         </div>
         <div className="v-time-total">
           ⏱ {clock(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0))} thinking · {took(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0) / Math.max(1, g.moves.filter((m) => m.color === c).length))} a move

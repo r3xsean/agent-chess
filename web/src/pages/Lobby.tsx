@@ -1,7 +1,6 @@
-import type { PlayerRef } from "../../../shared/types";
-import { personalityById } from "../../../shared/personalities";
+import type { PlayerRef, PlayerStats } from "../../../shared/types";
+import { PROVISIONAL_RD } from "../../../shared/rating";
 import { useStream, type GameSummary, type Lobby as LobbyData } from "../api";
-import { Avatar } from "../components/PlayerBar";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
@@ -18,7 +17,19 @@ export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
   );
 }
 
-const phaseLabel = (g: GameSummary) =>
+/** A Glicko-2 rating with its uncertainty; "?" while it's still provisional (RD above 110). */
+export function RatingText({ p }: { p: Pick<PlayerStats, "rating" | "rd"> }) {
+  const provisional = (p.rd ?? 350) > PROVISIONAL_RD;
+  return (
+    <span title={`Glicko-2 rating ${p.rating} ± ${p.rd} (rating deviation)${provisional ? " — provisional until it has more games" : ""}`}>
+      {p.rating}
+      {provisional && "?"}
+      <small style={{ color: "var(--muted)", fontWeight: 500, marginLeft: 4 }}>±{p.rd}</small>
+    </span>
+  );
+}
+
+const phaseLabel =(g: GameSummary) =>
   g.phase === "pregame" ? "Pre-game" : g.phase === "playing" ? `Live · move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "postgame" ? "Post-game" : g.result ?? "Aborted";
 
 export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: Record<string, number> }) {
@@ -124,7 +135,9 @@ export function Lobby({ onNewGame, onPlay, onNewTournament }: { onNewGame: () =>
                 <td>
                   <PlayerCell p={p.ref} />
                 </td>
-                <td style={{ fontWeight: 800 }}>{p.rating}</td>
+                <td style={{ fontWeight: 800 }}>
+                  <RatingText p={p} />
+                </td>
                 <td>{p.games}</td>
                 <td>
                   <span style={{ color: "var(--green)" }}>{p.wins}</span> / {p.draws} / <span style={{ color: "var(--c-blunder)" }}>{p.losses}</span>

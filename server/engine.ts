@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { Chess } from "chess.js";
 import type { PositionAnalysis, Score } from "../shared/types";
+import { newRules, type Variant } from "../shared/rules";
 import { ROOT } from "./paths";
 
 // Agents think for minutes per move, so the engine can afford a deep search: depth 22,
@@ -22,6 +22,7 @@ function findStockfish(): string {
 
 interface Job {
   fen: string;
+  variant: Variant;
   resolve: (a: PositionAnalysis) => void;
   reject: (e: Error) => void;
   attempts?: number;
@@ -55,6 +56,8 @@ export class Engine {
   private lineHandler: ((line: string) => void) | null = null;
 
   private restarts = 0;
+  /** Whether Stockfish is in Chess960 mode (castling as king-takes-rook in and out). */
+  private chess960 = false;
 
   constructor(private opts: EngineOptions = GAME_ENGINE) {}
 
@@ -86,6 +89,7 @@ export class Engine {
     this.send(`setoption name Threads value ${threads}`);
     this.send(`setoption name Hash value ${hashMb}`);
     this.send("setoption name MultiPV value 2");
+    this.chess960 = false;
     this.send("isready");
     console.log(`[${label}] ${exe} (threads=${threads}, depth=${depth}, max ${maxMs} ms)`);
   }
@@ -134,9 +138,9 @@ export class Engine {
     this.proc?.stdin.write(cmd + "\n");
   }
 
-  analyze(fen: string): Promise<PositionAnalysis> {
+  analyze(fen: string, variant: Variant = "standard"): Promise<PositionAnalysis> {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fen, resolve, reject });
+      this.queue.push({ fen, variant, resolve, reject });
       this.pump();
     });
   }
@@ -186,11 +190,16 @@ export class Engine {
           pv: best?.pv.slice(0, 12) ?? [],
           second: lines[2]?.score,
         };
-        result.bestSan = uciToSan(job.fen, result.bestUci);
+        result.bestSan = uciToSan(job.fen, result.bestUci, job.variant);
         job.resolve(result);
         this.pump();
       }
     };
+    const want960 = job.variant === "chess960";
+    if (want960 !== this.chess960) {
+      this.send(`setoption name UCI_Chess960 value ${want960}`);
+      this.chess960 = want960;
+    }
     this.send(`position fen ${job.fen}`);
     this.send(`go depth ${this.opts.depth}`);
   }
@@ -201,11 +210,10 @@ export class Engine {
   }
 }
 
-export function uciToSan(fen: string, uci: string | undefined): string | undefined {
+export function uciToSan(fen: string, uci: string | undefined, variant: Variant = "standard"): string | undefined {
   if (!uci || uci === "(none)") return undefined;
   try {
-    const c = new Chess(fen);
-    return c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san;
+    return newRules(fen, variant).move(uci).san;
   } catch {
     return undefined;
   }

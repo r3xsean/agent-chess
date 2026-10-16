@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { Chess } from "chess.js";
+import { looseChess } from "../shared/rules";
 import { Resvg } from "@resvg/resvg-js";
 import type { Color } from "../shared/types";
 import { ROOT } from "./paths";
@@ -27,7 +27,7 @@ function loadPieces() {
 /** Render the board as a human sees it on screen: orientation, last move, check. */
 export function renderBoardPng(fen: string, orientation: Color, lastMove?: { from: string; to: string }): Buffer {
   const p = loadPieces();
-  const c = new Chess(fen);
+  const c = looseChess(fen);
   const S = 80;
   const M = 24;
   const size = S * 8 + M * 2;

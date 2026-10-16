@@ -17,7 +17,21 @@ export const RISK_LABEL: Record<Risk, { label: string; blurb: string }> = {
   wild: { label: "Wild", blurb: "Trades a little soundness for practical chances" },
 };
 
+/** The control group: the model as itself, with nothing about style, voice or risk in its prompt. */
+export const NO_PERSONALITY: Personality = {
+  id: "none",
+  name: "No personality",
+  emoji: "∅",
+  color: "#8b949e",
+  tagline: "The model as itself — no style, voice or risk instructions",
+  risk: "calm",
+  plain: true,
+  style: "None. The prompt gives no playing style: the model plays whatever chess it thinks is strongest.",
+  voice: "Its own natural voice.",
+};
+
 export const PERSONALITIES: Personality[] = [
+  NO_PERSONALITY,
   {
     id: "magician",
     name: "The Magician",
@@ -154,6 +168,7 @@ export const HUMAN_PERSONA: Personality = {
 };
 
 export const personalityById = (id: string) =>
-  id === HUMAN_PERSONA.id ? HUMAN_PERSONA : PERSONALITIES.find((p) => p.id === id) ?? PERSONALITIES[0];
+  id === HUMAN_PERSONA.id ? HUMAN_PERSONA : PERSONALITIES.find((p) => p.id === id) ?? NO_PERSONALITY;
 
-export const riskRule = (p: Personality) => RISK_RULES[p.risk];
+export const riskRule = (p: Personality) =>
+  p.plain ? "None given. Without a risk instruction the model decides for itself how much to gamble." : RISK_RULES[p.risk];

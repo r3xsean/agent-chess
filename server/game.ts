@@ -1,18 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { EventEmitter } from "node:events";
-import { Chess } from "chess.js";
-import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result } from "../shared/types";
+import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result } from "../shared/types";
 import { Engine } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
-import { synthesize } from "./tts";
+import { glickoUpdate } from "./glicko";
 import { triggerOrchestrator } from "./summon";
 import { isHuman } from "../shared/naming";
+import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
 import {
   appendJournal,
-  audioDir,
+  freshStats,
   readLessons,
   writeLessons,
   ensurePlayer,
@@ -27,7 +25,6 @@ import {
   tournaments,
 } from "./store";
 
-export const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const BROADCAST_GATE_MS = 90_000;
 const MAX_COMMENTARY = 6000;
 const MAX_INTERVIEW = 800;
@@ -38,15 +35,21 @@ export const bus = new EventEmitter();
 bus.setMaxListeners(1000);
 export const engine = new Engine();
 
-const boards = new Map<string, Chess>();
+const boards = new Map<string, Rules>();
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 
-export function board(g: Game): Chess {
+/** Where a game began: the normal setup, or its Chess960 position. */
+export const startFenOf = (g: Pick<Game, "startFen">) => g.startFen ?? START_FEN;
+
+/** The live position of a game, with its move history (for repetition). */
+export function board(g: Game): Rules {
   let c = boards.get(g.id);
   if (!c) {
-    c = new Chess(START_FEN);
-    for (const m of g.moves) c.move(m.san);
+    const variant = variantOf(g);
+    c = newRules(startFenOf(g), variant);
+    // Chess960 replays by UCI (castling is king-takes-rook there); standard games by SAN, as always.
+    for (const m of g.moves) c.move(variant === "chess960" ? m.uci : m.san);
     boards.set(g.id, c);
   }
   return c;
@@ -66,12 +69,15 @@ export function createGame(opts: {
   broadcaster: Game["broadcaster"];
   tournamentId?: string;
   learning?: boolean;
+  /** A Chess960 game from this starting position (0–959). */
+  chess960?: number;
 }): Game {
   const g: Game = {
     id: newId("g"),
     createdAt: Date.now(),
     white: opts.white,
     black: opts.black,
+    ...(opts.chess960 !== undefined ? { variant: "chess960" as const, chess960: opts.chess960, startFen: chess960Fen(opts.chess960) } : {}),
     broadcaster: opts.broadcaster,
     tournamentId: opts.tournamentId,
     phase: "pregame",
@@ -92,6 +98,7 @@ export function createGame(opts: {
     review: null,
     playStartedAt: null,
     interviewsCompleteAt: null,
+    ...(opts.chess960 !== undefined ? { opening: { eco: "960", name: `Chess960 #${opts.chess960}` } } : {}),
     options: { pieceList: true, learning: opts.learning ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
@@ -122,7 +129,7 @@ export const seatKeysFor = (gameId: string) =>
 const inFlight = new Set<string>();
 
 export function analyzeGame(g: Game) {
-  const fens = [g.moves[0]?.fenBefore ?? START_FEN, ...g.moves.map((m) => m.fenAfter)];
+  const fens = [g.moves[0]?.fenBefore ?? startFenOf(g), ...g.moves.map((m) => m.fenAfter)];
   // A game drawn by repetition or the 50-move rule ends in a dead draw, whatever the bare FEN says.
   const historyDraw =
     g.termination === "threefold repetition" || g.termination === "50-move rule" ? g.moves[g.moves.length - 1]?.fenAfter : undefined;
@@ -141,7 +148,7 @@ export function analyzeGame(g: Game) {
     }
     inFlight.add(`${g.id}|${fen}`);
     engine
-      .analyze(fen)
+      .analyze(fen, variantOf(g))
       .then((a) => {
         if (g.analysis[fen]?.depth === 0) return; // pinned as terminal/drawn while we were searching
         g.analysis[fen] = a;
@@ -166,7 +173,7 @@ function classifyPending(g: Game) {
       m.analysis =
         before.failed || after.failed
           ? { classification: "good", winBefore: 50, winAfter: 50, accuracy: 0, cpLoss: 0, evalAfter: after.score, unavailable: true }
-          : classifyMove(m, before, after.score, g.moves[i - 1], allBook);
+          : classifyMove(m, before, after.score, g.moves[i - 1], allBook, variantOf(g));
       changed = true;
     }
     if (m.analysis.classification !== "book") allBook = false;
@@ -255,17 +262,24 @@ function endGame(g: Game, result: Result, termination: string) {
   touch(g);
 }
 
-/** Elo (K=24) for one finished game. */
+/** Glicko-2 for one finished game: both players update from their ratings before it. */
 function applyRating(g: Game) {
   if (!g.result) return;
   const pw = ensurePlayer(g.white);
   const pb = ensurePlayer(g.black);
   const sw = g.result === "1-0" ? 1 : g.result === "0-1" ? 0 : 0.5;
-  const ew = 1 / (1 + 10 ** ((pb.rating - pw.rating) / 400));
-  const dw = Math.round(24 * (sw - ew));
-  pw.rating += dw;
-  pb.rating -= dw;
-  g.ratingChange = { w: dw, b: -dw };
+  const nw = glickoUpdate(pw.glicko, pb.glicko, sw);
+  const nb = glickoUpdate(pb.glicko, pw.glicko, 1 - sw);
+  const show = (x: number) => Math.round(x);
+  g.ratingChange = { w: show(nw.rating) - pw.rating, b: show(nb.rating) - pb.rating };
+  for (const [p, n] of [
+    [pw, nw],
+    [pb, nb],
+  ] as const) {
+    p.glicko = n;
+    p.rating = show(n.rating);
+    p.rd = show(n.rd);
+  }
   for (const [p, s] of [
     [pw, sw],
     [pb, 1 - sw],
@@ -282,7 +296,7 @@ export function rebuildRatings() {
   // Players who no longer appear in any game (e.g. deleted test games) leave the leaderboard.
   const inGames = new Set([...games.values()].flatMap((g) => [g.white.id, g.black.id]));
   for (const id of Object.keys(players)) if (!inGames.has(id)) delete players[id];
-  for (const p of Object.values(players)) Object.assign(p, { rating: 1500, games: 0, wins: 0, draws: 0, losses: 0 });
+  for (const p of Object.values(players)) Object.assign(p, freshStats());
   const done = [...games.values()].filter((g) => g.result).sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
   for (const g of done) applyRating(g);
   savePlayersNow();
@@ -310,24 +324,21 @@ export function cleanToken(t: string): string {
     .trim();
 }
 
-function tryMove(c: Chess, raw: string) {
+function tryMove(c: Rules, raw: string) {
   const t = cleanToken(raw);
   if (!t) return null;
   try {
-    if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(t)) {
-      return c.move({ from: t.slice(0, 2).toLowerCase(), to: t.slice(2, 4).toLowerCase(), promotion: t[4]?.toLowerCase() });
-    }
-    return c.move(t.replace(/0-0-0/g, "O-O-O").replace(/0-0/g, "O-O"), { strict: false });
+    return c.move(t.replace(/0-0-0/g, "O-O-O").replace(/0-0/g, "O-O"));
   } catch {
     return null;
   }
 }
 
-function isAmbiguous(c: Chess, raw: string): boolean {
+function isAmbiguous(c: Rules, raw: string): boolean {
   const m = /^([KQRBN])x?([a-h][1-8])/.exec(cleanToken(raw).replace(/[+#]$/, ""));
   if (!m) return false;
   const type = m[1].toLowerCase();
-  return c.moves({ verbose: true }).filter((mv) => mv.piece === type && mv.to === m[2]).length > 1;
+  return c.moves().filter((mv) => mv.piece === type && mv.to === m[2]).length > 1;
 }
 
 export function parseEval(v: string | number): number | null {
@@ -341,8 +352,8 @@ export function parseEval(v: string | number): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseLine(fen: string, raw: string, note: string): CalcLine {
-  const c = new Chess(fen);
+function parseLine(g: Game, fen: string, raw: string, note: string): CalcLine {
+  const c = newRules(fen, variantOf(g));
   const san: string[] = [];
   let brokenAt: string | undefined;
   const tokens = raw
@@ -388,14 +399,14 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
   const lines = (Array.isArray(input.lines) && !human ? input.lines : [])
     .slice(0, 6)
     .filter((l) => l && typeof l.moves === "string" && l.moves.trim())
-    .map((l) => parseLine(fenBefore, l.moves, String(l.note ?? "")));
+    .map((l) => parseLine(g, fenBefore, l.moves, String(l.note ?? "")));
 
   const now = Date.now();
   const rec: MoveRecord = {
     ply: g.moves.length + 1,
     color,
     san: mv.san,
-    uci: mv.from + mv.to + (mv.promotion ?? ""),
+    uci: mv.uci,
     from: mv.from,
     to: mv.to,
     fenBefore,
@@ -413,7 +424,8 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
   g.moves.push(rec);
   g.drawOffer = input.offerDraw ? color : null;
   g.turnStartedAt = now;
-  const op = lookupOpening(rec.fenAfter);
+  // Opening names are for the standard setup; a Chess960 game is named after its start position.
+  const op = variantOf(g) === "standard" ? lookupOpening(rec.fenAfter) : null;
   if (op) g.opening = op;
 
   if (c.isCheckmate()) endGame(g, color === "w" ? "1-0" : "0-1", "checkmate");
@@ -529,19 +541,10 @@ export function say(g: Game, text: string) {
   // A retried `say` (e.g. after a CLI timeout) must not put the same segment on air twice.
   const prev = g.broadcast[g.broadcast.length - 1];
   if (prev && prev.text === text && Date.now() - prev.ts < 5 * 60_000) return prev;
-  const line = { id: g.broadcast.length + 1, ts: Date.now(), text, ply: g.moves.length } as Game["broadcast"][number];
+  const line: BroadcastLine = { id: g.broadcast.length + 1, ts: Date.now(), text, ply: g.moves.length };
   g.broadcast.push(line);
   saveGameNow(g);
   touch(g);
-  // Voice it in the background; the text is already on air.
-  synthesize(text)
-    .then((wav) => {
-      if (!wav) return;
-      writeFileSync(path.join(audioDir(g.id), `${line.id}.wav`), wav);
-      line.audio = `/audio/${g.id}/${line.id}.wav`;
-      touch(g);
-    })
-    .catch((e) => console.error("[tts]", e));
   return line;
 }
 

@@ -15,6 +15,7 @@
  * of the License, or (at your option) any later version. See LICENSE.
  */
 import { Chess, type Color, type Move, type PieceSymbol, type Square } from "chess.js";
+import { looseChess } from "../shared/rules";
 import type { Score } from "../shared/types";
 
 const VALUE: Record<PieceSymbol, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: Infinity };
@@ -62,7 +63,7 @@ function setFenTurn(fen: string, color: Color) {
 
 function tryBoard(fen: string): Chess | null {
   try {
-    return new Chess(fen);
+    return looseChess(fen);
   } catch {
     return null;
   }

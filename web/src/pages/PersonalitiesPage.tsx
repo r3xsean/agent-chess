@@ -26,7 +26,7 @@ export function PersonalitiesPage() {
       <p className="sub">
         Each personality is a playing <b>style</b>, a <b>voice</b> and a <b>risk appetite</b>. <RiskBadge risk="calm" /> styles only break ties between equal moves,{" "}
         <RiskBadge risk="bold" /> ones pick the sharper of close moves, and <RiskBadge risk="wild" /> ones knowingly trade a little soundness for practical chances —
-        dubious gambits and speculative sacrifices included. Wild players will score lower on engine accuracy; the leaderboard shows whether the risk pays off.
+        dubious gambits and speculative sacrifices included. Wild players will score lower on engine accuracy; the leaderboard shows whether the risk pays off. <b>No personality</b> is the control group: the model plays as itself, with none of this in its prompt.
       </p>
 
       <div className="persona-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 8 }}>
@@ -35,7 +35,7 @@ export function PersonalitiesPage() {
             <Avatar personality={d.personality.id} />
             <div>
               <b>
-                {d.personality.name} <RiskBadge risk={d.personality.risk} />
+                {d.personality.name} {!d.personality.plain && <RiskBadge risk={d.personality.risk} />}
               </b>
               <span>{d.personality.tagline}</span>
               <span style={{ display: "block", marginTop: 2 }}>
@@ -51,7 +51,7 @@ export function PersonalitiesPage() {
           <Avatar personality={p.id} size={64} />
           <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: 24, margin: 0 }}>
-              {p.name} <RiskBadge risk={p.risk} />
+              {p.name} {!p.plain && <RiskBadge risk={p.risk} />}
             </h1>
             <div style={{ color: "var(--text-2)" }}>{p.tagline}</div>
           </div>
@@ -79,7 +79,7 @@ export function PersonalitiesPage() {
         </div>
         <div className="seat" style={{ marginTop: 14 }}>
           <div className="section-title" style={{ marginBottom: 6 }}>
-            🎲 Risk appetite — {RISK_LABEL[p.risk].label}
+            🎲 Risk appetite — {p.plain ? "None" : RISK_LABEL[p.risk].label}
           </div>
           <div style={{ lineHeight: 1.5, fontSize: 14 }}>{cur.riskRule}</div>
         </div>

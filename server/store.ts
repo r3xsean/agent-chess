@@ -3,8 +3,9 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, Tournament } from "../shared/types";
 import { DATA } from "./paths";
+import { GLICKO_START } from "./glicko";
 
-const dirs = ["games", "tournaments", "journals", "audio", "agents"].map((d) => path.join(DATA, d));
+const dirs = ["games", "tournaments", "journals", "agents"].map((d) => path.join(DATA, d));
 for (const d of dirs) mkdirSync(d, { recursive: true });
 
 function writeJson(file: string, value: unknown) {
@@ -92,9 +93,19 @@ export function flushAll() {
   writeJson(path.join(DATA, "seats.json"), seatKeys);
 }
 
+export const freshStats = () => ({
+  rating: GLICKO_START.rating,
+  rd: GLICKO_START.rd,
+  glicko: { ...GLICKO_START },
+  games: 0,
+  wins: 0,
+  draws: 0,
+  losses: 0,
+});
+
 export function ensurePlayer(ref: PlayerRef): PlayerStats {
   if (!players[ref.id]) {
-    players[ref.id] = { id: ref.id, ref, rating: 1500, games: 0, wins: 0, draws: 0, losses: 0 };
+    players[ref.id] = { id: ref.id, ref, ...freshStats() };
     savePlayers();
   }
   return players[ref.id];
@@ -129,11 +140,5 @@ export function writeLessons(model: string, text: string, gameId: string | null)
 export const agentDir = (gameId: string, role: string) => {
   const d = path.join(DATA, "agents", safe(gameId), role);
   mkdirSync(d, { recursive: true });
-  return d;
-};
-
-export const audioDir = (gameId: string) => {
-  const d = path.join(DATA, "audio", safe(gameId));
-  if (!existsSync(d)) mkdirSync(d, { recursive: true });
   return d;
 };

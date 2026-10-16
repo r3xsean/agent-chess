@@ -97,7 +97,6 @@ export interface BroadcastLine {
   ts: number;
   text: string;
   ply: number;
-  audio?: string;
 }
 
 export interface SideReview {
@@ -114,6 +113,12 @@ export interface Game {
   createdAt: number;
   white: PlayerRef;
   black: PlayerRef;
+  /** "chess960" for Fischer Random; absent on standard games. */
+  variant?: "standard" | "chess960";
+  /** Chess960 starting position number (0–959; 518 is the normal setup). */
+  chess960?: number;
+  /** The starting position, when it isn't the normal one. */
+  startFen?: string;
   broadcaster: { enabled: boolean; model: string; provider: string; effort: string } | null;
   tournamentId?: string;
   phase: Phase;
@@ -179,7 +184,12 @@ export interface VideoPlan {
 export interface PlayerStats {
   id: string;
   ref: PlayerRef;
+  /** Glicko-2 rating, rounded for display. */
   rating: number;
+  /** Rating deviation (uncertainty), rounded. Above 110 the rating is provisional. */
+  rd: number;
+  /** Full-precision Glicko-2 state the next game updates from. */
+  glicko: { rating: number; rd: number; vol: number };
   games: number;
   wins: number;
   draws: number;
@@ -205,7 +215,9 @@ export interface Tournament {
   learning?: boolean;
   /** Started from the website: each finished game automatically summons the next pairing. */
   autoRun?: boolean;
-  pairings: { white: string; black: string; gameId?: string }[];
+  /** Every game is Chess960; each pairing carries its start position (shared by a double round-robin's return game). */
+  chess960?: boolean;
+  pairings: { white: string; black: string; gameId?: string; chess960?: number }[];
   status: "running" | "finished";
 }
 
@@ -229,6 +241,8 @@ export interface Personality {
   risk: Risk;
   style: string;
   voice: string;
+  /** "No personality": the model plays as itself — no style, voice or risk instructions in its prompt. */
+  plain?: boolean;
 }
 
 export interface ModelOption {

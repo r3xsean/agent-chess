@@ -29,7 +29,11 @@ export function gameToPgn(g: Game): string {
     Black: name(g.black),
     Result: g.result ?? "*",
   };
-  if (g.opening) {
+  if (g.variant === "chess960" && g.startFen) {
+    headers.Variant = "Chess960";
+    headers.SetUp = "1";
+    headers.FEN = g.startFen;
+  } else if (g.opening) {
     headers.ECO = g.opening.eco;
     headers.Opening = g.opening.name;
   }

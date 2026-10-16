@@ -1,13 +1,13 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { Chess } from "chess.js";
+import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { personalityById } from "../shared/personalities";
 import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
-import { board, playerOf, ratingOf } from "./game";
+import { board, playerOf, ratingOf, startFenOf } from "./game";
 import { renderBoardPng } from "./boardImage";
 import { agentDir, games, readJournal, readLessons } from "./store";
 import { MAX_LESSONS, MAX_LESSON_LINES } from "./game";
@@ -15,8 +15,9 @@ import { modelLabel } from "../shared/models";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
-const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
+/** How a player answers interviews: in character, or (with no personality) as itself. */
+const voiceOf = (g: Game, c: Color) => (personalityById(playerOf(g, c).personality).plain ? "in your own voice" : "in character");
 
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
@@ -25,7 +26,7 @@ export function describePlayer(g: Game, c: Color) {
 }
 
 export function asciiBoard(fen: string, orientation: Color): string {
-  const c = new Chess(fen);
+  const c = looseChess(fen);
   const rows = c.board();
   const files = "abcdefgh";
   const out: string[] = [];
@@ -47,7 +48,7 @@ export function asciiBoard(fen: string, orientation: Color): string {
 
 /** Every piece with its square — the same facts as the diagram, but easy to trace lines and diagonals from. */
 export function pieceList(fen: string): string {
-  const c = new Chess(fen);
+  const c = looseChess(fen);
   const ORDER = "kqrbnp";
   const LETTER: Record<string, string> = { k: "K", q: "Q", r: "R", b: "B", n: "N" };
   const side = (col: Color) => {
@@ -65,7 +66,7 @@ export function pieceList(fen: string): string {
 
 /** What chess.com shows next to each name: the pieces you've taken, and the material lead. */
 function capturedSummary(g: Game) {
-  const { captured, material } = materialInfo(g.moves[0]?.fenBefore ?? START_FEN, g.moves.map((m) => m.san));
+  const { captured, material } = materialInfo(startFenOf(g), g.moves.map((m) => m.san), variantOf(g));
   const lines: string[] = [];
   for (const col of ["w", "b"] as Color[]) {
     const taken: string[] = [];
@@ -101,6 +102,7 @@ export function turnBrief(g: Game, color: Color): string {
   const out = [
     `=== YOUR MOVE — move ${moveNo}, you are ${colorName(color)} ===`,
     `Opponent: ${describePlayer(g, other(color))}`,
+    ...(variantOf(g) === "chess960" ? [`Variant: Chess960 (start position #${g.chess960}). ${castlingNote(startFenOf(g))}`] : []),
     "",
     "Board (your side at the bottom; White = UPPERCASE, Black = lowercase, '.' = empty):",
     asciiBoard(fen, color),
@@ -156,15 +158,28 @@ export function pregameBrief(g: Game, color: Color): string {
       ? "Your opponent is a human, playing their own moves on the website."
       : `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
     headToHead(g, color),
+    ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
     "",
     journal.length ? "Your journal — recent games, plus your notes on this opponent (oldest first):" : "Your journal is empty — this is your first game.",
     ...journal.map((e) => `- [${new Date(e.ts).toISOString().slice(0, 10)} vs ${e.opponent}, result ${e.result}, you were ${colorName(e.color)}] ${e.text}`),
     "",
     ...lessonsBlock(g, color),
     "INTERVIEWER: \"Welcome to the board. How are you feeling about this matchup, and what's your plan for the game?\"",
-    "Answer in character, under 800 characters, with: interview <file.txt>  (or: interview --text \"...\")",
+    `Answer ${voiceOf(g, color)}, under 800 characters, with: interview <file.txt>  (or: interview --text "...")`,
   ];
   return out.join("\n");
+}
+
+/** What a player needs to know before a Chess960 game: the shuffled back rank, and how castling works. */
+export function chess960Intro(g: Game): string[] {
+  const fen = startFenOf(g);
+  return [
+    `This game is CHESS960 (Fischer Random), start position #${g.chess960}. The pieces on the back rank are shuffled — the same for both sides, mirrored — so no opening theory applies. All other rules are normal.`,
+    "Starting position (White at the bottom):",
+    asciiBoard(fen, "w"),
+    castlingNote(fen),
+    'To castle, send "O-O" or "O-O-O".',
+  ];
 }
 
 function lessonsBlock(g: Game, color: Color): string[] {
@@ -177,13 +192,13 @@ function lessonsBlock(g: Game, color: Color): string[] {
 }
 
 /** Engine line as SAN, starting from a position. */
-export function pvSan(fen: string, pv: string[] | undefined, plies = 6): string {
+export function pvSan(fen: string, pv: string[] | undefined, plies = 6, variant: Variant = "standard"): string {
   if (!pv?.length) return "";
-  const c = new Chess(fen);
+  const c = newRules(fen, variant);
   const out: string[] = [];
   for (const uci of pv.slice(0, plies)) {
     try {
-      out.push(c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
+      out.push(c.move(uci).san);
     } catch {
       break;
     }
@@ -211,8 +226,8 @@ function worstMoves(g: Game, color: Color, limit = 5): string[] {
       asciiBoard(m.fenBefore, color),
       `FEN before your move: ${m.fenBefore}`,
       `What you thought: "${m.commentary.slice(0, 350)}${m.commentary.length > 350 ? "…" : ""}" (your eval ${m.selfEvalRaw}, engine after your move ${formatScore(a.evalAfter)})`,
-      `Engine's best was ${a.bestSan ?? "?"}: ${pvSan(m.fenBefore, before?.pv)}`,
-      `What punishes ${m.san}: ${pvSan(m.fenAfter, after?.pv) || "(no line available)"}`,
+      `Engine's best was ${a.bestSan ?? "?"}: ${pvSan(m.fenBefore, before?.pv, 6, variantOf(g))}`,
+      `What punishes ${m.san}: ${pvSan(m.fenAfter, after?.pv, 6, variantOf(g)) || "(no line available)"}`,
       "",
     );
   }
@@ -250,7 +265,7 @@ export function postgameBrief(g: Game, color: Color): string {
   if (!g.interviews.post[color]) {
     needs.push(
       "1) INTERVIEWER: \"Walk us through that game — what was the key moment, and how do you feel about it?\"",
-      "   Answer in character, under 800 characters: interview <file.txt>",
+      `   Answer ${voiceOf(g, color)}, under 800 characters: interview <file.txt>`,
     );
   }
   if (!g.journalDone[color]) {
@@ -292,7 +307,7 @@ export function broadcasterEvents(g: Game): FeedEvent[] {
   const ev: FeedEvent[] = [];
   const W = describePlayer(g, "w");
   const B = describePlayer(g, "b");
-  ev.push({ id: "matchup", ts: g.createdAt, text: `[MATCHUP] White: ${W}  vs  Black: ${B}` });
+  ev.push({ id: "matchup", ts: g.createdAt, text: `[MATCHUP] White: ${W}  vs  Black: ${B}${variantOf(g) === "chess960" ? `\n${chess960Intro(g).join("\n")}` : ""}` });
   for (const c of ["w", "b"] as Color[]) {
     const i = g.interviews.pre[c];
     if (i) ev.push({ id: `pre-${c}`, ts: i.ts, text: `[PRE-GAME INTERVIEW — ${colorName(c)}, ${sideName(g, c)}] "${i.text}"` });

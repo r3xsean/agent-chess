@@ -38,16 +38,14 @@ import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { gameToPgn } from "./pgn";
 import { loadOpenings } from "./openings";
-import { startTts, stopTts } from "./tts";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
-import { Chess } from "chess.js";
+import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
 
 loadAll();
 rebuildRatings();
 loadOpenings();
 engine.start();
-startTts();
 for (const g of games.values()) {
   // Retry anything the engine failed on last time.
   let retry = false;
@@ -89,6 +87,15 @@ function playerRef(input: { model?: string; effort?: string; personality?: strin
     effort,
     personality,
   };
+}
+
+/** The Chess960 choice from a request: off, a random start position, or a given one (0–959). */
+function chess960Choice(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === false || v === "") return undefined;
+  if (v === true || v === "random") return randomChess960();
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 959) throw new ActionError("A Chess960 start position is a number from 0 to 959.");
+  return n;
 }
 
 function broadcasterConfig(input: any): Game["broadcaster"] {
@@ -235,7 +242,7 @@ app.post(
     const black = playerRef(req.body.black ?? {});
     if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model, effort and personality). Change one of them.");
-    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false });
+    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false, chess960: chess960Choice(req.body.chess960) });
     // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
     const human = humanSide(g);
     const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
@@ -401,6 +408,16 @@ app.post(
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
     };
+    if (req.body.chess960) {
+      // Every pairing gets its own start position; in a double round-robin the return game replays it with colours swapped.
+      t.chess960 = true;
+      const byPair = new Map<string, number>();
+      for (const p of t.pairings) {
+        const key = [p.white, p.black].sort().join("|");
+        if (!byPair.has(key)) byPair.set(key, randomChess960());
+        p.chess960 = byPair.get(key);
+      }
+    }
     tournaments.set(t.id, t);
     saveTournamentNow(t);
     bus.emit("lobby");
@@ -430,7 +447,7 @@ app.post(
       return { finished: true };
     }
     const byId = new Map(t.players.map((p) => [p.id, p]));
-    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false });
+    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, chess960: next.chess960 });
     next.gameId = g.id;
     saveTournamentNow(t);
     return { game: g, launch: launchSpec(g) };
@@ -622,7 +639,6 @@ app.post(
 
 /* ------------------------------ static ------------------------------ */
 
-app.use("/audio", express.static(path.join(DATA, "audio"), { maxAge: "1h" }));
 app.use("/videos", express.static(VIDEO_DIR));
 // The site plays the same sound effects as the videos.
 const SFX_DIR = path.join(ROOT, "vendor", "sfx");
@@ -686,27 +702,29 @@ explorer.start();
 const exploreCache = new Map<string, PositionAnalysis>();
 
 /** A position's analysis: game over, already known (cache or any game's review), or a fresh explorer search. */
-async function analyzeExplore(fen: string): Promise<PositionAnalysis> {
+async function analyzeExplore(fen: string, variant: Variant): Promise<PositionAnalysis> {
   const term = terminalScore(fen);
   if (term) return { depth: 0, score: term, pv: [] };
-  const hit = exploreCache.get(fen);
+  // Castling is written differently in the two variants, so their analyses are kept apart.
+  const key = `${variant}|${fen}`;
+  const hit = exploreCache.get(key);
   if (hit) return hit;
   for (const g of games.values()) {
-    const a = g.analysis[fen];
+    const a = variantOf(g) === variant ? g.analysis[fen] : undefined;
     if (a && !a.failed && a.depth > 0) return a;
   }
   explorer.supersede();
-  const a = await explorer.analyze(fen);
+  const a = await explorer.analyze(fen, variant);
   if (!a.failed) {
-    exploreCache.set(fen, a);
+    exploreCache.set(key, a);
     if (exploreCache.size > 5000) exploreCache.delete(exploreCache.keys().next().value!);
   }
   return a;
 }
 
-const parseFen = (fen: unknown) => {
+const parseFen = (fen: unknown, variant: Variant) => {
   try {
-    return new Chess(String(fen ?? ""));
+    return newRules(String(fen ?? ""), variant);
   } catch {
     throw new ActionError("Invalid FEN.");
   }
@@ -719,28 +737,29 @@ const parseFen = (fen: unknown) => {
 app.post(
   "/api/explore",
   handle(async (req) => {
-    const fen = parseFen(req.body?.fen).fen();
+    const variant: Variant = req.body?.variant === "chess960" ? "chess960" : "standard";
+    const fen = parseFen(req.body?.fen, variant).fen();
     const mv = req.body?.move;
     try {
-      if (!mv) return await analyzeExplore(fen);
-      const c = parseFen(mv.fenBefore);
+      if (!mv) return await analyzeExplore(fen, variant);
+      const c = parseFen(mv.fenBefore, variant);
       const uci = String(mv.uci ?? "");
       let played;
       try {
-        played = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+        played = c.move(uci);
       } catch {
         throw new ActionError("Illegal move.");
       }
       if (c.fen() !== fen) throw new ActionError("That move doesn't lead to this position.");
-      const before = await analyzeExplore(played.before);
-      const after = await analyzeExplore(fen);
+      const before = await analyzeExplore(played.before, variant);
+      const after = await analyzeExplore(fen, variant);
       if (before.failed || after.failed) return after;
-      const record = { color: played.color, uci, san: played.san, from: played.from, to: played.to, fenBefore: played.before, fenAfter: fen } as MoveRecord;
+      const record = { color: played.color, uci: played.uci, san: played.san, from: played.from, to: played.to, fenBefore: played.before, fenAfter: fen } as MoveRecord;
       const p = mv.prev;
       const prev = p
         ? ({ to: String(p.to), san: String(p.san), analysis: p.winBefore != null ? { winBefore: Number(p.winBefore), winAfter: Number(p.winAfter) } : undefined } as MoveRecord)
         : undefined;
-      return { ...after, move: classifyMove(record, before, after.score, prev, !!mv.bookSoFar) };
+      return { ...after, move: classifyMove(record, before, after.score, prev, !!mv.bookSoFar, variant) };
     } catch (e) {
       if (e instanceof SupersededError) return { superseded: true };
       throw e;
@@ -751,7 +770,7 @@ app.post(
 const dist = path.join(ROOT, "dist");
 if (existsSync(dist)) {
   app.use(express.static(dist));
-  app.get(/^\/(?!api|audio).*/, (_req, res) => res.send(readFileSync(path.join(dist, "index.html"), "utf8")));
+  app.get(/^\/(?!api).*/, (_req, res) => res.send(readFileSync(path.join(dist, "index.html"), "utf8")));
 }
 
 const server = app.listen(PORT, "127.0.0.1", () => console.log(`[agent-chess] http://127.0.0.1:${PORT}`));
@@ -760,7 +779,6 @@ function shutdown() {
   flushAll();
   engine.stop();
   explorer.stop();
-  stopTts();
   server.close();
   process.exit(0);
 }

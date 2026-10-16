@@ -2,6 +2,7 @@ import type { Color, Game, VideoMoment, VideoPlan } from "../shared/types";
 import { humanSide, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { describePlayer, pvSan } from "./briefing";
+import { variantOf } from "../shared/rules";
 import { ActionError } from "./game";
 
 /*
@@ -44,7 +45,7 @@ export function directorBrief(g: Game): string {
   out.push("## The game, move by move", "(eval is White's view after the move; self-eval is what the mover believed)", "");
   for (const m of g.moves) {
     const a = m.analysis;
-    const verdict = a ? `${a.classification}${a.bestSan && a.bestSan !== m.san ? `, engine preferred ${a.bestSan} (${pvSan(m.fenBefore, g.analysis[m.fenBefore]?.pv)})` : ""}` : "unrated";
+    const verdict = a ? `${a.classification}${a.bestSan && a.bestSan !== m.san ? `, engine preferred ${a.bestSan} (${pvSan(m.fenBefore, g.analysis[m.fenBefore]?.pv, 6, variantOf(g))})` : ""}` : "unrated";
     out.push(`ply ${m.ply} — ${moveNo(m.ply)} ${m.san} by ${name(m.color)}: ${verdict}; eval ${formatScore(a?.evalAfter)}; self-eval ${m.selfEvalRaw || "—"}`);
     if (m.illegalAttempts.length) out.push(`  tried illegal moves first: ${m.illegalAttempts.join(", ")}`);
     if (m.offeredDraw) out.push(`  offered a draw with this move`);

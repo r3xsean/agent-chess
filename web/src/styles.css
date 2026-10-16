@@ -858,9 +858,6 @@ cg-board square.check {
   gap: 6px;
   align-items: center;
 }
-.studio-item.speaking {
-  background: #2c3424;
-}
 .studio-item .mic {
   width: 34px;
   height: 34px;
@@ -873,9 +870,6 @@ cg-board square.check {
 }
 .studio-item.interview .bubble {
   margin-top: 0;
-}
-.audio-unlock {
-  margin: 10px 14px;
 }
 
 /* review */

@@ -2,16 +2,32 @@ import type { Color, Game } from "../shared/types";
 import { personalityById, RISK_LABEL, riskRule } from "../shared/personalities";
 import { CLI } from "./paths";
 import { agentDir } from "./store";
-import { seatKeysFor } from "./game";
+import { seatKeysFor, startFenOf } from "./game";
+import { castlingNote, variantOf } from "../shared/rules";
 import { describePlayer } from "./briefing";
 import { fullName, humanSide, isHuman, sideName } from "../shared/naming";
 import { DEFAULT_DIRECTOR } from "../shared/models";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const riskOf = (personality: string) => {
-  const r = RISK_LABEL[personalityById(personality).risk];
+  const p = personalityById(personality);
+  if (p.plain) return "playing as itself, with no personality and no risk instruction";
+  const r = RISK_LABEL[p.risk];
   return `${r.label.toLowerCase()} (${r.blurb.toLowerCase()})`;
 };
+
+/** The "Who you are" section: a personality, or (with none) just the side you play. */
+function identity(color: Color, personality: string, opponent: string): string {
+  const p = personalityById(personality);
+  if (p.plain)
+    return `You play ${colorName(color)}. You have no assigned personality: play the chess you think is strongest, and talk in your own natural voice.
+Your opponent: ${opponent}.`;
+  return `You play ${colorName(color)}. You are **${p.name}** — ${p.tagline}.
+Style: ${p.style}
+Risk appetite — ${RISK_LABEL[p.risk].label}: ${riskRule(p)}
+Voice: ${p.voice} Use this voice in your commentary and interviews.
+Your opponent: ${opponent}.`;
+}
 
 export function playerPrompt(g: Game, color: Color): string {
   const me = color === "w" ? g.white : g.black;
@@ -23,24 +39,35 @@ export function playerPrompt(g: Game, color: Color): string {
     dir: agentDir(g.id, color),
     learning: !!g.options?.learning,
     vsHuman: isHuman(color === "w" ? g.black : g.white),
+    chess960: variantOf(g) === "chess960" ? { n: g.chess960!, fen: startFenOf(g) } : undefined,
   });
 }
 
 /** The exact player prompt, as a pure template (the Personalities page renders it with placeholders). */
-export function renderPlayerPrompt(o: { color: Color; personality: string; opponent: string; key: string; dir: string; learning: boolean; vsHuman?: boolean }): string {
+export function renderPlayerPrompt(o: {
+  color: Color;
+  personality: string;
+  opponent: string;
+  key: string;
+  dir: string;
+  learning: boolean;
+  vsHuman?: boolean;
+  chess960?: { n: number; fen: string };
+}): string {
   const { color, opponent, key, dir, learning } = o;
-  const p = personalityById(o.personality);
   const cli = `node "${CLI}"`;
   const against = o.vsHuman ? "a human, who plays their moves on the website" : "another AI agent";
+  const variant = o.chess960
+    ? `
+## Chess960
+This game is Chess960 (Fischer Random), start position #${o.chess960.n}: the back-rank pieces are shuffled (mirrored for Black), so there is no opening theory to lean on. All other rules are normal. ${castlingNote(o.chess960.fen)} Castle by sending "O-O" or "O-O-O".
+`
+    : "";
   return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move and a broadcaster commentating.
 
 ## Who you are
-You play ${colorName(color)}. You are **${p.name}** — ${p.tagline}.
-Style: ${p.style}
-Risk appetite — ${RISK_LABEL[p.risk].label}: ${riskRule(p)}
-Voice: ${p.voice} Use this voice in your commentary and interviews.
-Your opponent: ${opponent}.
-
+${identity(color, o.personality, opponent)}
+${variant}
 ## Fair play (strict)
 - You see the game the way a human sees a chess.com board: the board, the last move, whether you're in check, captured pieces and the move list. Nothing else.
 - Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines. Do not read any project files other than your board image and files you write yourself. All chess thinking happens in your own head.
@@ -104,9 +131,13 @@ export function broadcasterPrompt(g: Game): string {
   const cast = human
     ? `A human is playing tonight: ${colorName(human)} is ${sideName(g, human)}, playing their own moves on the website — call them by name. They don't share their thinking, so their moves come with no commentary or self-evaluation: read their play from the moves and the engine. ${colorName(agents[0])} is an AI agent: call it by its model ("${sideName(g, agents[0])}"); its personality is the style it plays in tonight, good for colour. Human versus machine is the story.`
     : `The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}") — the personality is just the style each one is playing in tonight, good for colour ("Opus, in full Magician mode…").`;
-  return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words are turned into speech and played live to the audience as ${human ? "a human takes on an AI agent" : "two AI agents play chess"}.
+  const variant =
+    variantOf(g) === "chess960"
+      ? `\nThis is a CHESS960 game (start position #${g.chess960}): the back rank is shuffled, so there's no opening theory and both players are on their own from move one — make that part of the story.`
+      : "";
+  return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words appear live on screen, in the Studio feed next to the board, as ${human ? "a human takes on an AI agent" : "two AI agents play chess"}.
 
-Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.
+Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.${variant}
 Risk appetite: ${risk}.
 ${cast} Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
 
@@ -115,12 +146,12 @@ You see everything: the engine's verdict on each move (brilliant, great, best, e
 ## CLI
 Run every command as:  ${cli} <command> --key ${key}
 - \`bc-wait\` — blocks until there are new events (up to ~50 s) and prints them. WAITING means run it again; DONE means you're finished. Give your shell tool a timeout of at least 90 seconds.
-- \`say <file.txt>\` — speak one segment (write the text to a file in ${dir} first).
+- \`say <file.txt>\` — put one segment on air (write the text to a file in ${dir} first).
 - \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for.
 
-## How to speak
-- One segment = 1–3 spoken sentences, under 400 characters. Natural spoken English — it will be read aloud.
-- Say moves in words: "knight takes e5", "castles kingside", "bishop b5, check". Never raw notation like "Nxe5+", no markdown, no emoji.
+## How to commentate
+- One segment = 1–3 sentences, under 400 characters. Lively, conversational English, like a streamer typing to chat.
+- Name moves in normal chess notation ("Nxe5+", "O-O", "Bb5"). No markdown.
 - Translate evaluations into words ("White is clearly better", "about a pawn up") rather than reading numbers.
 - Chase the drama: brilliant moves, blunders, players misjudging the position (compare their self-eval with the engine's), calculations that don't work, illegal-move attempts, draw offers, personality clashes.
 - In quiet stretches, cover two or three moves in one segment. If events pile up, summarize — stay close to live.
