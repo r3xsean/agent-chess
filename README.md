@@ -1,6 +1,6 @@
 # Agent Chess
 
-A local chess.com-style arena where AI agents (Claude, Codex) play each other, think out loud on every move, show their calculations (click a line to watch it played on the board), get a live Stockfish game review (Brilliant → Blunder, accuracy, estimated rating), give pre- and post-game interviews, keep a journal across games, and get commentated live by a broadcaster agent with Piper text-to-speech.
+A local chess.com-style arena where AI agents (Claude, Codex) play each other, think out loud on every move, show their calculations (click a line to watch it played on the board), get a live Stockfish game review (Brilliant → Blunder, accuracy, estimated rating), give pre- and post-game interviews, keep a journal across games, and get commentated live by a broadcaster agent. Games can be standard chess or Chess960, players can have a personality or play as themselves, ratings are Glicko-2, and a read-only public mirror lets anyone watch and predict.
 
 ## Run it
 
@@ -13,11 +13,13 @@ Then open http://127.0.0.1:5170.
 
 ## Play a game
 
-1. Click **New game**, pick a model, effort and personality for each side, and turn the broadcaster on or off.
+1. Click **New game**, pick a model, effort and personality for each side (**No personality** is the control group: the model plays as itself), optionally turn on **Chess960** (random or chosen start position 0–959), and turn the broadcaster on or off.
 2. Copy the phrase it shows (e.g. `summon chess game gk12ab34`) into your Claude chat in T3 Code. Claude follows `.claude/skills/agent-chess/SKILL.md`: it delegates White, Black and the broadcaster as child tasks and supervises them.
-3. Watch on the board. Tabs: **Thinking** (commentary, self-eval vs engine, calculation lines), **Moves**, **Studio** (interviews and broadcaster, with voice), **Review** (eval graph, accuracy, classifications).
+3. Watch on the board. Tabs: **Thinking** (commentary, self-eval vs engine, calculation lines), **Moves**, **Studio** (interviews and the broadcaster's commentary), **Review** (eval graph, accuracy, classifications), **Predict** (call the result, guess the next move).
 
-Tournaments: **Tournament** → add players (model × effort × personality) → copy `run chess tournament <id>` into chat. Games run one at a time, round-robin; ratings update after every game.
+Tournaments: **Tournament** → add players (model × effort × personality) → copy `run chess tournament <id>` into chat. Games run one at a time, round-robin; ratings update after every game. A Chess960 tournament gives each pairing its own start position (the return game of a double round-robin replays it with colours swapped).
+
+**Ratings** are [Glicko-2](https://www.glicko.net/glicko/glicko2.pdf), one rating period per game (as on lichess), rebuilt from the game history at every start. The leaderboard shows each rating with its deviation; above ±110 it's marked provisional (`?`).
 
 ## What the agents see
 
@@ -27,14 +29,30 @@ Only what a human sees on chess.com: the board (text diagram + PNG image from th
 
 | Path | What |
 | --- | --- |
-| `server/` | Express server: game state, agent API, Stockfish, classification, Piper TTS, PGN |
+| `server/` | Express server: game state, agent API, Stockfish, classification, Glicko-2, predictions, public mirror, PGN |
 | `cli/chess.mjs` | The only interface agents use (`wait`, `move`, `interview`, `journal`, `bc-wait`, `say`, …) |
 | `web/` | React + chessground UI |
-| `shared/` | Types, personalities, model list, eval math |
-| `vendor/` | Stockfish 19, Piper venv + voice, lichess opening book (git-ignored except openings) |
-| `data/` | Games, players, journals, audio (git-ignored) |
+| `shared/` | Types, rules (chess.js for standard, chessops for Chess960), personalities, model list, eval math |
+| `vendor/` | Stockfish 19, lichess opening book, sound effects (git-ignored except openings and sfx) |
+| `data/` | Games, players, journals, lessons, predictions (git-ignored) |
 
-Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (22), `ENGINE_MAX_MS` (12000), `ENGINE_THREADS` (8), `PIPER_VOICE` (`en_US-ryan-high`).
+Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (22), `ENGINE_MAX_MS` (12000), `ENGINE_THREADS` (8).
+
+## Viewer predictions
+
+Every live game has a **🔮 Predict** tab. Viewers call the result until move 10 (10 points if right) and guess each next move by playing it on the board (3 points per correct guess). Viewers are anonymous (a random id kept in the browser) with an editable name; the lobby shows the top predictors. Points are always worked out from the games, so nothing is scored twice.
+
+## The public site
+
+The public site is a read-only mirror of this one, running the same server with `PUBLIC_MODE=1` (see `Dockerfile`; it's deployed on Railway with a volume at `/data`). Games are still played here: the local server pushes every change to the mirror, and the mirror lets anyone watch, browse players, memory and personalities, and make predictions. It runs no engine, agents or renders, refuses everything else that writes, and rate-limits viewers.
+
+To connect the local server to a mirror, create `data/mirror.json`:
+
+```json
+{ "url": "https://agent-chess-production.up.railway.app", "secret": "<the mirror's MIRROR_SECRET>" }
+```
+
+(or set `MIRROR_URL` and `MIRROR_SECRET`). On start it sends everything, then each change within a couple of seconds, retrying if the mirror is unreachable. With a mirror configured, the local site's prediction tab talks to the mirror too, so local and public viewers share one crowd. On the public site the viewer's analysis board shows the engine only for positions the games already analysed.
 
 ## Video replays
 
@@ -74,8 +92,7 @@ Agent Chess is free software under the [GNU General Public License v3.0 or later
 
 Credits:
 - [WintrChess](https://github.com/WintrCat/wintrchess) by WintrCat (GPL-3.0) — Brilliant/Great detection in `server/wintr.ts` is adapted from its reporter.
-- [chessground](https://github.com/lichess-org/chessground) (GPL-3.0-or-later) and [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
+- [chessground](https://github.com/lichess-org/chessground) and [chessops](https://github.com/niklasf/chessops) (GPL-3.0-or-later), and [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
 - [Stockfish](https://stockfishchess.org) (GPL-3.0), downloaded separately into `vendor/`.
-- [Piper](https://github.com/OHF-Voice/piper1-gpl) text-to-speech (GPL-3.0-or-later), downloaded separately into `vendor/`.
 - [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) (CC0) for opening names and book moves.
 - [Kenney](https://kenney.nl) Impact Sounds, Interface Sounds and Music Jingles (CC0) for the video's sound effects.

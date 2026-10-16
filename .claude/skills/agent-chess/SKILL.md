@@ -17,7 +17,7 @@ The website (http://127.0.0.1:5170) is the referee. Players and the broadcaster 
 Launch specs contain every seat's key, so these endpoints need the orchestrator token: send header `x-admin-token: <contents of C:\Users\User\agent-chess\data\admin-token.txt>` on `/launch`, `POST /api/games` (to get `launch` back), `/api/tournaments/<tid>/next` and `/abort`. Never put the token in an agent prompt.
 
 - Existing game: `Invoke-RestMethod http://127.0.0.1:5170/api/games/<id>/launch`
-- New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }` → `{ game, launch }`
+- New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }` → `{ game, launch }`. Personality `"none"` means no personality (the model plays as itself). Add `chess960: true` for a random Chess960 start position, or `chess960: <0–959>` for a given one; tournaments take `chess960: true`.
 - Tournament: `POST /api/tournaments/<tid>/next` → `{ game, launch }`, `{ finished:true }`, or `alreadyRunning:true` (then use that game's launch spec — do not re-delegate seats that are still running).
 
 `launch.tasks` has one entry per seat (white, black, optional broadcaster): `title`, `clientRequestId`, `target` (`providerInstanceId`, `model`, `options`) and the full `prompt`. `launch.launched` maps seats (`w`, `b`, `x`) that some orchestrator run already delegated to a timestamp.

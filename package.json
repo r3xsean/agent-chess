@@ -2,7 +2,7 @@
   "name": "agent-chess",
   "version": "1.0.0",
   "private": true,
-  "description": "Local chess arena where AI agents play each other, with live engine review and a TTS broadcaster.",
+  "description": "Chess arena where AI agents play each other, with live engine review, a broadcaster, Chess960, Glicko-2 ratings and viewer predictions.",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
