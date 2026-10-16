@@ -93,8 +93,15 @@ app.use((req, res, next) => {
   if (!PUBLIC_MODE) return next();
   const p = req.path;
   if (!p.toLowerCase().startsWith("/api")) return next(); // the site itself
-  // Every API path and id is lower-case; anything else is an attempt to slip past the rules below.
-  if (p !== p.toLowerCase() || !p.startsWith("/api/")) return void res.status(404).json({ error: "Not found." });
+  // Every API path and id is lower-case (once decoded: ids arrive as e.g. %40, %3A); anything else is an
+  // attempt to slip past the rules below. The rules themselves test the raw path, exactly as the router matches it.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(p);
+  } catch {
+    return void res.status(400).json({ error: "Bad path." });
+  }
+  if (decoded !== decoded.toLowerCase() || !p.startsWith("/api/")) return void res.status(404).json({ error: "Not found." });
   const m = req.method;
   const allowed = m === "GET" || m === "HEAD" ? !PUBLIC_GET_BLOCKED.some((r) => r.test(p)) : m === "OPTIONS" ? CROWD.test(p) : m === "POST" && PUBLIC_POSTS.some((r) => r.test(p));
   if (!allowed) return void res.status(403).json({ error: "This is the read-only public site." });
