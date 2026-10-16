@@ -44,7 +44,7 @@ Every live game has a **🔮 Predict** tab. Viewers call the result until move 1
 
 ## The public site
 
-The public site is a read-only mirror of this one, running the same server with `PUBLIC_MODE=1` (see `Dockerfile`; it's deployed on Railway with a volume at `/data`). Games are still played here: the local server pushes every change to the mirror, and the mirror lets anyone watch, browse players, memory and personalities, and make predictions. It runs no engine, agents or renders, refuses everything else that writes, and rate-limits viewers.
+The public site is a read-only mirror of this one, running the same server with `PUBLIC_MODE=1` (see `Dockerfile`; it's deployed on Railway with a volume at `/data`). Games are still played here: the local server pushes every change to the mirror, and the mirror lets anyone watch, browse players, memory and agents (with their personalities), and make predictions. It runs no engine, agents or renders, refuses everything else that writes, and rate-limits viewers.
 
 To connect the local server to a mirror, create `data/mirror.json`:
 

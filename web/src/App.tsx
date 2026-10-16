@@ -4,7 +4,7 @@ import { Lobby } from "./pages/Lobby";
 import { PlayerPage } from "./pages/PlayerPage";
 import { TournamentPage } from "./pages/TournamentPage";
 import { MemoryPage } from "./pages/MemoryPage";
-import { PersonalitiesPage } from "./pages/PersonalitiesPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { NewGameModal, NewTournamentModal, PlayAgentModal } from "./components/NewGame";
 import { VideoPage } from "./video/VideoPage";
 import { useMeta } from "./api";
@@ -37,7 +37,8 @@ export function App() {
   else if (section === "player" && id) page = <PlayerPage id={id} />;
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
   else if (section === "memory") page = <MemoryPage />;
-  else if (section === "personalities") page = <PersonalitiesPage />;
+  // "personalities" is the page's old name; old links still land here.
+  else if (section === "agents" || section === "personalities") page = <AgentsPage model={section === "agents" ? id : ""} />;
   else page = <Lobby local={local} onNewGame={() => setModal("game")} onPlay={() => setModal("play")} onNewTournament={() => setModal("tournament")} />;
 
   return (
@@ -55,8 +56,8 @@ export function App() {
         <a className={`nav-item ${section === "memory" ? "active" : ""}`} href="#/memory">
           <span className="ico">🧠</span> Memory
         </a>
-        <a className={`nav-item ${section === "personalities" ? "active" : ""}`} href="#/personalities">
-          <span className="ico">🎭</span> Personalities
+        <a className={`nav-item ${section === "agents" || section === "personalities" ? "active" : ""}`} href="#/agents">
+          <span className="ico">🤖</span> Agents
         </a>
         {local && (
           <>

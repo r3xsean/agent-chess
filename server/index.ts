@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, Tournament } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
@@ -622,26 +622,32 @@ app.get(
   }),
 );
 
-/** Every personality with its record across models. */
+const recordOf = (ps: PlayerStats[]) =>
+  ps.reduce((a, x) => ({ games: a.games + x.games, wins: a.wins + x.wins, draws: a.draws + x.draws, losses: a.losses + x.losses }), { games: 0, wins: 0, draws: 0, losses: 0 });
+
+/** Every model that has played, with its record and, under it, every personality (played ones first, best rating first). */
 app.get(
-  "/api/personalities",
-  handle(() =>
-    PERSONALITIES.map((p) => {
-      const ps = Object.values(players).filter((x) => x.ref.personality === p.id);
-      const total = ps.reduce((a, x) => ({ games: a.games + x.games, wins: a.wins + x.wins, draws: a.draws + x.draws, losses: a.losses + x.losses }), {
-        games: 0,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-      });
-      return {
-        personality: p,
-        riskRule: riskRule(p),
-        record: total,
-        players: ps.sort((a, b) => b.rating - a.rating),
-      };
-    }),
-  ),
+  "/api/agents",
+  handle(() => {
+    const byModel = new Map<string, PlayerStats[]>();
+    for (const p of Object.values(players)) if (!isHuman(p.ref)) byModel.set(p.ref.model, [...(byModel.get(p.ref.model) ?? []), p]);
+    return [...byModel]
+      .map(([model, ps]) => {
+        const personalities = PERSONALITIES.map((persona) => {
+          const mine = ps.filter((x) => x.ref.personality === persona.id).sort((a, b) => b.rating - a.rating);
+          return { personality: persona, riskRule: riskRule(persona), record: recordOf(mine), players: mine };
+        }).sort((a, b) => (b.players[0]?.rating ?? -Infinity) - (a.players[0]?.rating ?? -Infinity));
+        return {
+          model,
+          label: MODELS.find((m) => m.model === model)?.label ?? ps[0].ref.modelLabel,
+          provider: ps[0].ref.provider,
+          record: recordOf(ps),
+          best: ps.reduce((a, b) => (b.rating > a.rating ? b : a)),
+          personalities,
+        };
+      })
+      .sort((a, b) => b.best.rating - a.best.rating);
+  }),
 );
 
 /* ------------------------------ tournaments ------------------------------ */
