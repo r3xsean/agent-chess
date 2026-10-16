@@ -164,11 +164,16 @@ class Chess960Rules implements Rules {
     const t = parseSquare(to);
     if (f === undefined || t === undefined) return undefined;
     const piece = this.pos.board.get(f);
-    // Like chess.js: a promotion piece only matters for a pawn reaching the last rank, where it defaults to a queen.
-    const promoting = piece?.role === "pawn" && (t >> 3 === 7 || t >> 3 === 0);
-    const m: NormalMove = { from: f, to: t, promotion: promoting ? (CHAR_ROLE[promotion?.toLowerCase() ?? "q"] ?? "queen") : undefined };
-    if (this.pos.isLegal(m)) return m;
-    if (piece?.role !== "king") return undefined;
+    if (!piece) return undefined;
+    if (piece.role !== "king") {
+      // Like chess.js: a promotion piece only matters for a pawn reaching the last rank, where it defaults to a queen.
+      const promoting = piece.role === "pawn" && (t >> 3 === 7 || t >> 3 === 0);
+      const m: NormalMove = { from: f, to: t, promotion: promoting ? (CHAR_ROLE[promotion?.toLowerCase() ?? "q"] ?? "queen") : undefined };
+      return this.pos.isLegal(m) ? m : undefined;
+    }
+    // A king: an exact destination first (a step, or king-onto-rook castling — already in engine form). Not
+    // isLegal(), which quietly reads e1g1 as castling and would record it in the wrong notation.
+    if (this.pos.dests(f).has(t)) return { from: f, to: t };
     // "Castle to g1": find the castling move that puts the king there.
     for (const s of ["a", "h"] as const) {
       const rook = this.pos.castles.rook[piece.color][s];

@@ -5,7 +5,7 @@ const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "
 const LETTER: Record<string, string> = { N: "n", B: "b", R: "r", Q: "q", K: "k" };
 
 /** Why a calculation line stops: the position after its legal prefix, explained at the broken token. */
-export function lineBreakReason(fenBefore: string, line: { san: string[]; brokenAt?: string }, variant: Variant = "standard"): string | null {
+export function lineBreakReason(fenBefore: string, line: { san: string[]; brokenAt?: string }, variant: Variant): string | null {
   if (!line.brokenAt) return null;
   const c = newRules(fenBefore, variant);
   for (const s of line.san) c.move(s);
