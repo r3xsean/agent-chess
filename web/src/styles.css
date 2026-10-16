@@ -845,6 +845,23 @@ cg-board square.check {
   background: #2f2d2a;
   box-shadow: inset 3px 0 0 var(--green);
 }
+/* An illegal attempt, as a turn of its own before the move that followed it. */
+.thought.try {
+  background: rgba(250, 65, 45, 0.05);
+}
+.thought.try.on {
+  background: rgba(250, 65, 45, 0.12);
+  box-shadow: inset 3px 0 0 #fa412d;
+}
+.thought.try .try-move {
+  color: #ff8a7a;
+  text-decoration: line-through;
+}
+.thought.try .try-tag {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ff8a7a;
+}
 .thought .avatar {
   width: 34px;
   height: 34px;
@@ -971,6 +988,29 @@ cg-board square.check {
   margin-top: 6px;
   font-size: 12px;
   font-weight: 700;
+  color: #ff8a7a;
+}
+/* An illegal attempt in the move list, ahead of the move that followed it. */
+.move-try {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ff8a7a;
+  padding: 0 4px;
+  border-radius: 3px;
+  text-decoration: line-through;
+}
+.move-try:hover {
+  background: rgba(250, 65, 45, 0.2);
+}
+.move-try.on {
+  background: #fa412d;
+  color: white;
+}
+.calc-banner.try-banner {
+  border-color: #fa412d;
+}
+.try-banner .try-why {
+  font-size: 13px;
   color: #ff8a7a;
 }
 .lines {

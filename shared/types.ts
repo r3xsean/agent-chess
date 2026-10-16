@@ -81,10 +81,25 @@ export interface MoveRecord {
   selfEvalRaw: string;
   lines: CalcLine[];
   illegalAttempts: string[];
+  /** Everything sent with each illegal attempt, in the same order (missing on older games). */
+  tries?: IllegalTry[];
   offeredDraw: boolean;
   thinkMs: number;
   ts: number;
   analysis?: MoveAnalysis;
+}
+
+/** A turn submitted with an illegal move: the move was rejected, but the thinking behind it stays. */
+export interface IllegalTry {
+  move: string;
+  commentary: string;
+  selfEval: number | null;
+  selfEvalRaw: string;
+  /** Calculated from the position it was tried in. */
+  lines: CalcLine[];
+  /** Time into the turn when it was sent. */
+  thinkMs: number;
+  ts: number;
 }
 
 export interface Interview {
@@ -138,6 +153,8 @@ export interface Game {
   /** Last time each seat talked to the server. */
   seen: Partial<Record<Color | "x", number>>;
   pendingIllegal: Record<Color, string[]>;
+  /** The full illegal attempts this turn, alongside `pendingIllegal` (missing on older games). */
+  pendingTries?: Record<Color, IllegalTry[]>;
   turnStartedAt: number | null;
   analysis: Record<string, PositionAnalysis>;
   opening: { eco: string; name: string } | null;

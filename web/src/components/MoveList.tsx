@@ -4,18 +4,48 @@ import { ClassIcon } from "./ClassIcon";
 
 const SHOW_ICON = new Set(["brilliant", "great", "best", "book", "inaccuracy", "mistake", "miss", "blunder", "excellent", "good", "forced"]);
 
-export function MoveList({ game, ply, onSelect, hideVerdicts }: { game: Game; ply: number; onSelect: (ply: number) => void; hideVerdicts?: boolean }) {
+export function MoveList({
+  game,
+  ply,
+  tryAt = null,
+  onSelect,
+  onSelectTry,
+  hideVerdicts,
+}: {
+  game: Game;
+  ply: number;
+  /** Which illegal attempt from the position after `ply` moves is on the board, if any. */
+  tryAt?: number | null;
+  onSelect: (ply: number) => void;
+  onSelectTry?: (ply: number, i: number) => void;
+  hideVerdicts?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    ref.current?.querySelector(".move-cell.on")?.scrollIntoView({ block: "nearest" });
-  }, [ply, game.moves.length]);
+    ref.current?.querySelector(".move-cell.on, .move-try.on")?.scrollIntoView({ block: "nearest" });
+  }, [ply, tryAt, game.moves.length]);
 
   const rows: [MoveRecord, MoveRecord | undefined][] = [];
   for (let i = 0; i < game.moves.length; i += 2) rows.push([game.moves[i], game.moves[i + 1]]);
 
   const cell = (m?: MoveRecord) =>
     m ? (
-      <div className={`move-cell ${m.ply === ply ? "on" : ""}`} onClick={() => onSelect(m.ply)}>
+      <div className={`move-cell ${m.ply === ply && tryAt === null ? "on" : ""}`} onClick={() => onSelect(m.ply)}>
+        {/* Illegal attempts come first: tried from the position before this move. */}
+        {!hideVerdicts &&
+          m.illegalAttempts.map((t, i) => (
+            <span
+              key={i}
+              className={`move-try ${m.ply - 1 === ply && tryAt === i ? "on" : ""}`}
+              title={`Tried ${t} (illegal)`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTry?.(m.ply - 1, i);
+              }}
+            >
+              ✕{t}
+            </span>
+          ))}
         {!hideVerdicts && m.analysis && SHOW_ICON.has(m.analysis.classification) && <ClassIcon c={m.analysis.classification} />}
         {m.san}
       </div>

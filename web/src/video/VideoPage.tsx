@@ -9,7 +9,7 @@ import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
-import { illegalMovePath } from "../../../shared/explain";
+import { illegalMovePath, triesOf } from "../../../shared/explain";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
@@ -259,9 +259,11 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     const prev = g.moves[s.i - 1];
     const score = scoreAt(g, m.fenBefore, prev?.analysis?.evalAfter);
     const name = sideName(g, m.color);
-    // Their clock runs while the bubble is up, from their total before this move to after it.
+    // Their clock runs while the bubble is up, to their total after this move: from before it, or from
+    // their last illegal attempt, shown just before.
     const before = prep.clocks[s.i];
-    const spent = Math.floor((m.thinkMs * clamp01(local / s.dur)) / 1000) * 1000;
+    const from = Math.min(m.thinkMs, triesOf(m.illegalAttempts, m.tries).at(-1)?.thinkMs ?? 0);
+    const spent = Math.floor((from + (m.thinkMs - from) * clamp01(local / s.dur)) / 1000) * 1000;
     v.clocks = { ...before, [m.color]: before[m.color] + spent };
     v.board = {
       i: s.i - 1,
@@ -339,8 +341,10 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
       evalText: formatScore(score),
       illegal: { attempt: s.attempt, sq: path?.to ?? s.attempt.match(/[a-h][1-8](?!.*[a-h][1-8])/)?.[0], color: m.color, p: r3(clamp01(local / 0.25)) },
     };
-    // Illegal attempts come at the end of their thinking.
-    v.clocks = prep.clocks[s.i + 1];
+    // Their clock as it was when the attempt was sent (older games don't know: the start of the turn).
+    const before = prep.clocks[s.i];
+    const sentAt = Math.min(m.thinkMs, triesOf(m.illegalAttempts, m.tries)[s.n]?.thinkMs ?? 0);
+    v.clocks = { ...before, [m.color]: before[m.color] + Math.floor(sentAt / 1000) * 1000 };
   }
 
   if (s.kind === "move") {

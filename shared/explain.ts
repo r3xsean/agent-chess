@@ -1,5 +1,14 @@
 import type { Chess, Square } from "chess.js";
 import { looseChess, newRules, type Variant } from "./rules";
+import type { IllegalTry } from "./types";
+
+/** What was sent with each illegal attempt, lined up with the attempts (older games kept only the moves). */
+export function triesOf(attempts: string[], details: IllegalTry[] | undefined): (IllegalTry | undefined)[] {
+  const d = details ?? [];
+  // Attempts made before the server kept details have none: those are the earliest ones.
+  const skip = attempts.length - d.length;
+  return attempts.map((_, i) => (i >= skip ? d[i - skip] : undefined));
+}
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 const LETTER: Record<string, string> = { N: "n", B: "b", R: "r", Q: "q", K: "k" };

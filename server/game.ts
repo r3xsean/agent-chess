@@ -439,18 +439,30 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     // A notation problem, not a chess one: a human would just pick up the right piece.
     throw new ActionError('Ambiguous move — more than one piece of that type could make it. Say which one, e.g. "Nbd2" / "R1e2", or use UCI like "b1d2".');
   }
-  if (!mv) {
-    g.pendingIllegal[color].push(input.move.slice(0, 20));
-    touch(g);
-    throw new ActionError("Illegal move.");
-  }
-
   const lines = (Array.isArray(input.lines) && !human ? input.lines : [])
     .slice(0, 6)
     .filter((l) => l && typeof l.moves === "string" && l.moves.trim())
     .map((l) => parseLine(g, fenBefore, l.moves, String(l.note ?? "")));
 
   const now = Date.now();
+  const thinkMs = g.turnStartedAt ? now - g.turnStartedAt : 0;
+  if (!mv) {
+    g.pendingIllegal[color].push(input.move.slice(0, 20));
+    // The thinking behind it is kept for spectators; the agent is only told the move was illegal.
+    g.pendingTries ??= { w: [], b: [] };
+    g.pendingTries[color].push({
+      move: input.move.slice(0, 20),
+      commentary: commentary.slice(0, MAX_COMMENTARY),
+      selfEval,
+      selfEvalRaw: human ? "" : String(input.eval).slice(0, 12),
+      lines,
+      thinkMs,
+      ts: now,
+    });
+    touch(g);
+    throw new ActionError("Illegal move.");
+  }
+
   const rec: MoveRecord = {
     ply: g.moves.length + 1,
     color,
@@ -465,11 +477,13 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     selfEvalRaw: human ? "" : String(input.eval).slice(0, 12),
     lines,
     illegalAttempts: g.pendingIllegal[color],
+    tries: g.pendingTries?.[color].length ? g.pendingTries[color] : undefined,
     offeredDraw: !!input.offerDraw,
-    thinkMs: g.turnStartedAt ? now - g.turnStartedAt : 0,
+    thinkMs,
     ts: now,
   };
   g.pendingIllegal[color] = [];
+  if (g.pendingTries) g.pendingTries[color] = [];
   g.moves.push(rec);
   g.drawOffer = input.offerDraw ? color : null;
   g.turnStartedAt = now;

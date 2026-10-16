@@ -7,7 +7,7 @@ import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
 import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
 import { materialInfo } from "../../../shared/material";
-import { illegalMovePath, lineBreakReason } from "../../../shared/explain";
+import { explainIllegal, illegalMovePath, lineBreakReason, triesOf } from "../../../shared/explain";
 import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
 import { CrowdPanel, useCrowd } from "../components/Crowd";
 import { crowdApi, useViewer } from "../viewer";
@@ -27,6 +27,8 @@ type Tab = "moves" | "thinking" | "studio" | "review" | "predict";
 interface CalcState {
   ply: number;
   line: number;
+  /** A line from this illegal attempt (tried in the same position) instead of from the move. */
+  try?: number;
   step: number;
   playing: boolean;
 }
@@ -103,6 +105,8 @@ export function GamePage({ id }: { id: string }) {
   const [guessing, setGuessing] = useState(false);
   const [engineOff, setEngineOff] = useState(false);
   const [viewPly, setViewPly] = useState<number | null>(null);
+  /** On an illegal attempt made from the position after `ply` moves: which one (else the position itself). */
+  const [viewTry, setViewTry] = useState<number | null>(null);
   const [orientation, setOrientation] = useState<Color>("w");
   const [tab, setTab] = useState<Tab>("thinking");
   const [calc, setCalc] = useState<CalcState | null>(null);
@@ -148,8 +152,33 @@ export function GamePage({ id }: { id: string }) {
   const go = (p: number) => {
     setCalc(null);
     setExplore(null);
+    setViewTry(null);
     const clamped = Math.max(0, Math.min(total, p));
     setViewPly(clamped >= total ? null : clamped);
+  };
+  // Illegal attempts are steps of their own, between the position they were tried in and the move played
+  // from it (the live position's attempts so far, too). Not while you play: they're part of the agent's thinking.
+  const fenAt = (p: number) => (p ? game!.moves[p - 1].fenAfter : (game?.moves[0]?.fenBefore ?? startFen));
+  const triesAt = (p: number): string[] =>
+    !game || hidden || p < 0 ? [] : p < total ? game.moves[p].illegalAttempts : (game.pendingIllegal?.[fenAt(p).split(" ")[1] as Color] ?? []);
+  const tryIdx = viewTry !== null && !calc && !explore && viewTry < triesAt(ply).length ? viewTry : null;
+  /** Shows attempt j from the position after p moves (pinned there, even on the live position). */
+  const showTry = (p: number, j: number) => {
+    setCalc(null);
+    setExplore(null);
+    setViewPly(p);
+    setViewTry(j);
+  };
+  const step = (d: 1 | -1) => {
+    if (d > 0) {
+      const next = tryIdx === null ? 0 : tryIdx + 1;
+      if (next < triesAt(ply).length) return showTry(ply, next);
+      // The last attempt on the latest position stays put (⏭ goes back to following the game).
+      return ply < total ? go(ply + 1) : undefined;
+    }
+    if (tryIdx !== null) return tryIdx > 0 ? showTry(ply, tryIdx - 1) : go(ply);
+    const back = triesAt(ply - 1);
+    return back.length ? showTry(ply - 1, back.length - 1) : go(ply - 1);
   };
   const stepExplore = (d: number) => setExplore((x) => (x ? { ...x, playing: false, step: Math.max(0, Math.min(x.moves.length, x.step + d)) } : x));
 
@@ -157,8 +186,8 @@ export function GamePage({ id }: { id: string }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
-      if (e.key === "ArrowLeft") explore ? stepExplore(-1) : calc ? stepCalc(-1) : go(ply - 1);
-      else if (e.key === "ArrowRight") explore ? stepExplore(1) : calc ? stepCalc(1) : go(ply + 1);
+      if (e.key === "ArrowLeft") explore ? stepExplore(-1) : calc ? stepCalc(-1) : step(-1);
+      else if (e.key === "ArrowRight") explore ? stepExplore(1) : calc ? stepCalc(1) : step(1);
       else if (e.key === "Escape") (setCalc(null), setExplore(null));
       else if (e.key === "f") setOrientation((o) => (o === "w" ? "b" : "w"));
     };
@@ -166,7 +195,18 @@ export function GamePage({ id }: { id: string }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const calcLine = calc && game ? game.moves[calc.ply - 1]?.lines[calc.line] : null;
+  // Where the calculation on the board comes from: a move's lines, or an illegal attempt's (same position).
+  const calcSrc = useMemo(() => {
+    if (!calc || !game) return null;
+    if (calc.try === undefined) return game.moves[calc.ply - 1] ?? null;
+    const p = calc.ply - 1;
+    const fen = fenAt(p);
+    const color = fen.split(" ")[1] as Color;
+    const m = game.moves[p];
+    const t = (m ? triesOf(m.illegalAttempts, m.tries) : triesOf(game.pendingIllegal?.[color] ?? [], game.pendingTries?.[color]))[calc.try];
+    return t ? { fenBefore: fen, lines: t.lines, color, ply: calc.ply } : null;
+  }, [calc?.ply, calc?.try, game]);
+  const calcLine = calc && calcSrc ? calcSrc.lines[calc.line] : null;
   // A line that breaks on an illegal move gets one more step: that move, played on the board anyway.
   const calcEnd = calcLine ? calcLine.san.length + (calcLine.brokenAt ? 1 : 0) : 0;
   const calcBroken = !!calc && !!calcLine && calc.step > calcLine.san.length;
@@ -218,9 +258,8 @@ export function GamePage({ id }: { id: string }) {
       const last = exploreLine.moves[explore.step - 1];
       return { fen, orientation, lastMove: last ? [last.from, last.to] : undefined, check: checkColor(fen) };
     }
-    if (calc && calcLine) {
-      const m = game.moves[calc.ply - 1];
-      const c = newRules(m.fenBefore, variant);
+    if (calc && calcLine && calcSrc) {
+      const c = newRules(calcSrc.fenBefore, variant);
       let last: [string, string] | undefined;
       for (const san of calcLine.san.slice(0, calc.step)) {
         const mv = c.move(san);
@@ -234,6 +273,11 @@ export function GamePage({ id }: { id: string }) {
         arrows.push({ from: mv.from, to: mv.to, brush: "blue" });
       } else if (broken && !calcBroken) arrows.push({ from: broken.from, to: broken.to, brush: "red" });
       return { fen: c.fen(), orientation, lastMove: last, check: checkColor(c.fen()), arrows, illegal: calcBroken && broken ? broken : undefined };
+    }
+    if (tryIdx !== null) {
+      const fen = fenAt(ply);
+      const prev = game.moves[ply - 1];
+      return { fen, orientation, lastMove: prev && [prev.from, prev.to], check: checkColor(fen), illegal: illegalMovePath(fen, triesAt(ply)[tryIdx]) ?? undefined };
     }
     if (ply === 0) return { fen: game.moves[0]?.fenBefore ?? startFen, orientation };
     const m = game.moves[ply - 1];
@@ -252,7 +296,7 @@ export function GamePage({ id }: { id: string }) {
       arrows,
       badge: a && !hidden ? { square: m.to, c: a.classification } : undefined,
     };
-  }, [game, ply, calc, calcLine, explore, exploreLine, orientation, showBest, hidden, why]);
+  }, [game, ply, tryIdx, calc, calcLine, explore, exploreLine, orientation, showBest, hidden, why]);
 
   // ---- sound effects ----
   // The move that put the board where it is, from whichever line is on screen.
@@ -262,9 +306,9 @@ export function GamePage({ id }: { id: string }) {
       const mv = exploreLine.moves[explore.step - 1];
       return mv ? { san: mv.san, before: exploreLine.fens[explore.step - 1] } : null;
     }
-    if (calc && calcLine) {
+    if (calc && calcLine && calcSrc) {
       if (!calc.step || calcBroken) return null;
-      const c = newRules(game.moves[calc.ply - 1].fenBefore, variant);
+      const c = newRules(calcSrc.fenBefore, variant);
       for (const san of calcLine.san.slice(0, calc.step - 1)) c.move(san);
       const before = c.fen();
       return { san: c.move(calcLine.san[calc.step - 1]).san, before };
@@ -324,6 +368,9 @@ export function GamePage({ id }: { id: string }) {
   useEffect(() => {
     if (calcBroken) playSfx("illegal", 0.7);
   }, [calcBroken, calc?.ply, calc?.line]);
+  useEffect(() => {
+    if (tryIdx !== null) playSfx("illegal", 0.7);
+  }, [tryIdx, ply]);
   const material = useMemo(() => {
     if (!game) return null;
     const start = game.moves[0]?.fenBefore ?? startFen;
@@ -535,7 +582,7 @@ export function GamePage({ id }: { id: string }) {
   );
   const explorePrefixes = explore ? movePrefixes(explore.baseFen, explore.moves.length) : [];
   const exploreBest = exploreFen && exploreA?.pv.length ? pvToSan(exploreFen, exploreA.pv, variant) : [];
-  const calcMove = calc ? game.moves[calc.ply - 1] : null;
+  const calcMove = calc ? calcSrc : null;
   const res = game.result || game.termination === "aborted" ? resultText(game) : null;
 
   return (
@@ -612,7 +659,21 @@ export function GamePage({ id }: { id: string }) {
             </p>
           </div>
         )}
-        {!hidden && !calc && !explore && ply > 0 && (
+        {tryIdx !== null && (
+          <div className="calc-banner try-banner">
+            <div className="head">
+              <span>
+                ❌ {sideName(game, fenAt(ply).split(" ")[1] as Color)} tried <b>{triesAt(ply)[tryIdx]}</b>
+                {triesAt(ply).length > 1 && <span className="muted"> · attempt {tryIdx + 1} of {triesAt(ply).length}</span>}
+              </span>
+              <button className="icon-btn" onClick={() => go(ply)} title="Back to the position">
+                ✕
+              </button>
+            </div>
+            <div className="try-why">Illegal: {explainIllegal(fenAt(ply), triesAt(ply)[tryIdx])}</div>
+          </div>
+        )}
+        {!hidden && !calc && !explore && tryIdx === null && ply > 0 && (
           <WhyCard game={game} ply={ply} why={why} pending={raw?.moves[ply - 1]?.analysis?.unavailable ? "none" : "pending"} onPlay={playEngineLine} />
         )}
         {calc && calcLine && calcMove && (
@@ -620,7 +681,7 @@ export function GamePage({ id }: { id: string }) {
             <div className="head">
               <span>
                 🧠 {sideName(game, calcMove.color)}'s calculation · line {calc.line + 1} (move{" "}
-                {Math.ceil(calcMove.ply / 2)})
+                {Math.ceil(calcMove.ply / 2)}){calc.try !== undefined && <span className="muted"> · sent with the illegal {triesAt(calc.ply - 1)[calc.try]}</span>}
               </span>
               <button className="icon-btn" onClick={() => setCalc(null)} title="Exit (Esc)">
                 ✕
@@ -791,12 +852,17 @@ export function GamePage({ id }: { id: string }) {
           </div>
         )}
         <div className="panel-body">
-          {tab === "moves" && <MoveList game={game} ply={ply} onSelect={go} hideVerdicts={hidden} />}
+          {tab === "moves" && <MoveList game={game} ply={ply} tryAt={tryIdx} onSelect={go} onSelectTry={showTry} hideVerdicts={hidden} />}
           {tab === "thinking" &&
             (hidden ? (
               hiddenNote(`${agentName}'s thinking is`)
             ) : (
-              <ThinkingFeed game={game} ply={ply} calc={calc} onSelect={go} onPlayLine={(p, line) => (setExplore(null), setCalc({ ply: p, line, step: 0, playing: true }))} />
+              <ThinkingFeed
+                game={game}
+                // Playing an attempt's calculation keeps that attempt's card selected.
+                ply={calc?.try !== undefined ? calc.ply - 1 : ply}
+                tryAt={calc?.try !== undefined ? calc.try : tryIdx}
+                calc={calc} onSelect={go} onSelectTry={showTry} onPlayLine={(p, line, attempt) => (setExplore(null), setViewTry(null), setCalc({ ply: p, line, try: attempt, step: 0, playing: true }))} />
             ))}
           {tab === "studio" && <Studio game={game} hideBroadcast={hidden} />}
           {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
@@ -820,10 +886,10 @@ export function GamePage({ id }: { id: string }) {
             <button className="btn" onClick={() => go(0)} title="Start">
               ⏮
             </button>
-            <button className="btn" onClick={() => go(ply - 1)} title="Previous (←)">
+            <button className="btn" onClick={() => step(-1)} title="Previous (←)">
               ◀
             </button>
-            <button className="btn" onClick={() => go(ply + 1)} title="Next (→)">
+            <button className="btn" onClick={() => step(1)} title="Next (→)">
               ▶
             </button>
             <button className="btn" onClick={() => go(total)} title="Latest">

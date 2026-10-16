@@ -14,7 +14,8 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "interview"; when: "pre" | "post"; color: Color; text: string }
   /** `hook`: this is the cold open, with its on-screen caption. */
   | { kind: "think"; i: number; thought: string; hook?: string }
-  | { kind: "illegal"; i: number; attempt: string }
+  /** Attempt n of move i, made before it. */
+  | { kind: "illegal"; i: number; n: number; attempt: string }
   | { kind: "move"; i: number; anim: number; key: boolean; hook?: string }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
@@ -121,10 +122,11 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
         (prevCls !== undefined && PUNISHABLE.includes(prevCls)) ||
         last;
 
-    // On key moments the mover explains themselves first, then tries any illegal moves, then plays.
+    // In the order it happened: any illegal attempts, then (on key moments) the thinking that went with the
+    // move that was finally played, which often owns up to the attempt, then the move.
+    m.illegalAttempts.forEach((attempt, n) => push({ kind: "illegal", i, n, attempt, dur: 1.5 }));
     const thought = opts.thoughts === false ? undefined : plan ? picked?.thought : key ? m.commentary.trim() : undefined;
     if (thought) push({ kind: "think", i, thought, ...voiced(`moment:${m.ply}`, 0.3 + read(thought)) });
-    for (const attempt of m.illegalAttempts) push({ kind: "illegal", i, attempt, dur: 1.5 });
 
     const anim = wide ? 0.3 : 0.25;
     // Key moments hold long enough to take in the verdict, the arrow and the engine's line.
