@@ -1329,7 +1329,12 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   if (render) return <div className="v-render">{frame}</div>;
 
   const { w, h } = FRAME[format];
-  const scale = Math.min((win.w - 48 - PANEL_W) / w, (win.h - 130) / h);
+  // The render panel sits beside the video on a wide screen and below it on a narrow one (and isn't there on the public site).
+  const panel = !!meta && !meta.publicMode;
+  const narrow = win.w < 900;
+  const mainW = win.w - (narrow ? 24 : 48) - (panel && !narrow ? PANEL_W : 0);
+  // Under ~920px the controls wrap onto a second row, which needs room under the video.
+  const scale = Math.max(0.1, Math.min(mainW / w, (win.h - (narrow || mainW < 920 ? 180 : 130)) / h));
   const swap = (f: Format) => `#/video/${id}?format=${f}${thoughts ? "" : "&thoughts=off"}${pace !== 1 ? `&pace=${pace}` : ""}`;
   return (
     <div className="v-preview">
@@ -1337,7 +1342,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       <div className="v-stage" style={{ width: w * scale, height: h * scale }}>
         <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0" }}>{frame}</div>
       </div>
-      <div className="v-controls">
+      <div className="v-controls" style={{ maxWidth: mainW }}>
         <button onClick={() => (t >= tl!.duration ? (seek(0), setPlaying(true)) : setPlaying((p) => !p))}>{playing ? "⏸" : "▶"}</button>
         <span className="v-time">
           {fmtTime(t)} / {fmtTime(tl!.duration)}
@@ -1352,7 +1357,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
         <a href={`#/game/${id}`}>Back to game</a>
       </div>
       </div>
-      {meta && !meta.publicMode && <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />}
+      {panel && <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />}
     </div>
   );
 }

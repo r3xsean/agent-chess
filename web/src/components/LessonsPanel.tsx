@@ -12,7 +12,7 @@ export function LessonsPanel({ model, modelLabel }: { model: string; modelLabel:
   const history = [...lessons.history].reverse();
   return (
     <>
-      <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <h2 style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px 10px" }}>
         📚 Lessons <span style={{ color: "var(--muted)", fontSize: 13, fontWeight: 500 }}>shared by every {modelLabel} player · v{lessons.version}</span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {history.length > 0 && (

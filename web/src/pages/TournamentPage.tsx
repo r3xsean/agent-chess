@@ -47,7 +47,7 @@ export function TournamentPage({ id }: { id: string }) {
               <th>#</th>
               <th>Player</th>
               <th>Points</th>
-              <th>Played</th>
+              <th className="hide-sm">Played</th>
               <th>W / D / L</th>
             </tr>
           </thead>
@@ -59,7 +59,7 @@ export function TournamentPage({ id }: { id: string }) {
                   <PlayerCell p={p} rating={ratings[p.id]} />
                 </td>
                 <td style={{ fontWeight: 800 }}>{score[p.id].pts}</td>
-                <td>{score[p.id].played}</td>
+                <td className="hide-sm">{score[p.id].played}</td>
                 <td>
                   {score[p.id].w} / {score[p.id].d} / {score[p.id].l}
                 </td>

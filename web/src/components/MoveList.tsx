@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Game, MoveRecord } from "../../../shared/types";
 import { ClassIcon } from "./ClassIcon";
+import { scrollIntoPanel } from "../scroll";
 
 const SHOW_ICON = new Set(["brilliant", "great", "best", "book", "inaccuracy", "mistake", "miss", "blunder", "excellent", "good", "forced"]);
 
@@ -22,7 +23,7 @@ export function MoveList({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    ref.current?.querySelector(".move-cell.on, .move-try.on")?.scrollIntoView({ block: "nearest" });
+    scrollIntoPanel(ref.current?.querySelector(".move-cell.on, .move-try.on"), "nearest", false);
   }, [ply, tryAt, game.moves.length]);
 
   const rows: [MoveRecord, MoveRecord | undefined][] = [];

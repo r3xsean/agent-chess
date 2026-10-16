@@ -39,6 +39,11 @@ body,
   margin: 0;
   height: 100%;
 }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
 body {
   overflow: hidden;
 }
@@ -132,6 +137,15 @@ button.nav-item {
   margin: 10px 12px;
   background: #3a3835;
 }
+/* On a wide screen the nav is one column; the groups only matter on a phone. */
+.nav-main,
+.nav-extra {
+  display: contents;
+}
+.nav-more,
+.nav-scrim {
+  display: none !important;
+}
 .main {
   flex: 1;
   overflow-x: hidden; /* the app never scrolls sideways */
@@ -216,7 +230,7 @@ button.nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 46px;
+  height: var(--bar-h, 46px);
 }
 .avatar {
   width: 40px;
@@ -353,7 +367,8 @@ button.nav-item {
   background: #403d39;
   border-radius: 3px;
   overflow: hidden;
-  margin-top: 52px;
+  flex-shrink: 0;
+  margin-top: calc(var(--bar-h, 46px) + 6px); /* level with the board, below the top player bar */
 }
 .eval-bar .fill {
   position: absolute;
@@ -823,6 +838,11 @@ cg-board square.check {
   color: white;
   border-bottom: 2px solid #6e6c6a;
 }
+.pgn-inline {
+  display: none;
+  margin: 14px auto;
+  width: fit-content;
+}
 .move-cell .class-icon {
   width: 16px;
   height: 16px;
@@ -1283,10 +1303,34 @@ cg-board square.check {
   align-items: center;
   margin-bottom: 10px;
 }
+.hero-text {
+  flex: 1;
+  min-width: 0;
+}
+.player-hero-rating {
+  text-align: right;
+}
+.big-rating {
+  font-size: 34px;
+  font-weight: 800;
+}
+.agent-card {
+  margin-top: 20px;
+  padding: 18px 20px;
+}
+.persona-detail {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
 .card {
   background: var(--panel);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto; /* a wide table scrolls inside its card rather than being cut off */
+  overflow-y: hidden;
 }
 .table {
   width: 100%;
@@ -1370,13 +1414,19 @@ cg-board square.check {
 }
 .seat-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
 }
 .seat {
   background: var(--panel-2);
   border-radius: 8px;
   padding: 12px;
+  min-width: 0;
+}
+.seat select,
+.seat input {
+  min-width: 0;
+  max-width: 100%;
 }
 .seat h3 {
   margin: 0 0 10px;
@@ -1395,7 +1445,8 @@ cg-board square.check {
   color: var(--muted);
 }
 select,
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   background: #3d3b38;
   border: 1px solid #4b4847;
   color: white;
@@ -1750,3 +1801,572 @@ input[type="text"] {
   vertical-align: middle;
 }
 .table tr.me td { background: rgba(129, 182, 76, 0.1); }
+
+/* ================= responsive ================= */
+
+/* The small viewport height: what's visible with the browser's bars showing, so the board doesn't resize as they slide away. */
+:root {
+  --svh: 100vh;
+}
+@supports (height: 100svh) {
+  :root {
+    --svh: 100svh;
+  }
+}
+
+/* Small laptops and tablets in landscape: the sidebar folds to an icon rail. */
+@media (max-width: 1180px) {
+  /* Safe areas: a notched phone in landscape has its notch on one side or the other. */
+  :root {
+    --sidebar-w: calc(64px + env(safe-area-inset-left));
+  }
+  .sidebar {
+    padding: 12px 8px 12px calc(8px + env(safe-area-inset-left));
+    overflow-y: auto;
+  }
+  .main {
+    padding-right: env(safe-area-inset-right);
+  }
+  .logo {
+    justify-content: center;
+    padding: 2px 0 16px;
+  }
+  .logo-text,
+  .nav-item .lbl {
+    display: none;
+  }
+  .nav-item {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .nav-item .ico {
+    font-size: 21px;
+  }
+  .nav-sep {
+    margin: 8px 6px;
+  }
+  .game-page {
+    --panel-w: clamp(300px, 34vw, 420px);
+  }
+  .page {
+    padding: 22px 24px;
+  }
+  .games-table .g-moves {
+    display: none;
+  }
+  .pcell .player-fullname {
+    white-space: normal;
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+}
+
+/* Phones in landscape and other short screens: tighter bars so the board keeps its size. */
+@media (max-height: 520px) {
+  .sidebar .logo {
+    padding-bottom: 8px;
+  }
+  .nav-item {
+    padding: 7px 0;
+  }
+  .game-page {
+    --bar-h: 36px;
+    --panel-w: clamp(280px, 38vw, 400px);
+    --size: min(
+      calc(100vh - 100px - env(safe-area-inset-bottom)),
+      calc(100vw - var(--sidebar-w) - var(--panel-w) - 70px - env(safe-area-inset-right))
+    );
+    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+    gap: 10px;
+  }
+  /*
+   * So little height that fixed banners would leave the feed no room: the whole panel scrolls
+   * (banners and the tab's content together) between sticky tabs and a sticky footer.
+   */
+  .side-panel {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-padding: 40px 0 100px;
+  }
+  .side-panel > * {
+    flex-shrink: 0;
+  }
+  .side-panel > .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+  .side-panel > .panel-body {
+    flex: none;
+    overflow: visible;
+  }
+  .side-panel > .panel-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    margin-top: auto;
+  }
+  .player-bar .player-avatar {
+    width: 32px !important;
+    height: 32px !important;
+  }
+  .clock {
+    font-size: 17px;
+    min-width: 84px;
+    padding: 3px 8px;
+  }
+  .tab {
+    min-width: 0;
+    gap: 0;
+    padding: 6px 0 4px;
+    font-size: 10.5px;
+  }
+  .tab .t-ico {
+    font-size: 15px;
+  }
+  .page {
+    padding: 16px 18px;
+  }
+}
+
+/* A narrow side panel beside the board: the move buttons get a row of their own so they stay thumb-sized. */
+@media (min-width: 861px) and (max-width: 1180px), (max-height: 520px) {
+  .panel-footer {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 4px;
+  }
+  .nav-btns {
+    flex-basis: 100%;
+  }
+  .nav-btns .btn {
+    min-height: 40px;
+  }
+  .panel-footer .icon-btn {
+    min-width: 40px;
+    min-height: 36px;
+  }
+}
+
+/* Phones and tablets in portrait: a top bar instead of the sidebar, and the page scrolls. */
+@media (max-width: 860px) and (min-height: 521px) {
+  :root {
+    --topbar-h: 56px;
+    --footer-h: 58px;
+  }
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+  body {
+    overflow: visible;
+  }
+  .app {
+    display: block;
+    min-height: 100vh;
+    overflow-x: clip;
+  }
+  .main {
+    overflow: visible;
+  }
+
+  /* top bar */
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    width: auto;
+    height: calc(var(--topbar-h) + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow: visible;
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+  .logo {
+    margin-right: auto;
+    padding: 0;
+    gap: 8px;
+    font-size: 18px;
+  }
+  .logo .knight {
+    font-size: 28px;
+  }
+  .logo-text {
+    display: inline;
+  }
+  .nav-main {
+    display: flex;
+    gap: 2px;
+  }
+  .nav-main .nav-item {
+    flex-direction: column;
+    gap: 1px;
+    width: 58px;
+    padding: 6px 0 5px;
+    border-radius: 8px;
+    font-size: 10.5px;
+  }
+  .nav-main .nav-item .lbl {
+    display: block;
+  }
+  .nav-main .nav-item .ico {
+    width: auto;
+    font-size: 19px;
+    line-height: 1.15;
+  }
+  .nav-main .nav-item.active {
+    box-shadow: inset 0 -2px 0 var(--green);
+  }
+  .nav-more {
+    display: flex !important;
+  }
+  .nav-extra {
+    display: none;
+  }
+  .nav-extra.open {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: max(8px, env(safe-area-inset-right));
+    z-index: 62;
+    min-width: 230px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--bg-dark);
+    border: 1px solid var(--line);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    animation: menu-in 0.16s ease-out;
+  }
+  .nav-extra .nav-sep {
+    display: none;
+  }
+  .nav-extra .nav-item {
+    justify-content: flex-start;
+    padding: 12px;
+  }
+  .nav-extra .nav-item .lbl {
+    display: inline;
+  }
+  .nav-scrim {
+    display: block !important;
+    position: fixed;
+    inset: calc(var(--topbar-h) + env(safe-area-inset-top)) 0 0 0;
+    z-index: 61;
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  /* pages */
+  .page {
+    padding: 18px max(14px, env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  }
+  .page h1 {
+    font-size: 24px;
+  }
+  .page h2 {
+    font-size: 17px;
+    margin: 24px 0 10px;
+  }
+  .hero {
+    flex-wrap: wrap;
+  }
+  .lobby-hero .hero-text {
+    flex-basis: 100%;
+  }
+  .lobby-hero .btn {
+    flex: 1 1 auto;
+  }
+  .lobby-hero .btn.big {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .player-hero h1 {
+    font-size: 20px;
+    flex-wrap: wrap;
+  }
+  .player-hero-rating {
+    flex-basis: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    text-align: left;
+  }
+  .big-rating {
+    font-size: 26px;
+  }
+  .agent-card {
+    padding: 14px 12px;
+  }
+  .persona-detail {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .seat {
+    padding: 10px;
+  }
+}
+
+/* Narrow screens in either orientation: compact tables, and the games tables as cards. */
+@media (max-width: 860px) {
+  .table th,
+  .table td {
+    padding: 8px 10px;
+  }
+  .hide-sm {
+    display: none;
+  }
+  .pcell .player-fullname {
+    white-space: normal;
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  /* games as cards: the players on the left, the result on the right, the opening and date under them */
+  .games-table,
+  .games-table tbody {
+    display: block;
+  }
+  .games-table thead {
+    display: none;
+  }
+  .games-table tr.click {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    row-gap: 6px;
+    padding: 11px 12px;
+    border-top: 1px solid var(--line);
+  }
+  .games-table tr.click:first-child {
+    border-top: 0;
+  }
+  .games-table tr.click:active {
+    background: #2f2d2a;
+  }
+  .games-table tr.click td {
+    border: 0;
+    padding: 0;
+    background: none !important;
+  }
+  .games-table .g-w {
+    grid-area: 1 / 1;
+  }
+  .games-table .g-b {
+    grid-area: 2 / 1;
+  }
+  .games-table .g-res {
+    grid-area: 1 / 2;
+    align-self: center;
+    text-align: right;
+    font-size: 15px;
+  }
+  .games-table .g-acc {
+    grid-area: 2 / 2;
+    align-self: center;
+    text-align: right;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .games-table .g-acc::before {
+    content: "Acc ";
+  }
+  .games-table .g-open {
+    grid-area: 3 / 1;
+    max-width: none !important;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .games-table .g-date {
+    grid-area: 3 / 2;
+    text-align: right;
+    font-size: 12px;
+  }
+  .games-table .g-moves {
+    display: none;
+  }
+
+}
+
+/* Phones in either orientation: touch-sized controls, and 16px fields so iOS doesn't zoom in on focus. */
+@media (max-width: 860px), (max-height: 520px) {
+  .btn {
+    min-height: 38px;
+  }
+  select,
+  input[type="text"],
+  input[type="number"],
+  input:not([type]),
+  textarea {
+    font-size: 16px;
+    min-height: 38px;
+  }
+}
+
+@media (max-width: 860px) and (min-height: 521px) {
+  /* modals become bottom sheets */
+  .modal-back {
+    align-items: flex-end;
+  }
+  .modal {
+    width: 100%;
+    max-height: calc(var(--svh) - 24px);
+    border-radius: 16px 16px 0 0;
+    padding: 18px max(14px, env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    animation: sheet-up 0.22s ease-out;
+  }
+  .seat-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .row-actions {
+    flex-wrap: wrap;
+  }
+  .row-actions .btn.big {
+    flex: 1 1 auto;
+  }
+
+  /* game: the board on top, sized to fit the screen with both player bars; the panel below it */
+  .game-page {
+    --bar-h: 42px;
+    --size: max(240px, min(calc(100vw - 40px), calc(var(--svh) - 222px - env(safe-area-inset-top) - env(safe-area-inset-bottom)), 720px));
+    flex-direction: column;
+    align-items: center;
+    height: auto;
+    gap: 10px;
+    padding: 8px 8px calc(var(--footer-h) + env(safe-area-inset-bottom) + 10px);
+  }
+  .board-col {
+    gap: 4px;
+    height: auto;
+  }
+  .eval-bar {
+    width: 16px;
+    border-radius: 2px;
+  }
+  .eval-bar .num {
+    font-size: 8px;
+    letter-spacing: -0.3px;
+  }
+  .player-bar {
+    gap: 8px;
+  }
+  .player-name {
+    font-size: 13px;
+  }
+  .clock {
+    font-size: 18px;
+    min-width: 76px;
+    padding: 3px 8px;
+  }
+  .promo-pick {
+    gap: 4px;
+    padding: 6px;
+  }
+  .promo-pick button {
+    width: calc(var(--size) / 5.6);
+    height: calc(var(--size) / 5.6);
+  }
+  .promo-pick .promo-cancel {
+    width: 28px;
+  }
+  /* The panel is a screen tall: scroll down to it and it fills the screen, its feed scrolling inside. */
+  .side-panel {
+    width: 100%;
+    max-width: 760px;
+    height: calc(var(--svh) - var(--topbar-h) - var(--footer-h) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px);
+    min-height: 360px;
+    border-radius: 10px;
+  }
+  .tab {
+    padding: 9px 0 7px;
+    font-size: 11.5px;
+  }
+  .tab .t-ico {
+    font-size: 17px;
+  }
+  .calc-banner,
+  .why,
+  .play-panel {
+    margin: 8px 8px 2px;
+  }
+  .result-banner {
+    margin: 8px;
+  }
+  /* The move controls stay at the bottom of the screen. */
+  .panel-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    gap: 2px;
+    padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    background: var(--panel-2);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+  }
+  .nav-btns .btn {
+    min-height: 42px;
+    padding: 9px 0;
+    font-size: 17px;
+  }
+  .panel-footer .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 38px;
+    min-height: 42px;
+    padding: 6px;
+  }
+  .live-dot {
+    padding: 0 4px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+}
+
+/* Small phones: fewer, larger footer controls, and room for the menu in the top bar. */
+@media (max-width: 420px) and (min-height: 521px) {
+  .pgn-btn {
+    display: none !important;
+  }
+  .pgn-inline {
+    display: block;
+  }
+  .sidebar:has(.nav-more) .logo-text {
+    display: none;
+  }
+  .nav-main .nav-item {
+    width: 54px;
+  }
+  .persona-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+}
+@keyframes menu-in {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal,
+  .nav-extra.open {
+    animation: none;
+  }
+}

@@ -8,6 +8,7 @@ import { explainIllegal, lineBreakReason, triesOf } from "../../../shared/explai
 import { START_FEN, variantOf } from "../../../shared/rules";
 import { Avatar } from "./PlayerBar";
 import { CLASS_META, ClassIcon } from "./ClassIcon";
+import { scrollIntoPanel } from "../scroll";
 
 export interface CalcRef {
   /** The move the line was calculated for (its position is the one before it). */
@@ -231,7 +232,7 @@ export function ThinkingFeed(props: {
         : props.ply === g.moves.length && pending
           ? `.thought[data-try="${props.ply}:${pending - 1}"]`
           : `.thought[data-ply="${props.ply}"]`;
-    ref.current?.querySelector(sel)?.scrollIntoView(opened.current ? { block: "nearest", behavior: "smooth" } : { block: "center", behavior: "instant" });
+    scrollIntoPanel(ref.current?.querySelector(sel), opened.current ? "nearest" : "center", opened.current);
     opened.current = true;
   }, [props.ply, tryAt, g.moves.length, pending]);
   const pre = g.phase === "pregame";

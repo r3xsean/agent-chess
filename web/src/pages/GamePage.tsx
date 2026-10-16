@@ -852,7 +852,15 @@ export function GamePage({ id }: { id: string }) {
           </div>
         )}
         <div className="panel-body">
-          {tab === "moves" && <MoveList game={game} ply={ply} tryAt={tryIdx} onSelect={go} onSelectTry={showTry} hideVerdicts={hidden} />}
+          {tab === "moves" && (
+            <>
+              <MoveList game={game} ply={ply} tryAt={tryIdx} onSelect={go} onSelectTry={showTry} hideVerdicts={hidden} />
+              {/* On a small phone the footer has no room for the PGN button, so it lives here. */}
+              <a className="btn pgn-inline" href={`/api/games/${game.id}/pgn`}>
+                ⤓ Download PGN
+              </a>
+            </>
+          )}
           {tab === "thinking" &&
             (hidden ? (
               hiddenNote(`${agentName}'s thinking is`)
@@ -907,7 +915,7 @@ export function GamePage({ id }: { id: string }) {
           <button className="icon-btn" onClick={sfx.toggle} title={sfx.on ? "Mute sound effects" : "Unmute sound effects"}>
             {sfx.on ? "🔔" : "🔕"}
           </button>
-          <a className="icon-btn" href={`/api/games/${game.id}/pgn`} title="Download PGN">
+          <a className="icon-btn pgn-btn" href={`/api/games/${game.id}/pgn`} title="Download PGN">
             ⤓
           </a>
           {game.phase === "finished" && (

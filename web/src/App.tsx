@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GamePage } from "./pages/GamePage";
 import { Lobby } from "./pages/Lobby";
 import { PlayerPage } from "./pages/PlayerPage";
@@ -25,9 +25,25 @@ export function App() {
   // Until the server says otherwise, act like the public site: no buttons that would only be refused.
   const local = !!meta && !meta.publicMode;
   const [modal, setModal] = useState<"game" | "play" | "tournament" | null>(null);
+  // On a phone the extra nav items (local actions, the public site) fold into a menu.
+  const [menu, setMenu] = useState(false);
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  useEffect(() => setMenu(false), [route]);
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      moreBtn.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu]);
   const [path, search = ""] = route.split("?");
   const [, section, arg] = path.split("/");
   const id = arg ? decodeURIComponent(arg) : "";
+  const open = (m: "game" | "play" | "tournament") => (setMenu(false), setModal(m));
+  const extra = local || !!meta?.publicUrl;
 
   // Video frames render bare, without the site chrome.
   if (section === "video" && id) return <VideoPage key={id} id={id} query={new URLSearchParams(search)} />;
@@ -44,40 +60,61 @@ export function App() {
   return (
     <div className="app">
       <nav className="sidebar">
-        <a className="logo" href="#/">
+        <a className="logo" href="#/" title="Agent Chess">
           <span className="knight">♞</span>
-          <span>
+          <span className="logo-text">
             Agent<small>Chess</small>
           </span>
         </a>
-        <a className={`nav-item ${!section ? "active" : ""}`} href="#/">
-          <span className="ico">📺</span> Watch
-        </a>
-        <a className={`nav-item ${section === "memory" ? "active" : ""}`} href="#/memory">
-          <span className="ico">🧠</span> Memory
-        </a>
-        <a className={`nav-item ${section === "agents" || section === "personalities" ? "active" : ""}`} href="#/agents">
-          <span className="ico">🤖</span> Agents
-        </a>
-        {local && (
-          <>
-            <div className="nav-sep" />
-            <button className="nav-item" onClick={() => setModal("game")}>
-              <span className="ico">♟️</span> New game
-            </button>
-            <button className="nav-item" onClick={() => setModal("play")}>
-              <span className="ico">🧑</span> Play an agent
-            </button>
-            <button className="nav-item" onClick={() => setModal("tournament")}>
-              <span className="ico">🏆</span> Tournament
-            </button>
-          </>
-        )}
-        {meta?.publicUrl && (
-          <a className="nav-item" href={meta.publicUrl} target="_blank" rel="noreferrer" title={meta.mirror?.synced ? "The public site is in sync" : "Not synced yet"}>
-            <span className="ico">🌐</span> Public site {meta.mirror?.synced ? "" : "…"}
+        <div className="nav-main">
+          <a className={`nav-item ${!section ? "active" : ""}`} href="#/" title="Watch">
+            <span className="ico">📺</span> <span className="lbl">Watch</span>
           </a>
+          <a className={`nav-item ${section === "memory" ? "active" : ""}`} href="#/memory" title="Memory">
+            <span className="ico">🧠</span> <span className="lbl">Memory</span>
+          </a>
+          <a className={`nav-item ${section === "agents" || section === "personalities" ? "active" : ""}`} href="#/agents" title="Agents">
+            <span className="ico">🤖</span> <span className="lbl">Agents</span>
+          </a>
+          {extra && (
+            <button
+              ref={moreBtn}
+              className={`nav-item nav-more ${menu ? "active" : ""}`}
+              onClick={() => setMenu(!menu)}
+              aria-expanded={menu}
+              aria-controls="nav-extra"
+              aria-haspopup="true"
+              aria-label="More"
+              title="More"
+            >
+              <span className="ico">☰</span> <span className="lbl">More</span>
+            </button>
+          )}
+        </div>
+        {extra && (
+          <div id="nav-extra" className={`nav-extra ${menu ? "open" : ""}`}>
+            {local && (
+              <>
+                <div className="nav-sep" />
+                <button className="nav-item" onClick={() => open("game")} title="New game">
+                  <span className="ico">♟️</span> <span className="lbl">New game</span>
+                </button>
+                <button className="nav-item" onClick={() => open("play")} title="Play an agent">
+                  <span className="ico">🧑</span> <span className="lbl">Play an agent</span>
+                </button>
+                <button className="nav-item" onClick={() => open("tournament")} title="Tournament">
+                  <span className="ico">🏆</span> <span className="lbl">Tournament</span>
+                </button>
+              </>
+            )}
+            {meta?.publicUrl && (
+              <a className="nav-item" href={meta.publicUrl} target="_blank" rel="noreferrer" title={meta.mirror?.synced ? "The public site is in sync" : "Not synced yet"}>
+                <span className="ico">🌐</span> <span className="lbl">Public site {meta.mirror?.synced ? "" : "…"}</span>
+              </a>
+            )}
+          </div>
         )}
+        {menu && <div className="nav-scrim" onClick={() => setMenu(false)} />}
       </nav>
       <main className="main">{page}</main>
       {modal === "game" && <NewGameModal onClose={() => setModal(null)} />}

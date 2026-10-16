@@ -11,7 +11,7 @@ function PlayerJournal({ entry }: { entry: MemoryModel["players"][number] }) {
   const shown = [...journal].reverse().slice(0, all ? undefined : 3);
   return (
     <div className="card" style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "var(--panel-2)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px 10px", padding: "10px 14px", background: "var(--panel-2)" }}>
         <PlayerAvatar player={player.ref} size={36} />
         <a href={`#/player/${encodeURIComponent(player.id)}`}>
           <PlayerName player={player.ref} />

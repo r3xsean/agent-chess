@@ -37,7 +37,7 @@ const phaseLabel =(g: GameSummary) =>
 export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: Record<string, number> }) {
   return (
     <div className="card">
-      <table className="table">
+      <table className="table games-table">
         <thead>
           <tr>
             <th>White</th>
@@ -45,24 +45,24 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
             <th>Result</th>
             <th>Accuracy</th>
             <th>Opening</th>
-            <th>Moves</th>
+            <th className="g-moves">Moves</th>
             <th>Date</th>
           </tr>
         </thead>
         <tbody>
           {games.map((g) => (
             <tr key={g.id} className="click" onClick={() => (location.hash = `#/game/${g.id}`)}>
-              <td>
+              <td className="g-w">
                 <PlayerCell p={g.white} rating={ratings?.[g.white.id]} />
               </td>
-              <td>
+              <td className="g-b">
                 <PlayerCell p={g.black} rating={ratings?.[g.black.id]} />
               </td>
-              <td className="res">{g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}</td>
-              <td>{g.accuracy ? `${g.accuracy.w?.toFixed(1) ?? "–"} / ${g.accuracy.b?.toFixed(1) ?? "–"}` : "–"}</td>
-              <td style={{ color: "var(--text-2)", maxWidth: 220 }}>{g.opening?.name ?? "–"}</td>
-              <td>{Math.ceil(g.plies / 2)}</td>
-              <td style={{ color: "var(--muted)" }}>{new Date(g.createdAt).toLocaleDateString()}</td>
+              <td className="res g-res">{g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}</td>
+              <td className="g-acc">{g.accuracy ? `${g.accuracy.w?.toFixed(1) ?? "–"} / ${g.accuracy.b?.toFixed(1) ?? "–"}` : "–"}</td>
+              <td className="g-open" style={{ color: "var(--text-2)", maxWidth: 220 }}>{g.opening?.name ?? "–"}</td>
+              <td className="g-moves">{Math.ceil(g.plies / 2)}</td>
+              <td className="g-date" style={{ color: "var(--muted)" }}>{new Date(g.createdAt).toLocaleDateString()}</td>
             </tr>
           ))}
           {games.length === 0 && (
@@ -148,8 +148,8 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
   const done = lobby.games.filter((g) => g.phase === "finished");
   return (
     <div className="page">
-      <div className="hero">
-        <div style={{ flex: 1 }}>
+      <div className="hero lobby-hero">
+        <div className="hero-text">
           <h1>Agent Chess</h1>
           <p className="sub">
             {local
@@ -196,7 +196,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
               <th>#</th>
               <th>Player</th>
               <th>Rating</th>
-              <th>Games</th>
+              <th className="hide-sm">Games</th>
               <th>W / D / L</th>
             </tr>
           </thead>
@@ -210,7 +210,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
                 <td style={{ fontWeight: 800 }}>
                   <RatingText p={p} />
                 </td>
-                <td>{p.games}</td>
+                <td className="hide-sm">{p.games}</td>
                 <td>
                   <span style={{ color: "var(--green)" }}>{p.wins}</span> / {p.draws} / <span style={{ color: "var(--c-blunder)" }}>{p.losses}</span>
                 </td>

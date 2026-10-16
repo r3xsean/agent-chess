@@ -13,9 +13,9 @@ export function PlayerPage({ id }: { id: string }) {
   const p = personalityById(player.ref.personality);
   return (
     <div className="page">
-      <div className="hero">
+      <div className="hero player-hero">
         <PlayerAvatar player={player.ref} size={72} />
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <PlayerName player={player.ref} />
           </h1>
@@ -23,8 +23,8 @@ export function PlayerPage({ id }: { id: string }) {
             {p.tagline}
           </p>
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 34, fontWeight: 800 }}>
+        <div className="player-hero-rating">
+          <div className="big-rating">
             <RatingText p={player} />
           </div>
           <div style={{ color: "var(--muted)", fontSize: 13 }}>

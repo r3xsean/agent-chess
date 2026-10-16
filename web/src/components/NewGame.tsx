@@ -368,7 +368,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
               Name
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div className="seat-grid" style={{ gap: 10 }}>
               {seats.map((s, i) => (
                 <div className="seat" key={i}>
                   <h3>

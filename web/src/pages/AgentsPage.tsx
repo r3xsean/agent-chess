@@ -78,7 +78,7 @@ function PersonalityCard({ info }: { info: PersonalityInfo }) {
         {open ? "Hide style, voice & risk ▴" : "Style, voice & risk ▾"}
       </button>
       {open && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginTop: 10, fontSize: 14, lineHeight: 1.5 }}>
+        <div className="persona-detail">
           <div>
             <div className="section-title" style={{ marginBottom: 4 }}>
               ♟ Style
@@ -140,7 +140,7 @@ export function AgentsPage({ model }: { model: string }) {
             ))}
           </div>
 
-          <div className="card" style={{ marginTop: 20, padding: "18px 20px" }}>
+          <div className="card agent-card">
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <div style={{ flex: 1 }}>
                 <h1 style={{ fontSize: 24, margin: 0 }}>{cur.label}</h1>

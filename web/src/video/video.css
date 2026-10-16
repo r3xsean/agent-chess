@@ -1150,8 +1150,15 @@
   flex-direction: column;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+}
+.v-preview-main .v-controls {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 10px;
 }
 .render-panel {
+  flex: 0 0 316px;
   width: 316px;
   align-self: center;
   background: #262522;
@@ -1298,4 +1305,38 @@
   justify-content: space-between;
   gap: 8px;
   color: #bab9b8;
+}
+
+/* The preview on a phone or tablet: the video on top, the controls wrapped under it, the render panel below. */
+@media (max-width: 899px) {
+  body:has(.v-preview) {
+    overflow: auto;
+  }
+  .v-preview {
+    flex-direction: column;
+    justify-content: flex-start;
+    height: auto;
+    min-height: 100vh;
+    gap: 16px;
+    padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+  }
+  .v-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 10px;
+  }
+  .v-controls input[type="range"] {
+    order: 1;
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .v-controls button {
+    width: 48px;
+    height: 40px;
+  }
+  .render-panel {
+    flex: none;
+    width: 100%;
+    max-width: 480px;
+  }
 }

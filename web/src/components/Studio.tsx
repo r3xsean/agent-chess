@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Color, Game } from "../../../shared/types";
 import { fullName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
+import { scrollIntoPanel } from "../scroll";
 
 type Item =
   | { kind: "bc"; ts: number; id: number; text: string }
@@ -21,8 +22,8 @@ export function Studio({ game, hideBroadcast }: { game: Game; hideBroadcast?: bo
   ].sort((a, b) => a.ts - b.ts);
 
   useEffect(() => {
-    const el = ref.current?.parentElement;
-    if (el) el.scrollTop = el.scrollHeight;
+    // To the newest line, in whichever box scrolls the feed (never the page).
+    scrollIntoPanel(ref.current?.lastElementChild, "nearest", false);
   }, [items.length]);
 
   return (
