@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, Tournament } from "../shared/types";
 import { DATA } from "./paths";
 import { GLICKO_START } from "./glicko";
@@ -21,6 +22,9 @@ const readJson = <T>(file: string, fallback: T): T => {
   }
 };
 const safe = (id: string) => id.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+/** "journal" (player id) and "lessons" (model) when a player's memory changes — the mirror follows them. */
+export const memoryEvents = new EventEmitter();
 
 export const games = new Map<string, Game>();
 export const tournaments = new Map<string, Tournament>();
@@ -125,6 +129,7 @@ export function appendJournal(playerId: string, entry: JournalEntry) {
   const all = readJournal(playerId).filter((e) => !(e.gameId === entry.gameId && e.color === entry.color));
   all.push(entry);
   writeJson(journalFile(playerId), all);
+  memoryEvents.emit("journal", playerId);
 }
 
 /* Lessons: one short, self-curated playbook per model, shared by all its personalities. */
@@ -142,6 +147,7 @@ export function writeLessons(model: string, text: string, gameId: string | null)
   };
   mkdirSync(path.join(DATA, "lessons"), { recursive: true });
   writeJson(lessonsFile(model), next);
+  memoryEvents.emit("lessons", model);
   return next;
 }
 

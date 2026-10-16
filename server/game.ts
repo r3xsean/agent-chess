@@ -6,6 +6,7 @@ import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./c
 import { lookupOpening } from "./openings";
 import { glickoUpdate } from "./glicko";
 import { mirrorChanged } from "./mirror";
+import { scoresChanged } from "./predictions";
 import { triggerOrchestrator } from "./summon";
 import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
@@ -59,6 +60,7 @@ export function board(g: Game): Rules {
 export function touch(g: Game) {
   saveGame(g);
   bus.emit(`game:${g.id}`, g);
+  scoresChanged();
   bus.emit("lobby");
   mirrorChanged(g);
 }

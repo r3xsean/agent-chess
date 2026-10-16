@@ -1,5 +1,5 @@
 import express, { type Request, type Response } from "express";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -41,8 +41,8 @@ import { loadOpenings } from "./openings";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
-import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, setGameSource, viewerInfo } from "./predictions";
-import { ingest, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
+import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, scoresChanged, setGameSource, viewerInfo } from "./predictions";
+import { acceptSeq, ingest, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
 setGameSource(() => games.values());
@@ -73,10 +73,13 @@ function startLocal() {
 }
 
 const app = express();
-// Behind Railway's proxy, so rate limits see the viewer's address rather than the proxy's.
-if (PUBLIC_MODE) app.set("trust proxy", 1);
-const smallJson = express.json({ limit: "1mb" });
-app.use((req, res, next) => (req.path === "/api/mirror/sync" ? next() : smallJson(req, res, next)));
+if (PUBLIC_MODE) {
+  // Behind Railway's proxy, so rate limits see the viewer's address rather than the proxy's.
+  app.set("trust proxy", 1);
+  // Express otherwise ignores case and trailing slashes when routing; the guard below must see paths exactly as the router does.
+  app.set("case sensitive routing", true);
+  app.set("strict routing", true);
+}
 
 /* ------------------------------ the public, read-only site ------------------------------ */
 
@@ -84,22 +87,31 @@ app.use((req, res, next) => (req.path === "/api/mirror/sync" ? next() : smallJso
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
 const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/render$/, /^\/api\/music/];
-app.use((req, res, next) => {
-  if (!PUBLIC_MODE || !req.path.startsWith("/api/")) return next();
-  const blocked = req.method === "GET" || req.method === "HEAD" ? PUBLIC_GET_BLOCKED.some((r) => r.test(req.path)) : req.method !== "OPTIONS" && !PUBLIC_POSTS.some((r) => r.test(req.path));
-  if (blocked) return void res.status(403).json({ error: "This is the read-only public site." });
-  next();
-});
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
-  if (!PUBLIC_MODE || !CROWD.test(req.path)) return next();
-  res.setHeader("access-control-allow-origin", "*");
-  res.setHeader("access-control-allow-headers", "content-type");
-  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-  if (req.method === "OPTIONS") return void res.status(204).end();
+  if (!PUBLIC_MODE) return next();
+  const p = req.path;
+  if (!p.toLowerCase().startsWith("/api")) return next(); // the site itself
+  // Every API path and id is lower-case; anything else is an attempt to slip past the rules below.
+  if (p !== p.toLowerCase() || !p.startsWith("/api/")) return void res.status(404).json({ error: "Not found." });
+  const m = req.method;
+  const allowed = m === "GET" || m === "HEAD" ? !PUBLIC_GET_BLOCKED.some((r) => r.test(p)) : m === "OPTIONS" ? CROWD.test(p) : m === "POST" && PUBLIC_POSTS.some((r) => r.test(p));
+  if (!allowed) return void res.status(403).json({ error: "This is the read-only public site." });
+  if (CROWD.test(p)) {
+    res.setHeader("access-control-allow-origin", "*");
+    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+    if (m === "OPTIONS") return void res.status(204).end();
+  }
   next();
 });
+/** Defence in depth on every route that changes local state: the public site never runs it, whatever the path looked like. */
+const localOnly = (_req: Request, res: Response, next: () => void) => (PUBLIC_MODE ? void res.status(403).json({ error: "This is the read-only public site." }) : next());
+
+// The mirror's inbox has its own (large) body limit, and checks the secret before reading a byte of the body.
+const smallJson = express.json({ limit: "1mb" });
+app.use((req, res, next) => (req.path === "/api/mirror/sync" ? next() : smallJson(req, res, next)));
 
 /** A sliding-window limit per client address and bucket. */
 const hits = new Map<string, number[]>();
@@ -116,6 +128,52 @@ setInterval(() => {
   for (const [k, v] of hits) if (!v.some((t) => now - t < 3_600_000)) hits.delete(k);
 }, 600_000).unref();
 
+/* ------------------------------ live streams ------------------------------ */
+
+// Server-sent events hold a connection open each, so the public site caps them per address and overall,
+// and drops a viewer whose connection has stopped reading rather than buffering for them forever.
+const MAX_STREAMS = 3000;
+const MAX_STREAMS_PER_IP = 24;
+const streamsByIp = new Map<string, number>();
+let streams = 0;
+
+/** Admit a stream (or refuse it with 429). Returns a writer that gives up on stalled readers. */
+function openStream(req: Request, res: Response): ((data: string) => void) | null {
+  const ip = req.ip ?? "?";
+  if (PUBLIC_MODE && (streams >= MAX_STREAMS || (streamsByIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP)) {
+    res.status(429).json({ error: "Too many live connections." });
+    return null;
+  }
+  streams++;
+  streamsByIp.set(ip, (streamsByIp.get(ip) ?? 0) + 1);
+  let closed = false;
+  const release = () => {
+    if (closed) return;
+    closed = true;
+    streams--;
+    const n = (streamsByIp.get(ip) ?? 1) - 1;
+    if (n > 0) streamsByIp.set(ip, n);
+    else streamsByIp.delete(ip);
+  };
+  res.on("close", release);
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+  return (data: string) => {
+    if (closed) return;
+    if (res.writableLength > 1_000_000) return void res.destroy(); // a reader this far behind isn't reading
+    res.write(data);
+  };
+}
+
+/** One serialisation per change, shared by every stream of the same thing. */
+const serialized = new Map<string, { at: number; data: string }>();
+function shared(key: string, payload: () => unknown): string {
+  const hit = serialized.get(key);
+  if (hit && Date.now() - hit.at < 150) return hit.data;
+  const data = `data: ${JSON.stringify(payload())}\n\n`;
+  serialized.set(key, { at: Date.now(), data });
+  if (serialized.size > 5000) serialized.delete(serialized.keys().next().value!);
+  return data;
+}
 /* ------------------------------ helpers ------------------------------ */
 
 function humanRef(name: unknown): PlayerRef {
@@ -195,17 +253,18 @@ function gameSummary(g: Game) {
 }
 
 function sse(req: Request, res: Response, event: string, payload: () => unknown) {
-  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const write = openStream(req, res);
+  if (!write) return;
   let timer: NodeJS.Timeout | null = null;
   const send = () => {
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;
-      res.write(`data: ${JSON.stringify(payload())}\n\n`);
+      write(shared(event, payload));
     }, 100);
   };
-  res.write(`data: ${JSON.stringify(payload())}\n\n`);
-  const ping = setInterval(() => res.write(": ping\n\n"), 20000);
+  write(`data: ${JSON.stringify(payload())}\n\n`);
+  const ping = setInterval(() => write(": ping\n\n"), 20000);
   bus.on(event, send);
   req.on("close", () => {
     clearInterval(ping);
@@ -276,14 +335,15 @@ app.get("/api/games/:id/crowd/stream", (req, res) => {
   const g = games.get(String(req.params.id));
   if (!g) return void res.status(404).end();
   const viewer = String(req.query.viewer ?? "");
-  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+  const out = openStream(req, res);
+  if (!out) return;
   let timer: NodeJS.Timeout | null = null;
-  const write = () => res.write(`data: ${JSON.stringify(crowd(games.get(g.id) ?? g, viewer))}\n\n`);
+  const write = () => out(`data: ${JSON.stringify(crowd(games.get(g.id) ?? g, viewer))}\n\n`);
   const send = () => {
     if (!timer) timer = setTimeout(() => ((timer = null), write()), 400);
   };
   write();
-  const ping = setInterval(() => res.write(": ping\n\n"), 20000);
+  const ping = setInterval(() => out(": ping\n\n"), 20000);
   bus.on(`crowd:${g.id}`, send);
   bus.on(`game:${g.id}`, send);
   req.on("close", () => {
@@ -296,13 +356,30 @@ app.get("/api/games/:id/crowd/stream", (req, res) => {
 
 /* ------------------------------ the mirror's inbox ------------------------------ */
 
+const MIRROR_SECRET = process.env.MIRROR_SECRET ?? "";
+function mirrorAuthorized(req: Request) {
+  if (!PUBLIC_MODE || MIRROR_SECRET.length < 32) return false;
+  const got = Buffer.from(req.get("authorization") ?? "");
+  const want = Buffer.from(`Bearer ${MIRROR_SECRET}`);
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+let syncing = false;
 app.post(
   "/api/mirror/sync",
+  (req, res, next) => {
+    if (!mirrorAuthorized(req)) return void res.status(403).json({ error: "Not allowed." });
+    // Batches are applied strictly one at a time (the sender also only sends one at a time).
+    if (syncing) return void res.status(409).json({ error: "Another sync is in progress." });
+    syncing = true;
+    res.on("close", () => (syncing = false));
+    next();
+  },
   express.json({ limit: "200mb" }),
   handle((req) => {
-    const secret = process.env.MIRROR_SECRET;
-    if (!PUBLIC_MODE || !secret || req.get("authorization") !== `Bearer ${secret}`) throw new ActionError("Not allowed.");
-    const changed = ingest(req.body ?? {});
+    const batch = req.body ?? {};
+    if (!acceptSeq(batch.seq)) return { ok: true, stale: true };
+    const changed = ingest(batch);
+    scoresChanged();
     for (const id of changed) {
       const g = games.get(id);
       if (g) bus.emit(`game:${id}`, g);
@@ -319,6 +396,7 @@ const SUMMON_COOLDOWN_MS = 10 * 60_000;
 // The website's "Summon agents" button: wakes a T3 orchestrator thread via the webhook.
 app.post(
   "/api/games/:id/summon",
+  localOnly,
   handle(async (req) => {
     const g = getGame(String(req.params.id));
     if (g.phase === "finished") throw new ActionError("This game is already over.");
@@ -337,6 +415,7 @@ app.post(
 // The orchestrator records each seat it delegated, so another run never launches it twice.
 app.post(
   "/api/games/:id/launched",
+  localOnly,
   handle((req) => {
     requireAdmin(req);
     const g = getGame(String(req.params.id));
@@ -352,6 +431,7 @@ app.post(
 // "Start tournament" from the website: auto-run every pairing in turn.
 app.post(
   "/api/tournaments/:id/start",
+  localOnly,
   handle(async (req) => {
     const t = tournaments.get(String(req.params.id));
     if (!t) throw new ActionError("No such tournament");
@@ -378,6 +458,7 @@ app.get("/api/lobby/stream", (req, res) => sse(req, res, "lobby", lobby));
 
 app.post(
   "/api/games",
+  localOnly,
   handle((req) => {
     const white = playerRef(req.body.white ?? {});
     const black = playerRef(req.body.black ?? {});
@@ -394,7 +475,7 @@ app.get("/api/games/:id", handle((req) => getGame(String(req.params.id))));
 app.get("/api/games/:id/stream", (req, res) => {
   const g = games.get(String(req.params.id));
   if (!g) return void res.status(404).end();
-  sse(req, res, `game:${g.id}`, () => g);
+  sse(req, res, `game:${g.id}`, () => games.get(g.id) ?? g);
 });
 app.get(
   "/api/games/:id/launch",
@@ -441,6 +522,7 @@ app.get(
 );
 app.post(
   "/api/games/:id/abort",
+  localOnly,
   handle((req) => {
     requireAdmin(req);
     const g = getGame(String(req.params.id));
@@ -482,6 +564,7 @@ const knownModel = (m: string) => {
 app.get("/api/lessons/:model", handle((req) => readLessons(knownModel(String(req.params.model)))));
 app.post(
   "/api/lessons/:model/reset",
+  localOnly,
   handle((req) => {
     const model = knownModel(String(req.params.model));
     // History is kept; the active playbook starts over.
@@ -533,6 +616,7 @@ app.get(
 
 app.post(
   "/api/tournaments",
+  localOnly,
   handle((req) => {
     const refs: PlayerRef[] = (req.body.players ?? []).map(playerRef);
     if (refs.some(isHuman)) throw new ActionError("Tournaments are for agents; play an agent yourself from New game.");
@@ -575,6 +659,7 @@ app.get(
 );
 app.post(
   "/api/tournaments/:id/next",
+  localOnly,
   handle((req) => {
     requireAdmin(req);
     const t = tournaments.get(String(req.params.id));
@@ -601,6 +686,7 @@ app.post(
 // handed to the browser that created the game, so the agent (or anyone else) can't move for them.
 app.post(
   "/api/games/:id/play",
+  localOnly,
   handle((req) => {
     const g = getGame(String(req.params.id));
     const s = seatKeys[String(req.body?.key ?? "")];
@@ -691,6 +777,7 @@ function readText(body: any) {
 
 app.post(
   "/api/agent/:cmd",
+  localOnly,
   handle(async (req, res) => {
     const cmd = String(req.params.cmd);
     const { g, role } = seat(String(req.body?.key ?? ""));
@@ -798,6 +885,7 @@ const renderState = (id: string) => {
 app.get("/api/games/:id/render", handle((req) => renderState(String(req.params.id))));
 app.post(
   "/api/games/:id/render",
+  localOnly,
   handle(async (req) => {
     const id = String(req.params.id);
     const want = req.body?.formats;
@@ -812,6 +900,7 @@ app.post(
 // Show a finished video in Explorer / Finder.
 app.post(
   "/api/games/:id/videos/open",
+  localOnly,
   handle((req) => {
     const v = videosFor(String(req.params.id))[0];
     const target = v ? path.join(VIDEO_DIR, v.file) : VIDEO_DIR;
@@ -824,6 +913,7 @@ app.post(
 // Add a background-music track (raw upload; the file name comes in a header).
 app.post(
   "/api/music",
+  localOnly,
   express.raw({ type: "*/*", limit: "200mb" }),
   handle((req) => {
     const name = path.basename(decodeURIComponent(String(req.headers["x-filename"] ?? ""))).replace(/[^\w.\- ()]/g, "_");

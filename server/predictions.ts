@@ -24,8 +24,8 @@ interface Viewer {
 
 interface GamePicks {
   result: Record<string, { pick: Result; ts: number }>;
-  /** Next-move guesses by the ply they're for (1 = White's first move): viewer → UCI. */
-  moves: Record<string, Record<string, string>>;
+  /** Next-move guesses by the ply they're for (1 = White's first move): viewer → UCI and when it was made. */
+  moves: Record<string, Record<string, { uci: string; ts: number }>>;
 }
 
 interface Store {
@@ -33,11 +33,20 @@ interface Store {
   games: Record<string, GamePicks>;
 }
 
+/** Keyed by ids that come from the outside, so no prototype: "__proto__" is just a missing key. */
+const dict = <T>(from?: Record<string, T>): Record<string, T> => Object.assign(Object.create(null), from ?? {});
+
 const FILE = path.join(DATA, "predictions.json");
-let store: Store = { viewers: {}, games: {} };
+let store: Store = { viewers: dict(), games: dict() };
 if (existsSync(FILE)) {
   try {
-    store = JSON.parse(readFileSync(FILE, "utf8"));
+    const raw = JSON.parse(readFileSync(FILE, "utf8"));
+    store = { viewers: dict(raw.viewers), games: dict() };
+    for (const [id, p] of Object.entries<any>(raw.games ?? {})) {
+      const moves = dict<Record<string, { uci: string; ts: number }>>();
+      for (const [ply, guesses] of Object.entries<any>(p.moves ?? {})) moves[ply] = dict(guesses);
+      store.games[id] = { result: dict(p.result), moves };
+    }
   } catch (e) {
     console.error("[predictions] could not read predictions.json; starting empty", e);
   }
@@ -69,7 +78,7 @@ const cleanName = (name: unknown) =>
     .slice(0, 20);
 
 /** A new anonymous viewer. The id is the viewer's secret: whoever holds it can predict as them. */
-export function createViewer(name: unknown) {
+export function createViewer(name: unknown): Viewer {
   const v: Viewer = { id: randomBytes(16).toString("hex"), name: cleanName(name) || `Viewer ${randomBytes(2).toString("hex")}`, createdAt: Date.now() };
   store.viewers[v.id] = v;
   save();
@@ -85,13 +94,16 @@ export function renameViewer(id: string, name: unknown) {
   return v;
 }
 
+const VIEWER_ID = /^[0-9a-f]{32}$/;
+
 function viewerOf(id: unknown): Viewer {
-  const v = store.viewers[String(id ?? "")];
+  const key = String(id ?? "");
+  const v = VIEWER_ID.test(key) && Object.hasOwn(store.viewers, key) ? store.viewers[key] : undefined;
   if (!v) throw new PredictionError("Unknown viewer — reload the page.");
   return v;
 }
 
-const picksOf = (gameId: string) => (store.games[gameId] ??= { result: {}, moves: {} });
+const picksOf = (gameId: string) => (store.games[gameId] ??= { result: dict(), moves: dict() });
 
 /** Whether each kind of prediction is open right now. */
 export function openFor(g: Game) {
@@ -122,22 +134,46 @@ export function predict(g: Game, viewerId: unknown, kind: unknown, pick: unknown
       throw new PredictionError("That isn't a legal move in the current position.");
     }
     const ply = String(g.moves.length + 1);
-    (p.moves[ply] ??= {})[v.id] = uci;
+    (p.moves[ply] ??= dict())[v.id] = { uci, ts: Date.now() };
   } else throw new PredictionError('kind must be "result" or "move".');
   cached = null;
   save();
 }
 
+/*
+ * Cut-offs. The public mirror hears about a move a moment after it's played, so a pick only counts if it was
+ * made before the move (or the end of the game) really happened, by the mirror's clock (game times are on the
+ * local server's clock: mirrorSkewMs converts them).
+ */
+const onMirrorClock = (g: Game, ts: number) => ts + (g.mirrorSkewMs ?? 0);
+/** When result calls really closed: the move that reached the lock, or the end of the game, whichever came first. */
+function resultCutoff(g: Game): number {
+  const lock = g.moves[RESULT_LOCK_PLY - 1]?.ts ?? Infinity;
+  const end = g.result ? (g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Infinity) : Infinity;
+  return onMirrorClock(g, Math.min(lock, end));
+}
+const guessCounts = (g: Game, ply: number, ts: number) => {
+  const m = g.moves[ply - 1];
+  return !m || ts <= onMirrorClock(g, m.ts);
+};
+/** Old saved guesses were bare UCI strings. */
+const guessOf = (x: string | { uci: string; ts: number }) => (typeof x === "string" ? { uci: x, ts: 0 } : x);
+
+/** Points move whenever a game does: forget the cached totals. */
+export function scoresChanged() {
+  cached = null;
+}
+
 /** What the crowd thinks about one game, plus this viewer's own picks and points. */
 export function crowd(g: Game, viewerId?: string) {
-  const p = store.games[g.id] ?? { result: {}, moves: {} };
-  const me = viewerId && store.viewers[viewerId] ? viewerId : undefined;
+  const p = store.games[g.id] ?? { result: dict(), moves: dict() };
+  const me = viewerId && VIEWER_ID.test(viewerId) && Object.hasOwn(store.viewers, viewerId) ? viewerId : undefined;
   const tally = { "1-0": 0, "1/2-1/2": 0, "0-1": 0 } as Record<Result, number>;
   for (const r of Object.values(p.result)) tally[r.pick]++;
   const ply = g.moves.length + 1;
   const guesses = p.moves[String(ply)] ?? {};
   const counts = new Map<string, number>();
-  for (const u of Object.values(guesses)) counts.set(u, (counts.get(u) ?? 0) + 1);
+  for (const x of Object.values(guesses)) counts.set(guessOf(x).uci, (counts.get(guessOf(x).uci) ?? 0) + 1);
   const fen = currentFen(g);
   const san = (uci: string) => {
     try {
@@ -148,9 +184,10 @@ export function crowd(g: Game, viewerId?: string) {
   };
   // How the crowd did on the move just played.
   const last = g.moves[g.moves.length - 1];
-  const lastGuesses = last ? p.moves[String(last.ply)] ?? {} : {};
-  const lastTotal = Object.keys(lastGuesses).length;
-  const lastRight = last ? Object.values(lastGuesses).filter((u) => u === last.uci).length : 0;
+  const lastGuesses = last ? Object.entries(p.moves[String(last.ply)] ?? {}).filter(([, x]) => guessCounts(g, last.ply, guessOf(x).ts)) : [];
+  const lastTotal = lastGuesses.length;
+  const lastRight = last ? lastGuesses.filter(([, x]) => guessOf(x).uci === last.uci).length : 0;
+  const myLast = me ? lastGuesses.find(([id]) => id === me) : undefined;
   return {
     open: openFor(g),
     lockPly: RESULT_LOCK_PLY,
@@ -163,9 +200,9 @@ export function crowd(g: Game, viewerId?: string) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([uci, n]) => ({ uci, san: san(uci), n })),
-      mine: me && guesses[me] ? { uci: guesses[me], san: san(guesses[me]) } : null,
+      mine: me && guesses[me] ? { uci: guessOf(guesses[me]).uci, san: san(guessOf(guesses[me]).uci) } : null,
     },
-    lastMove: last && lastTotal ? { ply: last.ply, san: last.san, total: lastTotal, right: lastRight, mine: me ? lastGuesses[me] === last.uci : null } : null,
+    lastMove: last && lastTotal ? { ply: last.ply, san: last.san, total: lastTotal, right: lastRight, mine: myLast ? guessOf(myLast[1]).uci === last.uci : null } : null,
     you: me ? standing(me) : null,
   };
 }
@@ -202,8 +239,15 @@ function scores(): Map<string, Score> {
     const p = store.games[g.id];
     if (!p) continue;
     // An aborted game has no result to call.
-    if (g.result) for (const [id, r] of Object.entries(p.result)) add(id, RESULT_POINTS, r.pick === g.result);
-    for (const m of g.moves) for (const [id, uci] of Object.entries(p.moves[String(m.ply)] ?? {})) add(id, MOVE_POINTS, uci === m.uci);
+    if (g.result) {
+      const cutoff = resultCutoff(g);
+      for (const [id, r] of Object.entries(p.result)) if (r.ts <= cutoff) add(id, RESULT_POINTS, r.pick === g.result);
+    }
+    for (const m of g.moves)
+      for (const [id, x] of Object.entries(p.moves[String(m.ply)] ?? {})) {
+        const guess = guessOf(x);
+        if (guessCounts(g, m.ply, guess.ts)) add(id, MOVE_POINTS, guess.uci === m.uci);
+      }
   }
   return out;
 }

@@ -161,6 +161,8 @@ export interface Game {
   /** The broadcaster's picks for the video replay, made after the game. */
   video?: VideoPlan;
   interviewsCompleteAt: number | null;
+  /** On the public mirror: its clock minus the local server's, so move times can be compared with viewers' guesses. */
+  mirrorSkewMs?: number;
 }
 
 /** A moment the video slows down for. */
