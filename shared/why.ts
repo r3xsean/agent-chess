@@ -56,7 +56,7 @@ const KIND: Record<Classification, WhyKind> = {
 
 const usable = (a: PositionAnalysis | undefined): a is PositionAnalysis => !!a && !a.failed && a.depth > 0;
 
-function walk(fen: string, uci: string[], variant: Variant): RulesMove[] {
+export function walk(fen: string, uci: string[], variant: Variant): RulesMove[] {
   const c = newRules(fen, variant);
   const out: RulesMove[] = [];
   for (const u of uci) {
@@ -75,14 +75,14 @@ function engineLine(fen: string, a: PositionAnalysis, variant: Variant): EngineL
 }
 
 /** Moves to mate from a side's view: positive when it mates, negative when it gets mated, null for none. */
-function mateFor(s: Score | undefined, c: Color): number | null {
+export function mateFor(s: Score | undefined, c: Color): number | null {
   if (!s || s.mate === undefined || s.mate === 0) return null;
   return c === "w" ? s.mate : -s.mate;
 }
 
 const VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 
-interface Tally {
+export interface Tally {
   /** Material won minus material lost, in pawns, from the mover's side (promotions included). */
   net: number;
   lost: string[];
@@ -95,7 +95,7 @@ interface Tally {
  * The material that changes hands along a line, from the mover's side, counted up to where the captures
  * have settled (the next move isn't a capture), so a line cut off mid-exchange doesn't count half of it.
  */
-function tally(moves: RulesMove[], mover: Color, endsInMate: boolean): Tally {
+export function tally(moves: RulesMove[], mover: Color, endsInMate: boolean): Tally {
   let k = moves.length;
   if (!endsInMate && k && moves[k - 1].captured) {
     k--;
@@ -139,7 +139,7 @@ function pieces(list: string[]): string {
  * What one side gives for what it gets ("a knight for a pawn", "the exchange"), with even trades left
  * out (a knight for a bishop counts as even). Empty when it comes out even or ahead.
  */
-function trade(give: string[], get: string[]): string {
+export function trade(give: string[], get: string[]): string {
   const a = [...give];
   const b = [...get];
   for (let i = a.length - 1; i >= 0; i--) {

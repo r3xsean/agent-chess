@@ -22,8 +22,10 @@ const voiceOf = (g: Game, c: Color) => (personalityById(playerOf(g, c).personali
 
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
-  if (isHuman(p)) return `${p.modelLabel} (a human player, rating ${ratingOf(p)})`;
-  return `${fullName(p)} (${p.effort} effort, rating ${ratingOf(p)})`;
+  // Once the game is rated, the rating it was played at (games since don't change who was the favourite).
+  const rating = g.ratingBefore?.[c] ?? ratingOf(p);
+  if (isHuman(p)) return `${p.modelLabel} (a human player, rating ${rating})`;
+  return `${fullName(p)} (${p.effort} effort, rating ${rating})`;
 }
 
 export function asciiBoard(fen: string, orientation: Color): string {
@@ -279,7 +281,7 @@ export function postgameBrief(g: Game, color: Color): string {
     "",
     "Engine review of your play (now that the game is over, you may see it):",
     r && r.accuracy != null
-      ? `Accuracy ${r.accuracy}% · estimated performance ~${r.estElo} · your self-evaluations were off by ${r.selfEvalError ?? "?"} pawns on average`
+      ? `Accuracy ${r.accuracy}% · estimated performance ~${r.estElo} · your self-evaluations were off by ${r.selfEvalError ?? "?"} percentage points of winning chances on average`
       : "(engine review unavailable for this game)",
     r ? `Move quality: ${Object.entries(r.counts).map(([k, v]) => `${v} ${k}`).join(", ")}` : "",
     ...notable.map((m) => {

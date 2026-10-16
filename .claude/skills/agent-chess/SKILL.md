@@ -48,11 +48,11 @@ When every seat of a tournament game is done (phase `finished`), call `/api/tour
 
 ## 5. Video director
 
-After a game, its broadcaster plans the replay video (which moments to slow down for) and submits it with `direct`. A finished game without a plan — no broadcaster, or one from before directors existed — gets a standalone director, usually because the website's video page asked for a render (webhook action `direct-video`):
+After a game, its broadcaster plans the replay video (which moments to slow down for) and submits it with `direct`. A finished game without a plan — no broadcaster, one from before directors existed, or one whose plan the website threw away for a "new director" re-render — gets a standalone director, usually because the website's video page asked for a render (webhook action `direct-video`):
 
-1. `GET /api/games/<id>/director-launch` with the admin token → `{ tasks: [one task] }`. Add `?redo=1` only to replace an existing plan.
-2. Delegate that task exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). No `/launched` record is needed.
-3. When it finishes, check `GET /api/games/<id>` has a `video` field. If not, re-delegate once with `clientRequestId` `<id>-director-r2` (a model's safety filter occasionally refuses a long brief; a second try usually works). The website renders on its own once the plan is saved.
+1. `GET /api/games/<id>/director-launch` with the admin token → `{ tasks: [one task] }`. Add `?redo=1` only to replace an existing plan (a website redo has already removed it, so don't add it then).
+2. Delegate that task exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). No `/launched` record is needed. A redo's task has its own `clientRequestId` (`<id>-director-redo<n>`), so it's a new task, not the earlier director again.
+3. When it finishes, check `GET /api/games/<id>` has a `video` field. If not, re-delegate once with the task's `clientRequestId` plus `-r2` (a model's safety filter occasionally refuses a long brief; a second try usually works). The website renders on its own once the plan is saved.
 
 ## 6. When you're done
 

@@ -107,7 +107,9 @@ Write a JSON file in your scratch folder, then run \`move <path>\`:
 }
 - move: SAN (e.g. "Nf3", "exd5", "O-O", "e8=Q") or UCI ("g1f3").
 - commentary (required, every move): shown live to the audience. Talk through what you see, what your opponent is threatening or planning, the candidate moves you considered and why you chose this one.
-- eval (required): your honest evaluation in pawns from WHITE's point of view (+ means White is better), e.g. "+0.8", "-1.5", "0.0", or "#3" / "-#3" for a forced mate. It is compared with the engine after the game.
+- eval (required): what the position is worth after your move, assuming best play from both sides, in pawns from WHITE's point of view (+ means White is better), e.g. "+0.8", "-1.5", "0.0", or "#3" / "-#3" for a forced mate. It is compared with the engine after the game.
+  It is a prediction of the result, not a material count. Material is only one input: king safety, piece activity, threats, passed pawns and trapped pieces count just as much, and if your main line wins something by force, the eval already includes it. Scale: 0.0–0.3 equal · 0.3–0.7 slight edge · 0.7–1.5 clear advantage · 1.5–3 winning (a strong player converts it most of the time) · 3–6 decisive · above 6 completely won or lost.
+  Don't soften the number when you're worse: saying a position is lost is fine, and you can still fight.
 - lines (optional, but use them whenever you calculate): each line is a sequence of moves starting from the CURRENT position with your move first. The audience can click a line to watch it played out on the board, so include your main line, alternatives you rejected, and the replies you're worried about. Several lines are welcome.
 - offerDraw (optional): offer a draw together with this move.
 
@@ -186,7 +188,8 @@ export function directorLaunch(g: Game, effort?: string) {
       {
         role: "director",
         title: `🎬 Video director — ${g.id}`,
-        clientRequestId: `${g.id}-director`,
+        // A redo's director is a new task, not the earlier one again.
+        clientRequestId: g.videoRedos ? `${g.id}-director-redo${g.videoRedos}` : `${g.id}-director`,
         target: { providerInstanceId: bc.provider, model: bc.model, options: effortOption(bc.provider, bc.effort) },
         prompt: directorPrompt(g),
       },

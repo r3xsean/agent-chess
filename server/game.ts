@@ -320,6 +320,7 @@ function applyRating(g: Game) {
   const nw = glickoUpdate(pw.glicko, pb.glicko, sw);
   const nb = glickoUpdate(pb.glicko, pw.glicko, 1 - sw);
   const show = (x: number) => Math.round(x);
+  g.ratingBefore = { w: pw.rating, b: pb.rating };
   g.ratingChange = { w: show(nw.rating) - pw.rating, b: show(nb.rating) - pb.rating };
   for (const [p, n] of [
     [pw, nw],
@@ -347,7 +348,13 @@ export function rebuildRatings() {
   for (const id of Object.keys(players)) if (!inGames.has(id)) delete players[id];
   for (const p of Object.values(players)) Object.assign(p, freshStats());
   const done = [...games.values()].filter((g) => g.result).sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
-  for (const g of done) applyRating(g);
+  for (const g of done) {
+    // Each game keeps the ratings it was played at; one whose numbers came out different (a game rated
+    // before this was recorded, or an earlier game deleted) is saved with the new ones.
+    const was = JSON.stringify([g.ratingBefore, g.ratingChange]);
+    applyRating(g);
+    if (JSON.stringify([g.ratingBefore, g.ratingChange]) !== was) saveGameNow(g);
+  }
   savePlayersNow();
 }
 

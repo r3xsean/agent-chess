@@ -119,7 +119,7 @@ export interface SideReview {
   accuracy: number | null;
   estElo: number | null;
   counts: Partial<Record<Classification, number>>;
-  /** Mean absolute gap between self-eval and engine eval, in pawns (capped). */
+  /** Mean absolute gap between self-eval and engine eval, in win-percentage points. */
   selfEvalError: number | null;
 }
 
@@ -160,6 +160,8 @@ export interface Game {
   opening: { eco: string; name: string } | null;
   review: Record<Color, SideReview> | null;
   ratingChange?: Record<Color, number>;
+  /** Each side's rating going into this game (after it: plus ratingChange). Fixed when it's rated, so later games never move it. */
+  ratingBefore?: Record<Color, number>;
   playStartedAt: number | null;
   endedAt?: number;
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
@@ -177,6 +179,8 @@ export interface Game {
   classifierVersion?: number;
   /** The broadcaster's picks for the video replay, made after the game. */
   video?: VideoPlan;
+  /** How many plans were thrown away for a new director (each new director is a new task). */
+  videoRedos?: number;
   interviewsCompleteAt: number | null;
   /** On the public mirror: when each ply (and "end", the result) happened by the mirror's clock — prediction cut-offs. */
   mirrorCutoffs?: Record<string, number>;
@@ -205,6 +209,12 @@ export interface VideoMoment {
   delivery?: string;
   /** A short label for this moment as a YouTube chapter (headline moments only). */
   chapter?: string;
+  /**
+   * An engine line played out on the board right after the move (see shared/engineLine.ts): what the
+   * engine wanted instead of it, or its best play after it. `caption` is the director's one-liner on
+   * why the side it favours is better at its end (absent: the line's own plain fact).
+   */
+  line?: { kind: "instead" | "after"; caption?: string };
 }
 
 /** The cold open: the payoff moment, played first, before "how did we get here?". */

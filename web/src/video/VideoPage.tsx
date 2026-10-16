@@ -10,11 +10,13 @@ import { beliefs, judge, selfScore, standing, type Belief } from "../../../share
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
+import { shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, sceneAt, VOICE_AT, type Format, type Scene, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SfxCue, type Timeline } from "./timeline";
+import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
 import "./video.css";
@@ -135,13 +137,7 @@ function prepare(g: Game): Prep {
   const sans = g.moves.map((m) => m.san);
   const variant = variantOf(g);
   const start = g.startFen ?? START_FEN;
-  const check = g.moves.map((m) => {
-    const c = looseChess(m.fenAfter);
-    if (!c.inCheck()) return undefined;
-    const turn = c.turn();
-    for (const row of c.board()) for (const sq of row) if (sq?.type === "k" && sq.color === turn) return sq.square;
-    return undefined;
-  });
+  const check = g.moves.map((m) => checkSquare(m.fenAfter));
   const material = sans.map((_, i) => materialInfo(start, sans.slice(0, i + 1), variant));
   material.unshift(materialInfo(start, [], variant));
   const line = g.moves.map((m) => pvText(m.fenAfter, g.analysis[m.fenAfter]?.pv, variant));
@@ -177,6 +173,8 @@ interface BoardView {
   illegal?: { attempt: string; sq?: string; color: Color; p: number };
   /** A marker on a king: the draw offer or the white flag. */
   mark?: { sq: string; emoji: string; s: number };
+  /** An engine line, not the game: the board is tinted. */
+  engine?: boolean;
   evalW: number;
   evalText: string;
 }
@@ -187,7 +185,7 @@ interface View {
   fade: number;
   board?: BoardView;
   /** `status` is a plain one-line banner ("… is thinking") instead of a move verdict. */
-  callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string };
+  callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string; engine?: boolean };
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
   thought?: { text: string; color: Color; selfEval: string; fade: number };
@@ -201,9 +199,13 @@ interface View {
   focus?: { i: number; label: boolean };
   /** Each side's thinking time so far, shown on the player cards. */
   clocks?: Record<Color, number>;
+  /** The captured pieces on the cards, when the board isn't a position of the game (an engine line). */
+  material?: MaterialInfo;
+  /** An engine line playing out: what it is, its moves so far, and its one-liner, faded in (p) once the line has landed. */
+  engine?: { tag: string; moves: string; caption: string; p: number };
 }
 
-const GAME_SCENES: Scene["kind"][] = ["move", "illegal", "think", "draw", "resign", "rewind"];
+const GAME_SCENES: Scene["kind"][] = ["move", "illegal", "think", "draw", "resign", "rewind", "line"];
 const isGameScene = (s: Scene | undefined) => !!s && GAME_SCENES.includes(s.kind);
 
 const kingSquare = (fen: string, c: Color) => [...fenBoard(fen)].find(([, p]) => p.type === "k" && p.color === c)?.[0];
@@ -221,6 +223,74 @@ function settledBoard(g: Game, prep: Prep, i: number): BoardView {
     evalW: r3(score ? winPercentWhite(score) : 50),
     evalText: formatScore(score),
   };
+}
+
+type AnimMove = { from: string; to: string; san: string; uci: string; color: Color };
+
+/** A move sliding into place, p of the way (0 → 1), with any castling rook and the piece it takes. */
+function moveAnim(fenBefore: string, m: AnimMove, variant: Variant, p: number): NonNullable<BoardView["anim"]> {
+  const pre = fenBoard(fenBefore);
+  const pc = pre.get(m.from);
+  // Castling: the king lands on g/c and its rook on f/d. In Chess960 the rook starts wherever the
+  // UCI says (king-takes-rook); in standard chess it's the corner.
+  const castle = pc?.type === "k" && m.san.startsWith("O-O");
+  const rank = m.from[1];
+  const kingside = m.to[0] === "g";
+  const rookFrom = variant === "chess960" ? m.uci.slice(2, 4) : `${kingside ? "h" : "a"}${rank}`;
+  const rook: [string, string] | undefined = castle ? [rookFrom, `${kingside ? "f" : "d"}${rank}`] : undefined;
+  const enPassant = pc?.type === "p" && m.from[0] !== m.to[0] && !pre.get(m.to);
+  const capSq = enPassant ? m.to[0] + m.from[1] : m.to;
+  const capPiece = pre.get(capSq);
+  return {
+    from: m.from,
+    to: m.to,
+    p: r3(ease(p)),
+    rook,
+    captured: capPiece && capPiece.color !== m.color ? { sq: capSq, piece: capPiece, p: r3(p) } : undefined,
+  };
+}
+
+/** The king in check in a position, if any. */
+function checkSquare(fen: string): string | undefined {
+  const c = looseChess(fen);
+  if (!c.inCheck()) return undefined;
+  const turn = c.turn();
+  for (const row of c.board()) for (const sq of row) if (sq?.type === "k" && sq.color === turn) return sq.square;
+  return undefined;
+}
+
+/** An engine line ready to play: the board's material, check and the line so far in SAN, after each of its plies (index 0 = none yet). */
+interface LinePrep {
+  sl: ShownLine;
+  material: MaterialInfo[];
+  check: (string | undefined)[];
+  text: string[];
+}
+const lineCache = new WeakMap<Prep, Map<string, LinePrep | null>>();
+
+function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | null {
+  const cache = lineCache.get(prep) ?? new Map<string, LinePrep | null>();
+  lineCache.set(prep, cache);
+  const key = `${i}:${kind}`;
+  if (cache.has(key)) return cache.get(key)!;
+  const sl = shownLine(g, i, kind);
+  let out: LinePrep | null = null;
+  if (sl) {
+    const variant = variantOf(g);
+    // The real game up to where the line starts, then the line.
+    const played = g.moves.slice(0, kind === "instead" ? i : i + 1).map((m) => m.san);
+    const sans = sl.moves.map((mv) => mv.san);
+    const uci = sl.moves.map((mv) => mv.uci);
+    const ks = [...Array(sl.moves.length + 1).keys()];
+    out = {
+      sl,
+      material: ks.map((k) => materialInfo(g.startFen ?? START_FEN, [...played, ...sans.slice(0, k)], variant)),
+      check: ks.map((k) => checkSquare(k ? sl.moves[k - 1].after : sl.fen)),
+      text: ks.map((k) => pvText(sl.fen, uci, variant, k)),
+    };
+  }
+  cache.set(key, out);
+  return out;
 }
 
 /** Worth calling out: the mover is far from the truth, or has just come back to it. */
@@ -347,6 +417,51 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     v.clocks = { ...before, [m.color]: before[m.color] + Math.floor(sentAt / 1000) * 1000 };
   }
 
+  if (s.kind === "line") {
+    const m = g.moves[s.i];
+    const L = linePrep(g, prep, s.i, s.line);
+    // The last real move under the line: for "instead", the move is taken back first.
+    const real = s.line === "instead" ? s.i - 1 : s.i;
+    if (!L) v.board = settledBoard(g, prep, s.i);
+    else {
+      const { sl } = L;
+      const n = sl.moves.length;
+      const run = local - s.intro;
+      const SLIDE = 0.3;
+      // Plies on the board, the last of them possibly still sliding in.
+      const k = run < 0 ? 0 : Math.min(n, Math.floor(run / s.per) + 1);
+      const mv = sl.moves[k - 1];
+      const p = k ? clamp01((run - (k - 1) * s.per) / SLIDE) : 1;
+      let anim: BoardView["anim"];
+      if (mv && p < 1) anim = moveAnim(mv.before, mv, variantOf(g), p);
+      else if (!k && s.line === "instead" && local < SLIDE) {
+        // The move played slides back off before the line starts.
+        const a = moveAnim(m.fenBefore, m, variantOf(g), local / SLIDE);
+        anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
+      }
+      const prev = g.moves[real];
+      const score = scoreAt(g, sl.fen);
+      const evalText = formatScore(score);
+      v.board = {
+        i: real,
+        fen: mv ? mv.after : sl.fen,
+        anim,
+        lastMove: mv ? [mv.from, mv.to] : prev && [prev.from, prev.to],
+        check: L.check[k],
+        engine: true,
+        evalW: r3(score ? winPercentWhite(score) : prep.graph[real + 1]),
+        evalText,
+      };
+      v.material = L.material[k];
+      v.clocks = prep.clocks[real + 1];
+      const label = moveLabel(m.ply, m.san);
+      v.callout = { label: "🔍 Engine line", sub: s.line === "instead" ? `instead of ${label}` : `best play after ${label}`, evalText, status: true, engine: true };
+      const who = sideName(g, sl.for);
+      const tag = s.line === "instead" ? `What ${who} could have played` : sl.for === m.color ? `Why ${m.san} works` : `How ${who} could have punished it`;
+      v.engine = { tag, moves: L.text[k], caption: s.caption, p: r3(clamp01((run - (n - 1) * s.per - SLIDE - 0.15) / 0.35)) };
+    }
+  }
+
   if (s.kind === "move") {
     const m = g.moves[s.i];
     const a = m.analysis;
@@ -360,28 +475,7 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification);
     const showBest = settled && bad;
 
-    let anim: BoardView["anim"];
-    if (p < 1) {
-      const pre = fenBoard(m.fenBefore);
-      const pc = pre.get(m.from);
-      // Castling: the king lands on g/c and its rook on f/d. In Chess960 the rook starts wherever the
-      // UCI says (king-takes-rook); in standard chess it's the corner.
-      const castle = pc?.type === "k" && m.san.startsWith("O-O");
-      const rank = m.from[1];
-      const kingside = m.to[0] === "g";
-      const rookFrom = variantOf(g) === "chess960" ? m.uci.slice(2, 4) : `${kingside ? "h" : "a"}${rank}`;
-      const rook: [string, string] | undefined = castle ? [rookFrom, `${kingside ? "f" : "d"}${rank}`] : undefined;
-      const enPassant = pc?.type === "p" && m.from[0] !== m.to[0] && !pre.get(m.to);
-      const capSq = enPassant ? m.to[0] + m.from[1] : m.to;
-      const capPiece = pre.get(capSq);
-      anim = {
-        from: m.from,
-        to: m.to,
-        p: r3(ease(p)),
-        rook,
-        captured: capPiece && capPiece.color !== m.color ? { sq: capSq, piece: capPiece, p: r3(p) } : undefined,
-      };
-    }
+    const anim = p < 1 ? moveAnim(m.fenBefore, m, variantOf(g), p) : undefined;
 
     v.board = {
       i: s.i,
@@ -438,7 +532,7 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
   const files = orientation === "w" ? "abcdefgh" : "hgfedcba";
   const ranks = orientation === "w" ? "87654321" : "12345678";
   return (
-    <div className={`v-board cg-wrap ${b.illegal ? "illegal" : ""}`} style={{ width: size, height: size }}>
+    <div className={`v-board cg-wrap ${b.illegal ? "illegal" : ""} ${b.engine ? "engine" : ""}`} style={{ width: size, height: size }}>
       {b.lastMove?.map((s) => <div key={s} className="v-hl" style={box(s)} />)}
       {b.check && <div className="v-check" style={box(b.check)} />}
       {b.illegal?.sq && <div className="v-illegal-sq" style={{ ...box(b.illegal.sq), opacity: b.illegal.p }} />}
@@ -636,7 +730,7 @@ function Callout({ c, wide }: { c: NonNullable<View["callout"]>; wide: boolean }
   const meta = c.cls && CLASS_META[c.cls];
   if (c.status)
     return (
-      <div className="v-callout status">
+      <div className={`v-callout status ${c.engine ? "engine" : ""}`}>
         <div className="v-callout-main">
           <div className="v-callout-move">{c.label}</div>
           {c.sub && <div className="v-callout-sub">{c.sub}</div>}
@@ -806,7 +900,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
     </>
   );
   const turn: Color = b.fen.split(" ")[1] as Color;
-  const mat = prep.material[b.i + 1];
+  const mat = v.material ?? prep.material[b.i + 1];
   const opening = g.opening && b.i >= prep.firstOutOfBook - 1 ? g.opening.name : "";
   const card = (c: Color) => <PlayerCard g={g} color={c} material={mat} rating={ratings?.[c].before} toMove={turn === c && !b.anim} clockMs={v.clocks?.[c] ?? 0} />;
   const callout = b.illegal ? <IllegalBanner g={g} b={b} /> : v.callout ? <Callout c={v.callout} wide={wide} /> : null;
@@ -822,6 +916,16 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
         <div className="v-hook-text">{v.hook}</div>
       </div>
     ) : null;
+  // An engine line: what it is, then (once it has landed) why it's better.
+  const engine = v.engine && (
+    <div className="v-hook engine">
+      <div className="v-engine-tag">{v.engine.tag}</div>
+      <div className="v-engine-moves">{v.engine.moves || " "}</div>
+      <div className="v-hook-text" style={{ opacity: v.engine.p }}>
+        {v.engine.caption}
+      </div>
+    </div>
+  );
 
   if (wide)
     return (
@@ -846,7 +950,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
           <div className="v-line">{line}</div>
           )}
           {/* The cold open and its rewind hold the big caption where the move list and chart go. */}
-          {hook ?? (
+          {hook ?? engine ?? (
             <>
               <MoveList g={g} ply={b.i + 1} />
               <ChartLegend g={g} />
@@ -863,11 +967,13 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
         <span className="v-opening">{opening}</span>
       </div>
       <div className="v-p-callout">{callout}</div>
-      {!hook && <div className="v-p-line v-line">{line}</div>}
-      {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead. */}
-      <div className={`v-p-caption ${hook ? "hooked" : ""}`}>
+      {!hook && !engine && <div className="v-p-line v-line">{line}</div>}
+      {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead (and an engine line's box during one). */}
+      <div className={`v-p-caption ${hook || engine ? "hooked" : ""}`}>
         {hook ? (
           hook
+        ) : engine ? (
+          engine
         ) : (
           <div className="v-p-chart">
             <ChartLegend g={g} />
@@ -1160,6 +1266,11 @@ function Thumbnail({ g, prep }: { g: Game; prep: Prep }) {
 /* ------------------------------ ratings at the time of the game ------------------------------ */
 
 async function loadRatings(g: Game): Promise<Ratings> {
+  // Saved when the game was rated, so games played since never move them.
+  const before = g.ratingBefore;
+  const change = g.ratingChange;
+  if (before && change) return { w: { before: before.w, after: before.w + change.w }, b: { before: before.b, after: before.b + change.b } };
+  // A game from before that was saved: worked back from today's ratings.
   const lobby = await api<Lobby>("/api/lobby");
   const out = {} as NonNullable<Ratings>;
   for (const c of ["w", "b"] as Color[]) {
@@ -1167,7 +1278,8 @@ async function loadRatings(g: Game): Promise<Ratings> {
     const p = lobby.players.find((x) => x.id === ref.id);
     if (!p) return null;
     // Undo every rating change from games that finished after this one.
-    const others = lobby.games.filter((s) => s.id !== g.id && s.phase === "finished" && (s.white.id === ref.id || s.black.id === ref.id));
+    // Every rated game counts, including ones still in their post-game (rated the moment they ended).
+    const others = lobby.games.filter((s) => s.id !== g.id && s.result && (s.white.id === ref.id || s.black.id === ref.id));
     let after = p.rating;
     for (const s of others) {
       const full = await api<Game>(`/api/games/${s.id}`);
@@ -1182,7 +1294,7 @@ async function loadRatings(g: Game): Promise<Ratings> {
 
 declare global {
   interface Window {
-    __video?: { ready: boolean; duration: number; scenes: Scene[]; fps: number; seek: (t: number) => string; settle: () => Promise<void> };
+    __video?: { ready: boolean; duration: number; scenes: Scene[]; cues: SfxCue[]; fps: number; seek: (t: number) => string; settle: () => Promise<void> };
   }
 }
 
@@ -1234,6 +1346,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   const pace = Number(query.get("pace")) || 1;
   const tl = useMemo(() => game && voice && buildTimeline(game, format, { thoughts, pace, voice }), [game, format, thoughts, pace, voice]);
   const prep = useMemo(() => game && prepare(game), [game]);
+  const cues = useMemo(() => game && tl && sfxCues(tl, game), [game, tl]);
   const ready = !!(game && tl && prep && ratings !== undefined && rival !== undefined);
   const v = ready ? derive(game!, tl!, prep!, Math.min(t, tl!.duration - 1e-3)) : null;
   if (v) keyRef.current = JSON.stringify(v);
@@ -1245,6 +1358,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       ready: true,
       duration: tl!.duration,
       scenes: tl!.scenes,
+      cues: cues!,
       fps: 30,
       seek: (time) => {
         flushSync(() => setT(time));
@@ -1255,7 +1369,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
     return () => {
       delete window.__video;
     };
-  }, [ready, tl]);
+  }, [ready, tl, cues]);
 
   // Preview playback.
   useEffect(() => {
@@ -1300,6 +1414,16 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
     };
     // A new scene, play/pause or a seek starts or stops a line; time running on within the scene doesn't.
   }, [sceneIdx, playing, tl, render, seeks]);
+
+  // ...and its sound effects, the ones the render mixes in, as the clock passes them. A jump (a seek)
+  // plays nothing for the stretch it skipped.
+  const cueFrom = useRef(t);
+  useEffect(() => {
+    const from = cueFrom.current;
+    cueFrom.current = t;
+    if (render || !playing || !cues || t <= from || t - from > 0.5) return;
+    for (const c of cues) if (c.t > from && c.t <= t) playSfx(c.ev, c.gain);
+  }, [t]);
 
   const [win, setWin] = useState({ w: innerWidth, h: innerHeight });
   useEffect(() => {

@@ -42,7 +42,7 @@ import { summonAvailable, triggerOrchestrator } from "./summon";
 import { gameToPgn } from "./pgn";
 import { loadOpenings } from "./openings";
 import { Engine, SupersededError } from "./engine";
-import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
+import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
 import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, scoresChanged, setGameSource, viewerInfo } from "./predictions";
 import { acceptSeq, ingest, mirrorPublicStatus, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
@@ -69,6 +69,11 @@ function startLocal() {
       touch(g);
     }
     if (retry) g.review = null;
+    // A review is a pure summary of the verdicts, so stored ones are refreshed to the current scoring.
+    if (g.review) {
+      const review = { w: reviewSide(g, "w"), b: reviewSide(g, "b") };
+      if (JSON.stringify(review) !== JSON.stringify(g.review)) (g.review = review), touch(g);
+    }
     if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
   setInterval(tick, 1000);
@@ -532,6 +537,7 @@ app.get(
     // ?redo=1 throws the current plan away so a new director can make another.
     if (req.query.redo && g.video) {
       delete g.video;
+      g.videoRedos = (g.videoRedos ?? 0) + 1;
       saveGameNow(g);
       touch(g);
     }
@@ -961,7 +967,7 @@ app.post(
     const want = req.body?.formats;
     const formats = (Array.isArray(want) ? want : ["landscape", "portrait"]).filter((f: string): f is RenderFormat => f === "landscape" || f === "portrait");
     if (!formats.length) throw new ActionError('formats must include "landscape" and/or "portrait".');
-    await startRender(id, formats, req.body?.music ? String(req.body.music) : null, req.body?.voices !== false).catch((e) => {
+    await startRender(id, formats, req.body?.music ? String(req.body.music) : null, req.body?.voices !== false, req.body?.redirect === true).catch((e) => {
       throw new ActionError(e.message);
     });
     return renderState(id);

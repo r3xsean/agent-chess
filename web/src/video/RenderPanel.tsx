@@ -96,10 +96,18 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
     return () => clearInterval(timer);
   }, [gameId, busy]);
 
-  const render = async () => {
+  /** `redirect`: a new director makes a new plan first (the current one is thrown away). */
+  const render = async (redirect = false) => {
     setError("");
+    if (
+      redirect &&
+      !confirm(
+        "Throw away the director's plan and summon a new director? It picks new moments and quotes, so new voice lines get recorded. If no director answers, the current plan is kept.",
+      )
+    )
+      return;
     try {
-      const s = await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null, voices: !silent });
+      const s = await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null, voices: !silent, redirect });
       // The job this click started counts as watched even if it already ended (a fast failure).
       const last = s.jobs.at(-1);
       if (last) watched.current.add(last.id);
@@ -171,9 +179,15 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
         </label>
       </div>
 
-      <button className="rp-go" onClick={render} disabled={busy || !formats.length}>
-        {busy ? "Rendering…" : "Render"}
+      <button className="rp-go" onClick={() => render()} disabled={busy || !formats.length}>
+        {busy ? "Rendering…" : state?.videos.length ? "Render again (same plan)" : "Render"}
       </button>
+      {/* The whole process again from the director's plan: to re-cut a video, or get a plan with newer features. */}
+      {state?.directed && state.summonAvailable && (
+        <button className="rp-redo" onClick={() => render(true)} disabled={busy || !formats.length}>
+          {state.videos.length ? "Re-render from scratch (new director)" : "Redo the director, then render"}
+        </button>
+      )}
 
       {job && (
         <div className={`rp-job ${job.status}`}>

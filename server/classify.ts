@@ -1,6 +1,7 @@
 import type { Move } from "chess.js";
 import type { Classification, Color, Game, MoveAnalysis, MoveRecord, PositionAnalysis, Score, SideReview } from "../shared/types";
-import { moveAccuracy, scoreToCp, scoreToPawns, winPercentFor, winPercentWhite } from "../shared/evalmath";
+import { moveAccuracy, scoreToCp, winPercentFor, winPercentWhite } from "../shared/evalmath";
+import { selfScore } from "../shared/belief";
 import { isTheory } from "./openings";
 import { isBrilliantMove, isGreatMove, type MoveContext } from "./wintr";
 import { looseChess, newRules, type Variant } from "../shared/rules";
@@ -146,8 +147,9 @@ export function reviewSide(game: Game, color: Color): SideReview {
   const acpl = scored.length ? scored.reduce((a, m) => a + Math.min(m.analysis!.cpLoss, 1000), 0) / scored.length : 0;
   const estElo = scored.length ? Math.round(Math.max(100, Math.min(3200, 3100 * Math.exp(-0.01 * acpl))) / 25) * 25 : null;
   const withSelf = mine.filter((m) => m.selfEval !== null);
+  // Measured in winning chances, like the verdicts: +6 against +10 is a small miss, 0.0 against +4 a big one.
   const selfEvalError = withSelf.length
-    ? Math.round((withSelf.reduce((a, m) => a + Math.abs(Math.max(-10, Math.min(10, m.selfEval!)) - scoreToPawns(m.analysis!.evalAfter)), 0) / withSelf.length) * 100) / 100
+    ? Math.round((withSelf.reduce((a, m) => a + Math.abs(winPercentWhite(selfScore(m)!) - winPercentWhite(m.analysis!.evalAfter)), 0) / withSelf.length) * 10) / 10
     : null;
   return { accuracy: gameAccuracy(game, color), estElo, counts, selfEvalError };
 }

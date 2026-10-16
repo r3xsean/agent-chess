@@ -6,7 +6,7 @@
 // The server must be running with a fresh build (dist/). The video page at #/video/<id> lays out
 // every frame as a pure function of time; this script seeks it frame by frame in headless Chrome and
 // pipes the screenshots into ffmpeg. Then it builds the sound: effects from vendor/sfx/ timed to the
-// timeline (see sfxCues), over a music bed that dips under them. With no --music it uses the first
+// timeline (sfxCues in web/src/video/timeline.ts, read from the page), over a music bed that dips under them. With no --music it uses the first
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
 // --package redoes just the YouTube upload text and thumbnail (after a change to the plan's packaging or chapters).
@@ -81,43 +81,14 @@ function run(cmd, argv, input) {
 const SFX_DIR = resolve("vendor/sfx");
 /** Seconds into a voiced scene that its line starts (web/src/video/timeline.ts VOICE_AT). */
 const VOICE_AT = 0.3;
-const STINGS = { brilliant: ["brilliant", 1], great: ["great", 0.9], blunder: ["blunder", 1], mistake: ["mistake", 0.9], miss: ["mistake", 0.9], inaccuracy: ["inaccuracy", 0.7] };
-
 /**
- * When each sound plays. Every move gets a quiet board sound; only the director's key moments get
- * the loud ones (verdict stings), plus the thinking pop, illegal attempts and the scene changes.
+ * What the soundtrack plays: each speaker's recorded line (thinking, interviews, flashbacks) at the offset
+ * the timeline allows for, and the sound effects, which the page cues itself (sfxCues in
+ * web/src/video/timeline.ts, which the site's preview plays too).
  */
-function sfxCues(scenes, g) {
-  const cues = [];
-  const at = (t, ev, gain) => cues.push({ t, ev, gain });
-  for (const s of scenes) {
-    // The speaker's recorded line (thinking, interviews, flashbacks), at the offset the timeline allows for.
-    if (s.voice) cues.push({ t: s.start + VOICE_AT, file: `${SERVER}${s.voice.url}`, rate: s.voice.rate, gain: 1 });
-    if (s.kind === "versus") at(s.start + 0.25, "versus", 0.8);
-    else if (s.kind === "interview" || s.kind === "end" || s.kind === "flashback") at(s.start, "transition", 0.35);
-    else if (s.kind === "rewind") at(s.start, "transition", 0.6);
-    else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
-    else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
-    else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);
-    else if (s.kind === "resign") at(s.start + 0.1, "resign", 0.9);
-    else if (s.kind === "result") {
-      at(s.start, "transition", 0.35);
-      if (g.result !== "1/2-1/2") at(s.start + 0.3, "victory", 0.8);
-    } else if (s.kind === "move") {
-      const m = g.moves[s.i];
-      const land = s.start + s.anim - 0.02;
-      const gain = s.key ? 0.9 : 0.55;
-      const castle = m.san.startsWith("O-O");
-      at(land, m.san.includes("x") ? "capture" : "move", gain);
-      if (castle) at(land + 0.1, "move", gain * 0.8);
-      if (m.san.includes("=")) at(land + 0.05, "promotion", gain);
-      if (m.san.includes("#")) at(land + 0.05, "checkmate", 1);
-      else if (m.san.includes("+")) at(land, "check", gain * 0.8);
-      const sting = s.key && STINGS[m.analysis?.classification];
-      if (sting) at(land + 0.1, sting[0], sting[1]);
-    }
-  }
-  return cues;
+function soundCues(scenes, effects) {
+  const voices = scenes.filter((s) => s.voice).map((s) => ({ t: s.start + VOICE_AT, file: `${SERVER}${s.voice.url}`, rate: s.voice.rate, gain: 1 }));
+  return [...voices, ...effects];
 }
 
 /** A sound as raw stereo samples; `tempo` speeds it up without changing its pitch (the short's quicker voices). */
@@ -283,6 +254,7 @@ try {
     await page.evaluate(() => document.fonts.ready);
     const duration = await page.evaluate(() => window.__video.duration);
     const scenes = await page.evaluate(() => window.__video.scenes);
+    const effects = await page.evaluate(() => window.__video.cues);
     if (packageOnly) {
       await page.close();
       if (format === "landscape") await writePackaging(scenes, duration);
@@ -355,7 +327,7 @@ try {
 
     // Effects and voices share one track (so the music ducks under both); --sfx off drops only the effects.
     const sfxOn = opt("sfx", "on") !== "off";
-    const cues = sfxCues(scenes, game).filter((q) => sfxOn || q.file);
+    const cues = soundCues(scenes, sfxOn ? effects : []);
     let sfx = null;
     if (cues.length) {
       sfx = `${out}.sfx.wav`;

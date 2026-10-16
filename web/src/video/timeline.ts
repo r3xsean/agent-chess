@@ -1,6 +1,7 @@
 import type { Classification, Color, Game } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
 import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
+import { shownLine, type LineKind } from "../../../shared/engineLine";
 
 export type Format = "landscape" | "portrait";
 export const FRAME: Record<Format, { w: number; h: number }> = {
@@ -17,6 +18,8 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   /** Attempt n of move i, made before it. */
   | { kind: "illegal"; i: number; n: number; attempt: string }
   | { kind: "move"; i: number; anim: number; key: boolean; hook?: string }
+  /** An engine line played out after move i (see shared/engineLine.ts): `intro`, then `per` seconds for each of its moves (`sans`), then a hold on its caption. */
+  | { kind: "line"; i: number; line: LineKind; caption: string; intro: number; per: number; sans: string[] }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
   /** A pre-game line replayed right after move i, the one that proves it wrong (or right). */
@@ -133,6 +136,16 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const hold = key ? 2.5 : cls === "book" ? (wide ? 0.6 : 0.35) : wide ? 1.2 : 0.6;
     push({ kind: "move", i, anim, key, dur: anim + hold + (last ? 1 : 0) });
 
+    // The engine line the director asked for: what didn't happen, played out, then why it's better.
+    const ask = picked?.line;
+    const ln = ask && shownLine(g, i, ask.kind);
+    if (ask && ln) {
+      const caption = ask.caption ?? ln.caption;
+      const intro = 0.8 / pace;
+      const per = (wide ? 0.8 : 0.65) / pace;
+      push({ kind: "line", i, line: ln.kind, caption, intro, per, sans: ln.moves.map((mv) => mv.san), dur: intro + ln.moves.length * per + Math.max(2.2, 0.6 + read(caption)) });
+    }
+
     // Draw offers get their own beat, with the answer: declined if the game went on.
     if (m.offeredDraw) {
       const answer = !last ? "declined" : g.termination === "draw agreed" ? "accepted" : "open";
@@ -156,6 +169,64 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   push({ kind: "end", dur: 2.5 });
 
   return { format, scenes, duration: t, directed: !!plan };
+}
+
+/** A sound effect at a moment of the video: one of vendor/sfx's events (`<ev>_<n>.ogg`, variants rotating), at a gain. */
+export interface SfxCue {
+  t: number;
+  ev: string;
+  gain: number;
+}
+
+const STINGS: Partial<Record<Classification, [string, number]>> = {
+  brilliant: ["brilliant", 1],
+  great: ["great", 0.9],
+  blunder: ["blunder", 1],
+  mistake: ["mistake", 0.9],
+  miss: ["mistake", 0.9],
+  inaccuracy: ["inaccuracy", 0.7],
+};
+
+/**
+ * When each sound effect plays, for the render's soundtrack and the preview alike. Every move gets a
+ * quiet board sound; only the key moments get the loud ones (verdict stings), plus the thinking pop,
+ * illegal attempts and the scene changes. (The voices are cued from the scenes themselves.)
+ */
+export function sfxCues(tl: Timeline, g: Game): SfxCue[] {
+  const cues: SfxCue[] = [];
+  const at = (t: number, ev: string, gain: number) => cues.push({ t, ev, gain });
+  const board = (land: number, san: string, gain: number) => {
+    at(land, san.includes("x") ? "capture" : "move", gain);
+    if (san.startsWith("O-O")) at(land + 0.1, "move", gain * 0.8);
+    if (san.includes("=")) at(land + 0.05, "promotion", gain);
+    if (san.includes("#")) at(land + 0.05, "checkmate", 1);
+    else if (san.includes("+")) at(land, "check", gain * 0.8);
+  };
+  for (const s of tl.scenes) {
+    if (s.kind === "versus") at(s.start + 0.25, "versus", 0.8);
+    else if (s.kind === "interview" || s.kind === "end" || s.kind === "flashback") at(s.start, "transition", 0.35);
+    else if (s.kind === "rewind") at(s.start, "transition", 0.6);
+    else if (s.kind === "line") {
+      // An engine line: a scene change, then quieter board sounds for its moves (each lands 0.3 s into its slot).
+      at(s.start, "transition", 0.5);
+      s.sans.forEach((san, k) => board(s.start + s.intro + k * s.per + 0.28, san, 0.5));
+    } else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
+    else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
+    else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);
+    else if (s.kind === "resign") at(s.start + 0.1, "resign", 0.9);
+    else if (s.kind === "result") {
+      at(s.start, "transition", 0.35);
+      if (g.result !== "1/2-1/2") at(s.start + 0.3, "victory", 0.8);
+    } else if (s.kind === "move") {
+      const m = g.moves[s.i];
+      const land = s.start + s.anim - 0.02;
+      board(land, m.san, s.key ? 0.9 : 0.55);
+      const cls = m.analysis?.classification;
+      const sting = s.key && cls ? STINGS[cls] : undefined;
+      if (sting) at(land + 0.1, sting[0], sting[1]);
+    }
+  }
+  return cues;
 }
 
 /** The scene playing at time t (clamped to the video). */

@@ -8,6 +8,7 @@ import { LATE_INTERVIEW_CHARS, videoLines, voiceOf } from "../shared/videoLines"
 import { describePlayer, pvSan } from "./briefing";
 import { variantOf } from "../shared/rules";
 import { ActionError } from "./game";
+import { lineOptions, shownLine } from "../shared/engineLine";
 
 /*
  * After the game the broadcaster turns video director: it reads the whole game and picks the
@@ -44,6 +45,9 @@ export function directorBrief(g: Game): string {
     `Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.`,
     ...(human ? [`${name(human)} is a human: their moves come without commentary, so moments on their moves have no quote (the board, the verdict and the agent's reaction tell those).`] : []),
     `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
+    ...(g.ratingBefore && g.ratingChange
+      ? [`Ratings (the video shows these): ${(["w", "b"] as Color[]).map((c) => `${name(c)} ${g.ratingBefore![c]} → ${g.ratingBefore![c] + g.ratingChange![c]}`).join(", ")}.`]
+      : []),
     ...historyLines(g),
     g.review ? `Accuracy: White ${g.review.w.accuracy ?? "—"}, Black ${g.review.b.accuracy ?? "—"}.` : "",
     "",
@@ -73,6 +77,7 @@ export function directorBrief(g: Game): string {
       if (prev && cls && SWING.includes(cls))
         out.push(`  ${back === 1 ? "answers" : "reacts to"} ${moveNo(prev.ply)} ${prev.san} (${cls}, ply ${prev.ply}): ${back === 1 ? "the punishment, or the miss" : `${name(m.color)}'s first words after it`}`);
     }
+    for (const l of lineOptions(g, i)) out.push(`  line option "${l.kind}": ${l.moves.map((mv) => mv.san).join(" ")} → ${l.fact}`);
     if (m.illegalAttempts.length) out.push(`  tried illegal moves first: ${m.illegalAttempts.join(", ")}`);
     if (m.offeredDraw) out.push(`  offered a draw with this move`);
     if (m.commentary.trim()) out.push(`  commentary: ${m.commentary.trim()}`);
@@ -94,6 +99,7 @@ export function directorBrief(g: Game): string {
             quote: "…exact sentences from that move's commentary…",
             delivery: "calm, quietly pleased with itself",
             chapter: "The rook that couldn't escape",
+            line: { kind: "after", caption: "Bd1 shuts the rook in, and it falls two moves later" },
           },
         ],
         interviewLines: { pre: { w: "…", b: "…" }, post: { w: "…", b: "…" } },
@@ -117,6 +123,8 @@ export function directorBrief(g: Game): string {
     "- Choosing the quote: read the whole commentary, not just its opening sentence. Pick the sentences that show what the player felt, believed, planned or feared. The best ones are confident predictions that turn out wrong, plans that are about to fail, a trap they're proud of, and the first words after a shock. Avoid sentences that only describe the move or list recaptures, unless they're about to be proven wrong.",
     "- delivery (optional, on any quote, the hook and interviewDelivery): how the voice actor should say it, in at most 6 words, no brackets: \"smug, unbothered\", \"stunned, then quietly deflated\", \"nervous, talking fast\". You know what happens next and the player doesn't, so play the irony: a doomed move said with total confidence lands harder than one said worriedly. Leave it out when a neutral read is right.",
     "- chapter (importance 2–3 only, optional): a YouTube chapter title for this moment, at most 6 words, written like a story beat (\"The pawn fork nobody saw\"), not notation. Chapters show on the progress bar and in search before anyone presses play, so none may give away how the game ends: \"The fork\", not \"The fork that saved Astra\" or \"The winning blow\".",
+    "- line (optional): play an engine line out on the board right after this move, then hold on your `caption`. Use it where the viewer has to see what didn't happen to understand the moment: `instead` plays what the engine wanted in place of this move (what a miss missed, what a blunder should have been); `after` plays the engine's best play from the position this move left, for when the game went another way (the punishment the reply didn't find, or the point of a brilliant or great move that never got played out). Only the options listed under a move as `line option` exist. A blunder's `after` and the reply's `instead` are often the same line: show it once, on whichever moment tells the story better. Pick the few that add the most, usually 2–5 in a game and often on the headline moments; a game without any is fine. Each one costs the viewer a few seconds, and in the TikTok cut only importance 2–3 moments show theirs.",
+    "- line.caption (optional, one line, at most 14 words): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff: usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
     "- callback (optional): a pre-game line that the game proves wrong (or spectacularly right), replayed as a flashback right after the move that settles it. `line` is quoted exactly from that player's pre-game interview (at most 30 words); `ply` is the move that pays it off and must be one of your importance 2–3 moments. Only use it when the irony is real.",
@@ -181,7 +189,8 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
     if (!why) throw new ActionError(`${where}: say why it matters.`);
     const thought = moveQuote(g, m, x.quote ?? x.thought, where, 70, 60, 480);
     const chapter = text(x.chapter, `${where}.chapter`, 60);
-    return { ply, why, importance: importance as 1 | 2 | 3, thought, delivery: delivery(x.delivery, `${where}.delivery`), chapter };
+    const line = lineChoice(g, g.moves.indexOf(m), x.line, where);
+    return { ply, why, importance: importance as 1 | 2 | 3, thought, delivery: delivery(x.delivery, `${where}.delivery`), chapter, ...(line && { line }) };
   });
   moments.sort((a, b) => a.ply - b.ply);
   if (moments.filter((m) => m.importance >= 2).length < 2) throw new ActionError("Give at least a few moments importance 2 or 3 — the short video only shows those.");
@@ -291,6 +300,18 @@ function text(raw: unknown, where: string, maxChars: number, required = false): 
   }
   if (s.length > maxChars) throw new ActionError(`${where} is ${s.length} characters; keep it under ${maxChars}.`);
   return s;
+}
+
+/** The engine line a moment plays after its move: one the brief offered for that move, with an optional caption. */
+function lineChoice(g: Game, i: number, raw: unknown, where: string): VideoMoment["line"] {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const r = raw as any;
+  const kind = typeof raw === "string" ? raw : r?.kind;
+  if (kind !== "instead" && kind !== "after") throw new ActionError(`${where}.line.kind must be "instead" or "after".`);
+  if (!shownLine(g, i, kind)) throw new ActionError(`${where}.line: ply ${g.moves[i].ply} has no "${kind}" line to show. Only the \`line option\`s listed under a move exist.`);
+  const caption = typeof raw === "string" ? undefined : text(r.caption, `${where}.line.caption`, 120);
+  if (caption && words(caption) > 16) throw new ActionError(`${where}.line.caption is ${words(caption)} words; keep it to at most 14.`);
+  return caption ? { kind, caption } : { kind };
 }
 
 /** A delivery direction for the voice: a few words, no brackets (the voice engine adds its own). */

@@ -2,14 +2,17 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { DATA, ROOT } from "./paths";
-import { games } from "./store";
+import { games, saveGameNow } from "./store";
+import { touch } from "./game";
+import type { VideoPlan } from "../shared/types";
 import { needsDirection } from "./director";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { voiceGame } from "./voice";
 
 /*
  * Video renders started from the website. One render runs at a time; the rest queue. A game with no
- * director's plan gets a director summoned first (through the T3 webhook), and the render waits for it.
+ * director's plan gets a director summoned first (through the T3 webhook), and the render waits for it;
+ * a redo throws the plan away first, so a new director makes another.
  */
 
 export type RenderFormat = "landscape" | "portrait";
@@ -77,24 +80,56 @@ function update(job: RenderJob, patch: Partial<RenderJob>) {
   Object.assign(job, patch);
 }
 
-export async function startRender(gameId: string, formats: RenderFormat[], music: string | null, voices = true): Promise<RenderJob> {
+/** Plans thrown away for a redo, kept until the new director delivers in case it never does. */
+const replaced = new Map<string, VideoPlan>();
+
+/** The redo's director never came: the plan it was replacing goes back (unless a new one arrived after all). */
+function restorePlan(gameId: string): boolean {
+  const prev = replaced.get(gameId);
+  replaced.delete(gameId);
+  const g = games.get(gameId);
+  if (!prev || !g || g.video) return false;
+  g.video = prev;
+  saveGameNow(g);
+  touch(g);
+  return true;
+}
+
+/**
+ * Queue a render. `redirect`: throw the director's plan away and summon a new director first (to re-cut a
+ * video, or to get a plan made with features the old director didn't have).
+ */
+export async function startRender(gameId: string, formats: RenderFormat[], music: string | null, voices = true, redirect = false): Promise<RenderJob> {
   const g = games.get(gameId);
   if (!g) throw new Error("No such game.");
   if (g.phase !== "finished") throw new Error("The game isn't finished yet.");
   if (music && !musicTracks().includes(music)) throw new Error(`No such track in vendor/music: ${music}`);
   const active = jobs.find((j) => j.gameId === gameId && !["done", "failed"].includes(j.status));
   if (active) return active;
+  if (redirect && g.video) {
+    if (!summonAvailable()) throw new Error("No T3 webhook configured, so no director can be summoned to redo the plan.");
+    replaced.set(gameId, g.video);
+    delete g.video;
+    g.videoRedos = (g.videoRedos ?? 0) + 1;
+    saveGameNow(g);
+    touch(g);
+  }
 
   const job: RenderJob = { id: `${gameId}-${Date.now().toString(36)}`, gameId, formats, music, voices, status: "queued", stage: "Queued", progress: 0, createdAt: Date.now() };
   jobs.push(job);
   if (needsDirection(g)) {
+    // Without a director the render goes on: with the old plan on a redo, otherwise the automatic picks.
+    const fallback = (why: string) => update(job, { status: "queued", stage: "Queued", note: `${why}; ${restorePlan(gameId) ? "keeping the previous plan" : "using the automatic picks"}.` });
     if (summonAvailable()) {
-      update(job, { status: "waiting-director", stage: "Summoning the video director…" });
+      update(job, { status: "waiting-director", stage: redirect ? "Summoning a new video director…" : "Summoning the video director…" });
       triggerOrchestrator({ action: "direct-video", gameId })
         .then(() => update(job, { stage: "Waiting for the director to pick the moments…" }))
-        .catch((e) => update(job, { status: "queued", stage: "Queued", note: `Couldn't summon a director (${e.message}); using the automatic picks.` }));
+        .catch((e) => {
+          fallback(`Couldn't summon a director (${e.message})`);
+          pump();
+        });
       setTimeout(() => {
-        if (job.status === "waiting-director") update(job, { status: "queued", stage: "Queued", note: "The director didn't answer in time; using the automatic picks." });
+        if (job.status === "waiting-director") fallback("The director didn't answer in time");
         pump();
       }, DIRECTOR_WAIT_MS);
     } else update(job, { note: "No T3 webhook configured, so no director; using the automatic picks." });
@@ -105,6 +140,7 @@ export async function startRender(gameId: string, formats: RenderFormat[], music
 
 /** The director saved its plan: release the renders that were waiting for it. */
 export function directorDone(gameId: string) {
+  replaced.delete(gameId);
   for (const j of jobs) if (j.gameId === gameId && j.status === "waiting-director") update(j, { status: "queued", stage: "Queued" });
   pump();
 }

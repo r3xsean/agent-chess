@@ -125,12 +125,12 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
             {rv?.[c].estElo ?? "–"}
           </div>
         ))}
-        <div className="lbl" title="Average gap between the player's own eval and Stockfish's, in pawns">
+        <div className="lbl" title="Average gap between the player's own winning chances and Stockfish's, in percentage points">
           Self-eval error
         </div>
         {(["w", "b"] as Color[]).map((c) => (
           <div key={c} className="val" style={{ color: selfColors[c] }}>
-            {rv?.[c].selfEvalError != null ? `±${rv[c].selfEvalError!.toFixed(2)}` : "–"}
+            {rv?.[c].selfEvalError != null ? `±${rv[c].selfEvalError!.toFixed(1)}%` : "–"}
           </div>
         ))}
         <div className="lbl">Arena rating</div>
