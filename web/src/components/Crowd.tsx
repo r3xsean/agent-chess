@@ -61,6 +61,8 @@ export function CrowdPanel({
   ];
   const mover = (game.moves[game.moves.length - 1]?.fenAfter ?? game.startFen ?? START_FEN).split(" ")[1] as Color;
   const you = crowd.you;
+  // The prediction desk may hear of a move a moment after this page shows it (on the local site): no guessing a move you've seen.
+  const moveOpen = crowd.open.move && crowd.move.ply === game.moves.length + 1;
 
   return (
     <div className="crowd">
@@ -133,7 +135,7 @@ export function CrowdPanel({
         </div>
       </div>
 
-      {(crowd.open.move || crowd.lastMove) && (
+      {(moveOpen || crowd.lastMove) && (
         <div className="crowd-block">
           <div className="crowd-title">
             Next move <span className="muted">{crowd.points.move} pts per correct guess</span>
@@ -145,7 +147,7 @@ export function CrowdPanel({
               {crowd.lastMove.mine === false && <span className="muted"> · you missed</span>}
             </div>
           )}
-          {crowd.open.move &&
+          {moveOpen &&
             (guessing ? (
               <div className="crowd-arm on">
                 🎯 Play {sideName(game, mover)}'s next move on the board…
@@ -167,7 +169,7 @@ export function CrowdPanel({
                 </button>
               </div>
             ))}
-          {crowd.open.move && crowd.move.total > 0 && (
+          {moveOpen && crowd.move.total > 0 && (
             <div className="crowd-top">
               {crowd.move.mine ? (
                 crowd.move.top.map((t) => (

@@ -42,7 +42,7 @@ import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
 import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, scoresChanged, setGameSource, viewerInfo } from "./predictions";
-import { acceptSeq, ingest, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
+import { acceptSeq, ingest, mirrorPublicStatus, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
 setGameSource(() => games.values());
@@ -172,16 +172,29 @@ function openStream(req: Request, res: Response): ((data: string) => void) | nul
 }
 
 /** One serialisation per change, shared by every stream of the same thing: keyed by how many changes it has seen. */
-const revisions = new Map<string, number>();
+const revisions = new Map<string, { rev: number; subscribers: number; bump: () => void }>();
 const serialized = new Map<string, { rev: number; data: string }>();
-function trackRevisions(event: string) {
-  if (revisions.has(event)) return;
-  revisions.set(event, 0);
-  // Registered before any stream's own listener, so a stream always serialises the newest revision.
-  bus.prependListener(event, () => revisions.set(event, (revisions.get(event) ?? 0) + 1));
+/** Count changes to an event while anyone streams it; the returned function unsubscribes (freeing it with the last). */
+function trackRevisions(event: string): () => void {
+  let r = revisions.get(event);
+  if (!r) {
+    const entry = { rev: 0, subscribers: 0, bump: () => entry.rev++ };
+    r = entry;
+    revisions.set(event, r);
+    // Registered before any stream's own listener, so a stream always serialises the newest revision.
+    bus.prependListener(event, r.bump);
+  }
+  r.subscribers++;
+  const tracked = r;
+  return () => {
+    if (--tracked.subscribers > 0) return;
+    bus.off(event, tracked.bump);
+    revisions.delete(event);
+    serialized.delete(event);
+  };
 }
 function shared(event: string, payload: () => unknown): string {
-  const rev = revisions.get(event) ?? 0;
+  const rev = revisions.get(event)?.rev ?? 0;
   const hit = serialized.get(event);
   if (hit && hit.rev === rev) return hit.data;
   const data = `data: ${JSON.stringify(payload())}\n\n`;
@@ -269,7 +282,7 @@ function gameSummary(g: Game) {
 function sse(req: Request, res: Response, event: string, payload: () => unknown) {
   const write = openStream(req, res);
   if (!write) return;
-  trackRevisions(event);
+  const untrack = trackRevisions(event);
   let timer: NodeJS.Timeout | null = null;
   const send = () => {
     if (timer) return;
@@ -285,6 +298,7 @@ function sse(req: Request, res: Response, event: string, payload: () => unknown)
     clearInterval(ping);
     if (timer) clearTimeout(timer);
     bus.off(event, send);
+    untrack();
   });
 }
 
@@ -370,6 +384,9 @@ app.get("/api/games/:id/crowd/stream", (req, res) => {
 });
 
 /* ------------------------------ the mirror's inbox ------------------------------ */
+
+// Lets the local server notice a mirror whose storage was replaced (its epoch changes), even when idle.
+app.get("/api/mirror/status", handle(() => (PUBLIC_MODE ? mirrorPublicStatus() : { epoch: null })));
 
 const MIRROR_SECRET = process.env.MIRROR_SECRET ?? "";
 function mirrorAuthorized(req: Request) {

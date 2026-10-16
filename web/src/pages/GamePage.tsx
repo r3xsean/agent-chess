@@ -377,7 +377,7 @@ export function GamePage({ id }: { id: string }) {
   /** A move the viewer played on the board: extends their analysis (or starts one from the shown position). */
   const onUserMove = (from: string, to: string, promotion?: string) => {
     // Guessing the next move: the move becomes your prediction, and the board goes back to the game.
-    if (guessing && isLive && viewer && crowdBase !== null) {
+    if (guessing && isLive && viewer && crowdBase !== null && crowd?.move.ply === total + 1) {
       setGuessing(false);
       setBoardNonce((n) => n + 1);
       crowdApi(crowdBase, `/api/games/${game.id}/predict`, { viewer: viewer.id, kind: "move", pick: from + to + (promotion ?? (newRules(view.fen, variant).moves().some((m) => m.from === from && m.promotion) ? "q" : "")) }).catch(

@@ -47,8 +47,7 @@ export function mirrorConfig(): MirrorConfig | null {
 export interface SyncBatch {
   /** Increases with every batch the local server sends, so a late, stale batch can't overwrite a newer one. */
   seq?: number;
-  /** The local server's clock when it sent the batch: lets the mirror line move times up with its own clock. */
-  sentAt?: number;
+
   games?: Game[];
   /** On a full sync: every game id that exists, so the mirror can drop any it has that we don't. */
   allGameIds?: string[];
@@ -86,6 +85,7 @@ export function startMirror() {
   queueEverything();
   memoryEvents.on("journal", (id: string) => (pendingJournals.add(id), mirrorChanged()));
   memoryEvents.on("lessons", (model: string) => (pendingLessons.add(model), mirrorChanged()));
+  setInterval(heartbeat, 60_000).unref();
   schedule(500);
 }
 
@@ -109,11 +109,37 @@ export function mirrorChanged(g?: Game) {
   if (!cfg) return;
   if (g) pendingGames.add(g.id);
   pendingMeta = true;
-  schedule(1500);
+  // Moves go out fast: the mirror's prediction cut-off is when it hears of them.
+  schedule(g ? 300 : 1500);
 }
 
+/** Even when nothing changes, check now and then that the mirror still has its storage (a wiped volume needs everything again). */
+async function heartbeat() {
+  if (!cfg || inFlight || !mirrorEpoch) return;
+  try {
+    const r = await fetch(`${cfg.url}/api/mirror/status`, { signal: AbortSignal.timeout(15_000) });
+    const s = (await r.json()) as { epoch?: string };
+    if (s.epoch && s.epoch !== mirrorEpoch) {
+      console.log("[mirror] the mirror's storage was reset: sending everything again");
+      mirrorEpoch = s.epoch;
+      sent.clear();
+      fullSyncDone = false;
+      queueEverything();
+      schedule(200);
+    }
+  } catch {
+    // Unreachable for now; the next push or heartbeat tries again.
+  }
+}
+
+let timerDue = 0;
+/** Push in `ms` — or sooner, if a push is already due sooner. */
 function schedule(ms: number) {
-  if (timer || inFlight) return;
+  if (inFlight) return;
+  const due = Date.now() + ms;
+  if (timer && timerDue <= due) return;
+  if (timer) clearTimeout(timer);
+  timerDue = due;
   timer = setTimeout(() => {
     timer = null;
     push().catch((e) => console.error("[mirror]", e));
@@ -170,7 +196,6 @@ async function push() {
   try {
     if (Object.keys(batch).length) {
       batch.seq = nextSeq();
-      batch.sentAt = Date.now();
       const body = gzipSync(JSON.stringify(batch));
       const r = await fetch(`${cfg.url}/api/mirror/sync`, {
         method: "POST",
@@ -233,6 +258,7 @@ const persistSeq = () => {
 };
 if (!saved.epoch && process.env.PUBLIC_MODE === "1") persistSeq();
 export const syncAck = (extra: object) => ({ ok: true, acceptedSeq, epoch: storageEpoch, ...extra });
+export const mirrorPublicStatus = () => ({ epoch: storageEpoch });
 
 /** Only batches newer than the last one applied are taken (a retried push can arrive after its replacement). */
 export function acceptSeq(seq: unknown): boolean {
@@ -244,27 +270,19 @@ export function acceptSeq(seq: unknown): boolean {
 }
 
 /*
- * Prediction cut-offs. Move times are on the local server's clock. A batch's delay (arrival − sentAt) is the clock
- * difference plus the trip; the smallest recent one is the best estimate of the difference alone. Each move's
- * cut-off is fixed when the mirror first hears of it, so later clock corrections never re-judge old guesses.
+ * Prediction cut-offs are the moment this mirror first hears of a move (or result), by its own clock: no clocks
+ * are compared, and a cut-off never moves once set. Only someone watching the local server itself (127.0.0.1) can
+ * see a move before that, and the local site stops taking guesses for a move it has already shown.
  */
-const delays: number[] = [];
-function clockOffset(sentAt: unknown): number {
-  if (typeof sentAt !== "number" || !Number.isFinite(sentAt)) return delays.length ? Math.min(...delays) : 0;
-  delays.push(Date.now() - sentAt);
-  if (delays.length > 50) delays.shift();
-  return Math.min(...delays);
-}
-
 /** Apply a batch from the local server to this (public) server's store. Returns the changed game ids. */
 export function ingest(batch: SyncBatch): string[] {
   const changed: string[] = [];
-  const offset = clockOffset(batch.sentAt);
+  const now = Date.now();
   for (const g of batch.games ?? []) {
     if (!g || typeof g.id !== "string" || !/^[\w-]+$/.test(g.id) || !Array.isArray(g.moves)) continue;
     const cut: Record<string, number> = { ...games.get(g.id)?.mirrorCutoffs };
-    for (const m of g.moves) cut[m.ply] ??= m.ts + offset;
-    if (g.result) cut.end ??= (g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Date.now() - offset) + offset;
+    for (const m of g.moves) cut[m.ply] ??= now;
+    if (g.result) cut.end ??= now;
     g.mirrorCutoffs = cut;
     games.set(g.id, g);
     saveGameNow(g);
