@@ -1,5 +1,5 @@
+import { fullName } from "../shared/naming";
 import type { Game } from "../shared/types";
-import { personalityById } from "../shared/personalities";
 import { scoreToPawns } from "../shared/evalmath";
 
 const NAG: Record<string, string> = { brilliant: " $3", great: " $1", inaccuracy: " $6", mistake: " $2", miss: " $2", blunder: " $4" };
@@ -19,7 +19,7 @@ function numbered(sans: string[], firstPly: number): string {
 }
 
 export function gameToPgn(g: Game): string {
-  const name = (p: Game["white"]) => `${personalityById(p.personality).name} (${p.modelLabel}, ${p.effort})`;
+  const name = (p: Game["white"]) => `${fullName(p)} (${p.effort})`;
   const date = new Date(g.createdAt).toISOString().slice(0, 10).replace(/-/g, ".");
   const headers: Record<string, string> = {
     Event: g.tournamentId ? `Agent Chess Tournament ${g.tournamentId}` : "Agent Chess Arena",

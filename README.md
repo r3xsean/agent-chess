@@ -34,4 +34,48 @@ Only what a human sees on chess.com: the board (text diagram + PNG image from th
 | `vendor/` | Stockfish 19, Piper venv + voice, lichess opening book (git-ignored except openings) |
 | `data/` | Games, players, journals, audio (git-ignored) |
 
-Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (18), `ENGINE_THREADS` (4), `PIPER_VOICE` (`en_US-ryan-high`).
+Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (22), `ENGINE_MAX_MS` (12000), `ENGINE_THREADS` (8), `PIPER_VOICE` (`en_US-ryan-high`).
+
+## Video replays
+
+Any finished game can be exported as a video: 16:9 for YouTube and 9:16 for TikTok. Click 🎬 on the game page to preview it in the browser (space to play, ←/→ to skip). To render MP4s:
+
+```powershell
+npm run video -- <gameId>            # both formats → data/videos/<id>-youtube.mp4, <id>-tiktok.mp4
+npm run video -- <gameId> --format portrait --music path\to\track.mp3
+```
+
+**What's in it:**
+- The board, eval bar and each player's clock.
+- Move verdicts, and the engine's preferred move and line.
+- The eval chart, with each player's own evaluation.
+- Illegal move attempts, draw offers and resignations.
+- The best line from each pre- and post-game interview.
+
+The video slows down only for the key moments. On those, the mover's own words appear as a speech bubble before the move (`--thoughts off` skips them), and the banner shows how long they thought.
+
+**Who picks the key moments:** after the game, the broadcaster turns director. It reads the whole game and picks those moments, plus the interview lines (`server/director.ts`). Its plan is saved with the game. For a game that finished without a plan, an orchestrator can launch a director from `GET /api/games/<id>/director-launch` (admin token). Add `?redo=1` to replace an existing plan. Without a plan, a fallback rule picks the moments from the engine's verdicts.
+
+The broadcaster's own lines aren't in the video. They trail the moves they describe, so they'd be out of sync.
+
+**Sound:**
+- Sound effects come from `vendor/sfx/`: Kenney's CC0 packs, named `<event>_<n>.ogg`.
+- Music comes from `--music`, or the first track in `vendor/music/` (git-ignored), and dips under the effects. `--audio-only` redoes just the sound of an existing render.
+
+**Requirements:** the renderer drives headless Chrome (or Edge) and needs `ffmpeg` on the PATH.
+
+## Move classification
+
+Moves are rated by how much of the mover's winning chances they give up, using the same bands chess.com publishes for its expected-points model: Best (nothing lost), Excellent (up to 2%), Good (up to 5%), Inaccuracy (up to 10%), Mistake (up to 20%), Blunder (more). **Brilliant** and **Great** follow [WintrChess](https://github.com/WintrCat/wintrchess)'s rules (`server/wintr.ts`): a Brilliant is a sound piece sacrifice whose capture doesn't simply hand material back, played when you wouldn't be completely winning anyway; a Great is the only move that keeps the advantage. `scripts/test-brilliant.mjs` checks them against Morphy's Opera Game and the Légal trap.
+
+## License
+
+Agent Chess is free software under the [GNU General Public License v3.0 or later](LICENSE).
+
+Credits:
+- [WintrChess](https://github.com/WintrCat/wintrchess) by WintrCat (GPL-3.0) — Brilliant/Great detection in `server/wintr.ts` is adapted from its reporter.
+- [chessground](https://github.com/lichess-org/chessground) (GPL-3.0-or-later) and [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
+- [Stockfish](https://stockfishchess.org) (GPL-3.0), downloaded separately into `vendor/`.
+- [Piper](https://github.com/OHF-Voice/piper1-gpl) text-to-speech (GPL-3.0-or-later), downloaded separately into `vendor/`.
+- [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) (CC0) for opening names and book moves.
+- [Kenney](https://kenney.nl) Impact Sounds, Interface Sounds and Music Jingles (CC0) for the video's sound effects.

@@ -1,0 +1,2 @@
+Sound effects from Kenney (https://kenney.nl): Impact Sounds, Interface Sounds and Music Jingles packs, released under CC0 1.0 (public domain).
+Files are named <event>_<n>.ogg; the video renderer picks one per cue and rotates through the variants. Replace or add files to change the sounds.

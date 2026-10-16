@@ -1,6 +1,7 @@
 import type { Color, Game, Score } from "../../../shared/types";
 import { winPercentWhite } from "../../../shared/evalmath";
-import { personalityById } from "../../../shared/personalities";
+import { sideName } from "../../../shared/naming";
+import { PlayerAvatar } from "./PlayerName";
 import { Avatar } from "./PlayerBar";
 import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
 
@@ -88,11 +89,11 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
         </span>
         <span>
           <i style={{ background: SELF_COLORS.w }} />
-          {personalityById(game.white.personality).name}'s self-eval
+          {sideName(game, "w")}'s self-eval
         </span>
         <span>
           <i style={{ background: SELF_COLORS.b }} />
-          {personalityById(game.black.personality).name}'s self-eval
+          {sideName(game, "b")}'s self-eval
         </span>
       </div>
       {pending > 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>Engine is analyzing {pending} move(s)…</div>}
@@ -106,8 +107,8 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
         <div />
         {(["w", "b"] as Color[]).map((c) => (
           <div className="hdr" key={c}>
-            <Avatar personality={(c === "w" ? game.white : game.black).personality} />
-            {personalityById((c === "w" ? game.white : game.black).personality).name.replace("The ", "")}
+            <PlayerAvatar player={c === "w" ? game.white : game.black} size={36} />
+            {sideName(game, c).replace("The ", "")}
           </div>
         ))}
         <div className="lbl">Accuracy</div>

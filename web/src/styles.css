@@ -1,4 +1,5 @@
 :root {
+  --sidebar-w: 196px;
   --bg: #302e2b;
   --bg-dark: #262522;
   --bg-darker: #1e1d1a;
@@ -64,53 +65,77 @@ button {
   height: 100%;
 }
 .sidebar {
-  width: 145px;
+  width: var(--sidebar-w);
   background: var(--bg-dark);
   display: flex;
   flex-direction: column;
-  padding: 10px 0;
+  gap: 2px;
+  padding: 14px 10px;
   flex-shrink: 0;
 }
 .logo {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px 18px;
+  gap: 10px;
+  padding: 4px 10px 22px;
   font-weight: 800;
-  font-size: 19px;
-  letter-spacing: -0.5px;
+  font-size: 20px;
+  letter-spacing: -0.3px;
+  white-space: nowrap;
 }
 .logo .knight {
   color: var(--green);
-  font-size: 30px;
+  font-size: 32px;
   line-height: 1;
 }
 .logo small {
+  font-size: inherit;
   color: var(--muted);
-  font-weight: 600;
+  font-weight: 700;
+  margin-left: 2px;
 }
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 6px;
   font-weight: 700;
   font-size: 15px;
   color: var(--text-2);
+  white-space: nowrap;
+}
+button.nav-item {
+  background: none;
+  border: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
 }
 .nav-item:hover,
 .nav-item.active {
   background: #1e1d1a;
   color: white;
 }
+.nav-item.active {
+  box-shadow: inset 3px 0 0 var(--green);
+}
 .nav-item .ico {
   width: 24px;
+  flex-shrink: 0;
   text-align: center;
   font-size: 19px;
 }
+.nav-sep {
+  height: 1px;
+  margin: 10px 12px;
+  background: #3a3835;
+}
 .main {
   flex: 1;
-  overflow: auto;
+  overflow-x: hidden; /* the app never scrolls sideways */
+  overflow-y: auto;
   min-width: 0;
 }
 
@@ -175,9 +200,11 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: var(--size); /* player bars never get wider than the board */
 }
 .game-page {
-  --size: min(calc(100vh - 150px), calc(100vw - 145px - 440px - 100px));
+  --panel-w: clamp(320px, 32vw, 440px);
+  --size: min(calc(100vh - 150px), calc(100vw - var(--sidebar-w) - var(--panel-w) - 100px));
 }
 .board-size {
   width: var(--size);
@@ -215,6 +242,16 @@ button {
   gap: 6px;
   align-items: center;
   white-space: nowrap;
+  overflow: hidden;
+}
+.player-name > * {
+  flex-shrink: 0;
+}
+.player-name > a {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .player-name .rating {
   color: var(--muted);
@@ -297,6 +334,7 @@ button {
   padding: 4px 10px;
   border-radius: 4px;
   min-width: 112px;
+  flex-shrink: 0;
   text-align: right;
 }
 .clock.active {
@@ -461,10 +499,39 @@ cg-board square.check {
   gap: 6px;
   align-items: center;
 }
+.explore-verdict {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 700;
+}
+.explore-verdict .muted {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.calc-moves .class-icon {
+  margin-left: 3px;
+  vertical-align: -2px;
+}
+.explore-engine {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  min-height: 20px;
+}
+.explore-engine .eval-chip {
+  flex-shrink: 0;
+}
+.explore-pv {
+  color: var(--text-2);
+  line-height: 1.45;
+}
 
 /* side panel */
 .side-panel {
-  width: 440px;
+  width: var(--panel-w);
   flex-shrink: 0;
   background: var(--panel);
   border-radius: 8px;
@@ -1141,3 +1208,84 @@ input[type="text"] {
 .risk-badge.risk-calm { background: #3d5a46; color: #b9e0c3; }
 .risk-badge.risk-bold { background: #6b5320; color: #f5d27a; }
 .risk-badge.risk-wild { background: #7a2b2b; color: #ffb3a8; }
+
+/* model tags: the model is half of a player's identity */
+.model-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+  color: #fff;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--maker);
+  background: color-mix(in srgb, var(--maker) 30%, transparent);
+  white-space: nowrap;
+}
+.model-tag .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--maker);
+}
+.model-tag small {
+  font-size: 0.8em;
+  font-weight: 600;
+  opacity: 0.75;
+}
+.model-tag.big {
+  font-size: 18px;
+  padding: 2px 12px;
+}
+
+/* players: the model leads, the personality is the style it plays in */
+.player-avatar {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: -0.3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.player-avatar .persona-badge {
+  position: absolute;
+  right: -14%;
+  bottom: -14%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.player-fullname {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.player-fullname b {
+  font-weight: 800;
+}
+.player-fullname .effort {
+  font-size: 0.75em;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #3d3b38;
+}
+.player-fullname .as {
+  color: var(--muted);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-fullname .as span {
+  font-weight: 700;
+}

@@ -1,0 +1,940 @@
+/* Video frames: fixed pixel sizes, no transitions — every frame is a pure function of time. */
+
+.v-msg {
+  padding: 40px;
+  font-size: 18px;
+}
+
+.v-render {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.v-preview {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: #161512;
+}
+.v-stage {
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+}
+.v-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 14px;
+}
+.v-controls button {
+  width: 40px;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: #81b64c;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+.v-controls input[type="range"] {
+  width: min(50vw, 640px);
+}
+.v-controls a {
+  color: #bab9b8;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #262522;
+}
+.v-controls a.on {
+  background: #3c3a37;
+  color: #fff;
+}
+.v-time {
+  font-variant-numeric: tabular-nums;
+  color: #bab9b8;
+  min-width: 90px;
+}
+
+.v-frame {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(ellipse at 30% 20%, #3a3733 0%, #262522 55%, #1b1a17 100%);
+}
+.v-fade {
+  position: absolute;
+  inset: 0;
+}
+
+.v-logo {
+  white-space: nowrap;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #81b64c;
+  font-size: 26px;
+}
+.v-logo.big {
+  font-size: 44px;
+}
+.v-logo.huge {
+  font-size: 110px;
+}
+.v-opening {
+  color: #bab9b8;
+  font-size: 22px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- board ---------- */
+
+.v-board.cg-wrap {
+  position: relative;
+  border-radius: 6px;
+  overflow: visible;
+  background-color: var(--board-dark);
+  background-image: conic-gradient(var(--board-dark) 0 90deg, var(--board-light) 90deg 180deg, var(--board-dark) 180deg 270deg, var(--board-light) 270deg);
+  background-size: 25% 25%;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+.v-board.illegal {
+  box-shadow:
+    0 0 0 6px #fa412d,
+    0 8px 30px rgba(0, 0, 0, 0.45);
+}
+.v-hl,
+.v-check,
+.v-illegal-sq {
+  position: absolute;
+}
+.v-hl {
+  background: rgba(255, 255, 51, 0.5);
+}
+.v-check {
+  background: radial-gradient(ellipse at center, rgba(255, 0, 0, 1) 0%, rgba(231, 0, 0, 1) 25%, rgba(169, 0, 0, 0) 89%, rgba(158, 0, 0, 0) 100%);
+}
+.v-illegal-sq {
+  background: rgba(250, 65, 45, 0.75);
+}
+.v-coord {
+  position: absolute;
+  font-weight: 700;
+  line-height: 1;
+  z-index: 1;
+}
+.v-coord.on-light {
+  color: var(--board-dark);
+}
+.v-coord.on-dark {
+  color: var(--board-light);
+}
+.v-board piece {
+  will-change: auto;
+}
+.v-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
+.v-badge {
+  position: absolute;
+  z-index: 7;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+}
+.v-badge .class-icon {
+  width: 100%;
+  height: 100%;
+}
+
+.v-evalbar {
+  position: relative;
+  background: #403d39;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.v-evalbar-white {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #fff;
+}
+.v-evalbar-text {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-weight: 800;
+}
+.v-evalbar-text.bottom {
+  bottom: 6px;
+  color: #403d39;
+}
+.v-evalbar-text.top {
+  top: 6px;
+  color: #fff;
+}
+
+/* ---------- player cards ---------- */
+
+.v-avatar {
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.v-player {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 100%;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 2px solid transparent;
+}
+.v-player.to-move {
+  border-color: rgba(129, 182, 76, 0.7);
+}
+.v-player-meta {
+  flex: 1;
+  min-width: 0;
+}
+.v-player-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 24px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.v-rating {
+  color: #bab9b8;
+  font-weight: 500;
+}
+.v-chip {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #3c3a37;
+  color: #e8e6e3;
+}
+.v-side {
+  font-size: 15px;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.v-side.w {
+  background: #f0efe9;
+  color: #262522;
+}
+.v-side.b {
+  background: #111;
+  color: #f0efe9;
+  border: 1px solid #555;
+}
+.v-captured.cg-wrap {
+  width: auto;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+.v-capgroup {
+  display: flex;
+  margin-right: 8px;
+}
+.v-captured.cg-wrap piece {
+  position: static;
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  margin-right: -12px;
+}
+.v-adv {
+  margin-left: 12px;
+  color: #bab9b8;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+/* ---------- callout, captions, engine line ---------- */
+
+.v-callout {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  background: #1e1d1a;
+  border: 3px solid #3c3a37;
+}
+.v-callout.illegal {
+  border-color: #fa412d;
+  background: #3a1612;
+}
+.v-callout-icon {
+  width: 68px;
+  height: 68px;
+  flex-shrink: 0;
+}
+.v-callout-main {
+  flex: 1;
+  min-width: 0;
+}
+.v-callout-move {
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.v-callout-cls {
+  font-size: 26px;
+  font-weight: 700;
+  color: #bab9b8;
+  white-space: nowrap;
+}
+.v-bestwas {
+  color: #bab9b8;
+  font-weight: 600;
+}
+.v-evalchip {
+  font-size: 30px;
+  font-weight: 800;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #fff;
+  color: #262522;
+  font-variant-numeric: tabular-nums;
+}
+.v-illegal-x {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: #fa412d;
+  display: grid;
+  place-items: center;
+  font-size: 40px;
+  font-weight: 900;
+}
+
+
+.v-line {
+  font-size: 24px;
+  color: #e8e6e3;
+  min-height: 34px;
+  font-weight: 600;
+}
+.v-line-label {
+  color: #81b64c;
+  font-weight: 800;
+}
+
+/* ---------- game layout: landscape ---------- */
+
+.v-game {
+  position: absolute;
+  inset: 0;
+}
+.v-game.landscape .v-top-card,
+.v-game.landscape .v-bottom-card {
+  position: absolute;
+  left: 108px;
+  width: 860px;
+  height: 70px;
+}
+.v-game.landscape .v-top-card {
+  top: 28px;
+}
+.v-game.landscape .v-bottom-card {
+  top: 982px;
+}
+.v-game.landscape .v-evalbar-pos {
+  position: absolute;
+  left: 60px;
+  top: 110px;
+}
+.v-game.landscape .v-board-pos {
+  position: absolute;
+  left: 108px;
+  top: 110px;
+}
+.v-panel {
+  position: absolute;
+  left: 1020px;
+  top: 28px;
+  width: 840px;
+  height: 1024px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.v-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+}
+.v-brand .v-opening {
+  white-space: normal;
+  font-size: 20px;
+  line-height: 1.3;
+}
+.v-graph {
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+/* ---------- game layout: portrait (keeps clear of TikTok's right-hand buttons and bottom caption) ---------- */
+
+.v-game.portrait > div {
+  position: absolute;
+}
+.v-p-title {
+  top: 84px;
+  left: 90px;
+  width: 900px;
+}
+.v-p-title .v-opening {
+  display: block;
+  white-space: normal;
+  font-size: 26px;
+  line-height: 1.3;
+}
+.v-p-callout {
+  top: 166px;
+  left: 90px;
+  width: 900px;
+}
+.v-p-caption {
+  top: 328px;
+  left: 90px;
+  width: 900px;
+  height: 190px;
+  display: flex;
+}
+.v-p-top-card,
+.v-p-bottom-card {
+  left: 90px;
+  width: 900px;
+  height: 76px;
+}
+.v-p-top-card {
+  top: 528px;
+}
+.v-p-evalbar {
+  top: 614px;
+  left: 52px;
+}
+.v-p-board {
+  top: 614px;
+  left: 90px;
+}
+.v-p-bottom-card {
+  top: 1524px;
+}
+
+/* ---------- versus ---------- */
+
+.v-versus {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 70px;
+  gap: 40px;
+}
+.v-versus.portrait {
+  padding-top: 220px;
+}
+.v-versus-row {
+  display: flex;
+  align-items: center;
+  gap: 60px;
+}
+.v-versus.portrait .v-versus-row {
+  flex-direction: column;
+  gap: 40px;
+}
+.v-vs {
+  font-size: 90px;
+  font-weight: 900;
+  color: #81b64c;
+  font-style: italic;
+}
+.v-hero {
+  width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.v-hero .v-avatar {
+  border-radius: 28px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.v-hero-name {
+  font-size: 56px;
+  font-weight: 900;
+  margin-top: 8px;
+}
+.v-hero-name.small {
+  font-size: 40px;
+}
+.v-hero-model {
+  font-size: 26px;
+  color: #bab9b8;
+  font-weight: 600;
+}
+.v-hero-tags {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.v-hero-tags .v-chip,
+.v-hero-tags .v-side {
+  font-size: 20px;
+}
+.v-risk {
+  font-size: 20px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.v-risk.calm {
+  background: #2f4a5c;
+}
+.v-risk.bold {
+  background: #7a5a1c;
+}
+.v-risk.wild {
+  background: #8a2a1f;
+}
+.v-hero-tagline {
+  font-size: 24px;
+  color: #e8e6e3;
+  font-style: italic;
+}
+
+/* ---------- interviews ---------- */
+
+.v-interview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 80px 140px;
+  gap: 40px;
+}
+.v-interview.portrait {
+  padding: 0 90px 200px;
+}
+.v-interview-head {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.v-interview-kind {
+  font-size: 24px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #81b64c;
+}
+.v-interview-name {
+  font-size: 54px;
+  font-weight: 900;
+}
+.v-quote {
+  line-height: 1.38;
+  font-weight: 600;
+  border-left: 8px solid;
+  padding-left: 30px;
+}
+
+/* ---------- result & end ---------- */
+
+.v-result {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 60px;
+}
+.v-result.portrait {
+  padding-top: 200px;
+}
+.v-result-score {
+  font-size: 130px;
+  font-weight: 900;
+  line-height: 1;
+}
+.v-result-headline {
+  font-size: 54px;
+  font-weight: 800;
+  color: #81b64c;
+}
+.v-result-term {
+  font-size: 28px;
+  color: #bab9b8;
+  margin-bottom: 40px;
+}
+.v-result-row {
+  display: flex;
+  gap: 50px;
+}
+.v-result.portrait .v-result-row {
+  gap: 24px;
+}
+.v-result-side {
+  width: 600px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 3px solid transparent;
+}
+.v-result.portrait .v-result-side {
+  width: 440px;
+  padding: 24px 12px;
+}
+.v-result-side.won {
+  border-color: #81b64c;
+}
+.v-acc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 8px;
+}
+.v-acc span {
+  font-size: 72px;
+  font-weight: 900;
+  line-height: 1;
+}
+.v-acc small {
+  font-size: 20px;
+  color: #bab9b8;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+.v-rating-change {
+  font-size: 28px;
+  font-weight: 700;
+}
+.v-rating-change .up {
+  color: #81b64c;
+}
+.v-rating-change .down {
+  color: #fa412d;
+}
+.v-counts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+  margin-top: 10px;
+}
+.v-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 26px;
+  font-weight: 800;
+}
+.v-end {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  text-align: center;
+}
+.v-end-sub {
+  font-size: 38px;
+  color: #e8e6e3;
+  font-weight: 600;
+}
+.v-end-match {
+  font-size: 28px;
+  color: #bab9b8;
+}
+.v-frame.portrait .v-logo.huge {
+  font-size: 90px;
+}
+
+
+/* ---------- the mover's thinking ---------- */
+
+.v-thought-label {
+  font-size: 18px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.v-selfeval {
+  font-size: 15px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #3c3a37;
+  color: #e8e6e3;
+  letter-spacing: 0.5px;
+}
+.v-bubble {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  z-index: 20;
+  padding: 18px 24px 20px;
+  border-radius: 22px;
+  background: rgba(250, 249, 245, 0.96);
+  color: #1e1d1a;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+}
+.v-bubble.from-top {
+  top: 22px;
+}
+.v-bubble.from-bottom {
+  bottom: 22px;
+}
+.v-bubble::after {
+  content: "";
+  position: absolute;
+  left: 34px;
+  border: 18px solid transparent;
+}
+.v-bubble.from-top::after {
+  top: -34px;
+  border-bottom-color: rgba(250, 249, 245, 0.96);
+}
+.v-bubble.from-bottom::after {
+  bottom: -34px;
+  border-top-color: rgba(250, 249, 245, 0.96);
+}
+.v-bubble .v-thought-label {
+  filter: brightness(0.75);
+  margin-bottom: 6px;
+}
+.v-bubble .v-selfeval {
+  background: #e3e1da;
+  color: #1e1d1a;
+}
+.v-bubble-text {
+  line-height: 1.35;
+  font-weight: 600;
+  font-style: italic;
+}
+
+.v-callout.status {
+  justify-content: center;
+  position: relative;
+  min-height: 112px;
+}
+.v-callout.status .v-callout-move {
+  text-align: center;
+}
+.v-callout.status .v-evalchip {
+  position: absolute;
+  right: 20px;
+}
+.v-p-line {
+  top: 284px;
+  left: 90px;
+  width: 900px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.v-p-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.v-legend {
+  display: flex;
+  gap: 22px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #bab9b8;
+}
+.v-legend span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.v-swatch {
+  display: inline-block;
+  width: 22px;
+  height: 5px;
+  border-radius: 3px;
+}
+.v-swatch.engine {
+  height: 14px;
+  background: #e8e6e3;
+}
+/* ---------- YouTube move list (between the director's moments) ---------- */
+
+.v-movelist {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 22px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.v-ml-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 1fr;
+  align-items: center;
+  height: 44px;
+  font-size: 26px;
+  font-weight: 700;
+}
+.v-ml-no {
+  color: #8b8987;
+}
+.v-ml-move {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  width: fit-content;
+}
+.v-ml-move.current {
+  background: #4b4847;
+}
+
+.v-callout-sub {
+  margin-top: 4px;
+  font-size: 26px;
+  font-weight: 700;
+  color: #81b64c;
+  text-align: center;
+}
+.v-mark {
+  position: absolute;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* One-line status banners keep clear of the eval chip on the right, and stay centred. */
+.v-callout.status {
+  padding-left: 120px;
+  padding-right: 120px;
+}
+.v-callout.status .v-callout-move {
+  font-size: 36px;
+}
+
+/* ---------- model tags at video scale ---------- */
+
+.v-frame .model-tag {
+  font-size: 20px;
+  padding: 2px 12px;
+  gap: 8px;
+}
+.v-frame .model-tag .dot {
+  width: 11px;
+  height: 11px;
+}
+.v-frame .model-tag.mid {
+  font-size: 28px;
+  padding: 3px 16px;
+}
+.v-frame .model-tag.hero {
+  font-size: 38px;
+  padding: 4px 22px;
+  gap: 12px;
+}
+.v-frame .model-tag.hero .dot,
+.v-frame .model-tag.mid .dot {
+  width: 15px;
+  height: 15px;
+}
+.v-interview-sub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+.v-interview-sub .v-side {
+  font-size: 18px;
+}
+
+/* ---------- the model is the player ---------- */
+
+.v-hero-as {
+  font-size: 30px;
+  font-weight: 600;
+  color: #bab9b8;
+}
+.v-hero-as span {
+  font-weight: 800;
+}
+.v-hero-as.small {
+  font-size: 24px;
+}
+.v-frame .player-fullname {
+  font-size: 24px;
+  gap: 10px;
+}
+.v-frame .player-fullname .as {
+  font-size: 20px;
+}
+.v-frame .player-avatar .persona-badge {
+  box-shadow: 0 0 0 3px #262522;
+}
+.v-clock {
+  font-family: "Roboto Mono", Consolas, monospace;
+  font-size: 30px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 6px;
+  background: #1e1d1a;
+  color: #8b8987;
+  min-width: 118px;
+  text-align: right;
+}
+.v-clock.active {
+  background: #f0efe9;
+  color: #1e1d1a;
+}
+.v-time-total {
+  font-size: 22px;
+  color: #bab9b8;
+  font-weight: 600;
+}

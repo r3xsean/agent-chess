@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { Chess } from "chess.js";
 import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result } from "../shared/types";
 import { Engine } from "./engine";
-import { classifyMove, reviewSide, terminalScore } from "./classify";
+import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
 import { synthesize } from "./tts";
 import { triggerOrchestrator } from "./summon";
@@ -92,6 +92,7 @@ export function createGame(opts: {
     playStartedAt: null,
     interviewsCompleteAt: null,
     options: { pieceList: true, learning: opts.learning ?? true },
+    classifierVersion: CLASSIFIER_VERSION,
   };
   ensurePlayer(opts.white);
   ensurePlayer(opts.black);

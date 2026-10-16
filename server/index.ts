@@ -2,7 +2,7 @@ import express, { type Request, type Response } from "express";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { Color, Game, PlayerRef, Tournament } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, ROOT } from "./paths";
@@ -27,12 +27,16 @@ import {
   touch,
 } from "./game";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
-import { launchSpec } from "./prompts";
+import { directorLaunch, launchSpec } from "./prompts";
+import { directorBrief, needsDirection, validatePlan } from "./director";
 import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { gameToPgn } from "./pgn";
 import { loadOpenings } from "./openings";
 import { startTts, stopTts } from "./tts";
+import { Engine, SupersededError } from "./engine";
+import { CLASSIFIER_VERSION, classifyMove, terminalScore } from "./classify";
+import { Chess } from "chess.js";
 
 loadAll();
 rebuildRatings();
@@ -44,6 +48,13 @@ for (const g of games.values()) {
   let retry = false;
   for (const [fen, a] of Object.entries(g.analysis)) if (a.failed) (delete g.analysis[fen], (retry = true));
   for (const m of g.moves) if (m.analysis?.unavailable) (delete m.analysis, (retry = true));
+  // Classification rules changed since these verdicts were stored: re-classify from the saved engine analysis.
+  if ((g.classifierVersion ?? 1) < CLASSIFIER_VERSION) {
+    for (const m of g.moves) delete m.analysis;
+    g.classifierVersion = CLASSIFIER_VERSION;
+    retry = true;
+    touch(g);
+  }
   if (retry) g.review = null;
   if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
 }
@@ -229,6 +240,22 @@ app.get(
     return launchSpec(getGame(String(req.params.id)));
   }),
 );
+// A finished game with no video plan yet (e.g. from before directors existed): a one-off director task.
+app.get(
+  "/api/games/:id/director-launch",
+  handle((req) => {
+    requireAdmin(req);
+    const g = getGame(String(req.params.id));
+    if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its broadcaster plans the video at the end.");
+    // ?redo=1 throws the current plan away so a new director can make another.
+    if (req.query.redo && g.video) {
+      delete g.video;
+      saveGameNow(g);
+      touch(g);
+    }
+    return directorLaunch(g, typeof req.query.effort === "string" ? req.query.effort : undefined);
+  }),
+);
 app.get(
   "/api/games/:id/agents",
   handle((req) => {
@@ -242,7 +269,7 @@ app.get(
       seats: {
         white: { secondsSinceSeen: ago("w"), done: playerDone("w") },
         black: { secondsSinceSeen: ago("b"), done: playerDone("b") },
-        broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" } : null,
+        broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" && !needsDirection(g) } : null,
       },
     };
   }),
@@ -474,11 +501,14 @@ app.post(
         const pending = () => {
           const fresh = broadcasterEvents(g).filter((e) => !g.bcDelivered.includes(e.id));
           if (fresh.length) return { kind: "events" as const, fresh };
+          // Once the show is over, the broadcaster plans the replay video before signing off.
+          if (g.phase === "finished" && needsDirection(g)) return { kind: "direct" as const, fresh };
           if (g.phase === "finished") return { kind: "done" as const, fresh };
           return null;
         };
         const out = await waitUntil(g, pending, res);
         if (!out) return text("WAITING — nothing new yet. Run `bc-wait` again.");
+        if (out.kind === "direct") return text(directorBrief(g));
         // Events count as consumed only when the CLI acknowledges them after printing (bc-ack);
         // an unacknowledged batch is simply delivered again on the next bc-wait.
         const ack = randomBytes(6).toString("hex");
@@ -501,7 +531,14 @@ app.post(
         const line = say(g, readText(req.body));
         return text(`OK — segment ${line.id} is on air. Run \`bc-wait\` for more.`);
       }
-      throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait or say.`);
+      if (cmd === "direct") {
+        if (g.phase !== "finished") throw new ActionError("The video plan comes after the game — keep commentating.");
+        g.video = validatePlan(g, req.body?.plan);
+        saveGameNow(g);
+        touch(g);
+        return text(`OK — video plan saved (${g.video.moments.length} moments). Run \`bc-wait\`.`);
+      }
+      throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait, say or direct.`);
     }
 
     const c = role as Color;
@@ -542,6 +579,77 @@ app.post(
 /* ------------------------------ static ------------------------------ */
 
 app.use("/audio", express.static(path.join(DATA, "audio"), { maxAge: "1h" }));
+/* ------------------------- viewer's analysis board ------------------------- */
+
+// The viewer's own analysis board runs on a second, lighter Stockfish so it never waits behind the
+// games' review queue. Only the newest request matters: a new position cancels the one in progress.
+const explorer = new Engine({ label: "explorer", depth: 20, maxMs: 3000, threads: 4, hashMb: 128 });
+explorer.start();
+const exploreCache = new Map<string, PositionAnalysis>();
+
+/** A position's analysis: game over, already known (cache or any game's review), or a fresh explorer search. */
+async function analyzeExplore(fen: string): Promise<PositionAnalysis> {
+  const term = terminalScore(fen);
+  if (term) return { depth: 0, score: term, pv: [] };
+  const hit = exploreCache.get(fen);
+  if (hit) return hit;
+  for (const g of games.values()) {
+    const a = g.analysis[fen];
+    if (a && !a.failed && a.depth > 0) return a;
+  }
+  explorer.supersede();
+  const a = await explorer.analyze(fen);
+  if (!a.failed) {
+    exploreCache.set(fen, a);
+    if (exploreCache.size > 5000) exploreCache.delete(exploreCache.keys().next().value!);
+  }
+  return a;
+}
+
+const parseFen = (fen: unknown) => {
+  try {
+    return new Chess(String(fen ?? ""));
+  } catch {
+    throw new ActionError("Invalid FEN.");
+  }
+};
+
+/**
+ * Body: { fen, move? }. With `move` ({ fenBefore, uci, bookSoFar, prev? }), the move that led to `fen`
+ * is also rated exactly like a game move (brilliant … blunder).
+ */
+app.post(
+  "/api/explore",
+  handle(async (req) => {
+    const fen = parseFen(req.body?.fen).fen();
+    const mv = req.body?.move;
+    try {
+      if (!mv) return await analyzeExplore(fen);
+      const c = parseFen(mv.fenBefore);
+      const uci = String(mv.uci ?? "");
+      let played;
+      try {
+        played = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      } catch {
+        throw new ActionError("Illegal move.");
+      }
+      if (c.fen() !== fen) throw new ActionError("That move doesn't lead to this position.");
+      const before = await analyzeExplore(played.before);
+      const after = await analyzeExplore(fen);
+      if (before.failed || after.failed) return after;
+      const record = { color: played.color, uci, san: played.san, from: played.from, to: played.to, fenBefore: played.before, fenAfter: fen } as MoveRecord;
+      const p = mv.prev;
+      const prev = p
+        ? ({ to: String(p.to), san: String(p.san), analysis: p.winBefore != null ? { winBefore: Number(p.winBefore), winAfter: Number(p.winAfter) } : undefined } as MoveRecord)
+        : undefined;
+      return { ...after, move: classifyMove(record, before, after.score, prev, !!mv.bookSoFar) };
+    } catch (e) {
+      if (e instanceof SupersededError) return { superseded: true };
+      throw e;
+    }
+  }),
+);
+
 const dist = path.join(ROOT, "dist");
 if (existsSync(dist)) {
   app.use(express.static(dist));
@@ -553,6 +661,7 @@ const server = app.listen(PORT, "127.0.0.1", () => console.log(`[agent-chess] ht
 function shutdown() {
   flushAll();
   engine.stop();
+  explorer.stop();
   stopTts();
   server.close();
   process.exit(0);

@@ -2,8 +2,7 @@ import { Chess, type Move } from "chess.js";
 import type { Classification, Color, Game, MoveAnalysis, MoveRecord, PositionAnalysis, Score, SideReview } from "../shared/types";
 import { moveAccuracy, scoreToCp, scoreToPawns, winPercentFor, winPercentWhite } from "../shared/evalmath";
 import { isTheory } from "./openings";
-
-const VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+import { isBrilliantMove, isGreatMove, type MoveContext } from "./wintr";
 
 /** Score for a position that is already over (no engine call needed). */
 export function terminalScore(fen: string): Score | null {
@@ -13,34 +12,8 @@ export function terminalScore(fen: string): Score | null {
   return null;
 }
 
-/**
- * True when the move leaves material en prise: after it, the opponent can capture a
- * non-pawn piece and come out at least two points ahead (net of anything we just took).
- */
-export function isSacrifice(fenBefore: string, uci: string): boolean {
-  const c = new Chess(fenBefore);
-  let mv: Move;
-  try {
-    mv = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-  } catch {
-    return false;
-  }
-  if (c.isCheckmate()) return false;
-  const me = mv.color;
-  const gained = mv.captured ? VALUE[mv.captured] : 0;
-  let worst = 0;
-  for (const om of c.moves({ verbose: true })) {
-    if (!om.captured || om.captured === "p") continue;
-    const victim = VALUE[om.captured];
-    const after = new Chess(c.fen());
-    after.move(om);
-    // Defended = we have a *legal* recapture (a pinned piece doesn't count).
-    const defended = after.turn() === me && after.moves({ verbose: true }).some((r) => r.to === om.to);
-    const loss = defended ? victim - (om.piece === "k" ? 0 : VALUE[om.piece]) : victim;
-    worst = Math.max(worst, loss);
-  }
-  return worst - gained >= 2;
-}
+/** Bump when classification rules change: stored games are re-classified at startup. */
+export const CLASSIFIER_VERSION = 2;
 
 const moverCp = (s: Score, color: Color) => {
   const cp = Math.max(-1000, Math.min(1000, scoreToCp(s)));
@@ -65,26 +38,25 @@ export function classifyMove(
   const legalCount = new Chess(m.fenBefore).moves().length;
   let classification: Classification;
 
+  const board = new Chess(m.fenBefore);
+  let played: Move | null = null;
+  try {
+    played = board.move({ from: m.uci.slice(0, 2), to: m.uci.slice(2, 4), promotion: m.uci[4] });
+  } catch {}
+
   if (legalCount === 1) {
     classification = "forced";
   } else if (allBookSoFar && isTheory(m.fenAfter)) {
     classification = "book";
+  } else if (played && board.isCheckmate()) {
+    classification = "best"; // delivering mate is simply best
   } else if (drop <= 2) {
-    const secondWin = before.second ? winPercentFor(before.second, mover) : null;
-    const isRecapture = !!prev && prev.to === m.to && prev.san.includes("x") && m.san.includes("x");
-    if (winBefore < 97 && winAfterRaw > 40 && isSacrifice(m.fenBefore, m.uci)) {
-      classification = "brilliant";
-    } else if (
-      playedBest &&
-      !isRecapture &&
-      secondWin !== null &&
-      winBefore - secondWin >= 12 &&
-      winBefore < 97 &&
-      winAfterRaw > 30
-    ) {
-      classification = "great";
-    } else {
-      classification = playedBest ? "best" : "excellent";
+    classification = playedBest ? "best" : "excellent";
+    // Great and Brilliant follow WintrChess's rules (see wintr.ts).
+    if (played) {
+      const ctx: MoveContext = { before: new Chess(m.fenBefore), after: board, played, bestBefore: before.score, secondBefore: before.second, evalAfter: afterScore };
+      if (playedBest && isGreatMove(ctx)) classification = "great";
+      if ((playedBest || drop < 1) && isBrilliantMove(ctx)) classification = "brilliant";
     }
   } else {
     const prevDrop = prev?.analysis && !prev.analysis.unavailable ? prev.analysis.winBefore - prev.analysis.winAfter : 0;

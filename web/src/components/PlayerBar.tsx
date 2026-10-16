@@ -1,6 +1,7 @@
 import type { Color, PlayerRef } from "../../../shared/types";
 import { personalityById } from "../../../shared/personalities";
 import type { MaterialInfo } from "../../../shared/material";
+import { PlayerAvatar, PlayerName } from "./PlayerName";
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
 
@@ -53,19 +54,17 @@ export function PlayerBar(props: {
   active: boolean;
   onClick?: () => void;
 }) {
-  const p = personalityById(props.player.personality);
   return (
     <div className="player-bar">
       <a href={`#/player/${encodeURIComponent(props.player.id)}`}>
-        <Avatar personality={props.player.personality} />
+        <PlayerAvatar player={props.player} />
       </a>
       <div className="player-meta">
         <div className="player-name">
-          <a href={`#/player/${encodeURIComponent(props.player.id)}`}>{p.name}</a>
+          <a href={`#/player/${encodeURIComponent(props.player.id)}`}>
+            <PlayerName player={props.player} />
+          </a>
           {props.rating !== undefined && <span className="rating">({props.rating})</span>}
-          <span className="chip">
-            {props.player.modelLabel} · {props.player.effort}
-          </span>
           {props.status && <span className={`status-pill ${props.status.kind}`}>{props.status.text}</span>}
         </div>
         <div className="player-sub">

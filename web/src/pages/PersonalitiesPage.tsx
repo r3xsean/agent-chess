@@ -3,6 +3,7 @@ import type { Personality, PlayerStats } from "../../../shared/types";
 import { useFetch } from "../api";
 import { Avatar } from "../components/PlayerBar";
 import { RiskBadge } from "../components/RiskBadge";
+import { ModelTag } from "../components/ModelTag";
 import { RISK_LABEL } from "../../../shared/personalities";
 
 interface PersonalityInfo {
@@ -101,7 +102,9 @@ export function PersonalitiesPage() {
             <tbody>
               {cur.players.map((x) => (
                 <tr key={x.id} className="click" onClick={() => (location.hash = `#/player/${encodeURIComponent(x.id)}`)}>
-                  <td style={{ fontWeight: 700 }}>{x.ref.modelLabel}</td>
+                  <td>
+                    <ModelTag player={x.ref} />
+                  </td>
                   <td>{x.ref.effort}</td>
                   <td style={{ fontWeight: 800 }}>{x.rating}</td>
                   <td>

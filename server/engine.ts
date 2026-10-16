@@ -5,8 +5,10 @@ import { Chess } from "chess.js";
 import type { PositionAnalysis, Score } from "../shared/types";
 import { ROOT } from "./paths";
 
-const ANALYSIS_DEPTH = Number(process.env.ENGINE_DEPTH ?? 18);
-const ANALYSIS_MAX_MS = Number(process.env.ENGINE_MAX_MS ?? 4000);
+// Agents think for minutes per move, so the engine can afford a deep search: depth 22,
+// capped at 12 s for the rare position that would take longer.
+const ANALYSIS_DEPTH = Number(process.env.ENGINE_DEPTH ?? 22);
+const ANALYSIS_MAX_MS = Number(process.env.ENGINE_MAX_MS ?? 12_000);
 
 function findStockfish(): string {
   if (process.env.STOCKFISH_PATH) return process.env.STOCKFISH_PATH;
@@ -23,7 +25,26 @@ interface Job {
   resolve: (a: PositionAnalysis) => void;
   reject: (e: Error) => void;
   attempts?: number;
+  cancelled?: boolean;
 }
+
+export interface EngineOptions {
+  label: string;
+  depth: number;
+  maxMs: number;
+  threads: number;
+  hashMb: number;
+}
+
+const GAME_ENGINE: EngineOptions = {
+  label: "engine",
+  depth: ANALYSIS_DEPTH,
+  maxMs: ANALYSIS_MAX_MS,
+  threads: Math.max(1, Math.min(12, Number(process.env.ENGINE_THREADS ?? 8))),
+  hashMb: 512,
+};
+
+export class SupersededError extends Error {}
 
 /** Single Stockfish process, one analysis at a time, MultiPV 2. */
 export class Engine {
@@ -35,12 +56,14 @@ export class Engine {
 
   private restarts = 0;
 
+  constructor(private opts: EngineOptions = GAME_ENGINE) {}
+
   start() {
     const exe = findStockfish();
     this.proc = spawn(exe, [], { stdio: "pipe" });
     this.proc.on("error", (e) => {
       // Spawn failure (missing binary etc.): don't crash the server; 'exit' may never fire.
-      console.error(`[engine] could not run ${exe}: ${e.message}`);
+      console.error(`[${this.opts.label}] could not run ${exe}: ${e.message}`);
       this.handleExit();
     });
     this.proc.stdin.on("error", () => {});
@@ -55,16 +78,26 @@ export class Engine {
       }
     });
     this.proc.on("exit", (code) => {
-      console.error(`[engine] stockfish exited (${code})`);
+      console.error(`[${this.opts.label}] stockfish exited (${code})`);
       this.handleExit();
     });
-    const threads = Math.max(1, Math.min(6, Number(process.env.ENGINE_THREADS ?? 4)));
+    const { threads, hashMb, depth, maxMs, label } = this.opts;
     this.send("uci");
     this.send(`setoption name Threads value ${threads}`);
-    this.send("setoption name Hash value 256");
+    this.send(`setoption name Hash value ${hashMb}`);
     this.send("setoption name MultiPV value 2");
     this.send("isready");
-    console.log(`[engine] ${exe} (threads=${threads}, depth=${ANALYSIS_DEPTH})`);
+    console.log(`[${label}] ${exe} (threads=${threads}, depth=${depth}, max ${maxMs} ms)`);
+  }
+
+  /** Drop every queued request and cut the running search short — only the newest request matters. */
+  supersede() {
+    for (const job of this.queue.splice(0)) job.reject(new SupersededError("superseded"));
+    if (this.current) {
+      this.current.cancelled = true;
+      this.current.reject(new SupersededError("superseded")); // its late bestmove resolves nothing
+      this.send("stop");
+    }
   }
 
   private current: Job | null = null;
@@ -82,11 +115,11 @@ export class Engine {
     this.current = null;
     this.busy = false;
     this.lineHandler = null;
-    if (job) {
+    if (job && !job.cancelled) {
       job.attempts = (job.attempts ?? 0) + 1;
       if (job.attempts <= 2) this.queue.unshift(job);
       else {
-        console.error(`[engine] giving up on ${job.fen}`);
+        console.error(`[${this.opts.label}] giving up on ${job.fen}`);
         job.resolve({ depth: 1, score: { cp: 0 }, pv: [], failed: true });
       }
     }
@@ -116,12 +149,12 @@ export class Engine {
     this.current = job;
     const sideToMove = job.fen.split(" ")[1] === "b" ? "b" : "w";
     const lines: Record<number, { depth: number; score: Score; pv: string[] }> = {};
-    const timer = setTimeout(() => this.send("stop"), ANALYSIS_MAX_MS);
+    const timer = setTimeout(() => this.send("stop"), this.opts.maxMs);
     // Watchdog: if 'stop' doesn't produce a bestmove, the process is hung.
     const watchdog = setTimeout(() => {
-      console.error("[engine] analysis hung; restarting stockfish");
+      console.error(`[${this.opts.label}] analysis hung; restarting stockfish`);
       this.handleExit();
-    }, ANALYSIS_MAX_MS + 10_000);
+    }, this.opts.maxMs + 10_000);
     this.timers = [timer, watchdog];
     this.lineHandler = (line) => {
       if (line.startsWith("info") && line.includes(" pv ")) {
@@ -159,7 +192,7 @@ export class Engine {
       }
     };
     this.send(`position fen ${job.fen}`);
-    this.send(`go depth ${ANALYSIS_DEPTH}`);
+    this.send(`go depth ${this.opts.depth}`);
   }
 
   stop() {

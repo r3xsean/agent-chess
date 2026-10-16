@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Game, MoveRecord } from "../../../shared/types";
-import { personalityById } from "../../../shared/personalities";
+import { sideName } from "../../../shared/naming";
+import { PlayerAvatar } from "./PlayerName";
 import { formatScore } from "../../../shared/evalmath";
 import { explainIllegal, lineBreakReason } from "../../../shared/explain";
 import { Avatar } from "./PlayerBar";
@@ -19,7 +20,7 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
   const self = m.selfEval;
   return (
     <div className={`thought ${on ? "on" : ""}`} onClick={onSelect} data-ply={m.ply}>
-      <Avatar personality={player.personality} />
+      <PlayerAvatar player={player} size={36} />
       <div className="thought-body">
         <div className="thought-head">
           <span>
@@ -34,7 +35,7 @@ function Thought({ game, m, on, calc, onSelect, onPlayLine }: { game: Game; m: M
             </>
           )}
           <span style={{ color: "var(--muted)", fontWeight: 500, fontSize: 12 }}>
-            {personalityById(player.personality).name} · {Math.round(m.thinkMs / 1000)}s
+            {sideName(game, m.color)} · {Math.round(m.thinkMs / 1000)}s
           </span>
         </div>
         <div className="bubble">{m.commentary}</div>

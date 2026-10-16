@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Color, Game } from "../../../shared/types";
-import { personalityById } from "../../../shared/personalities";
+import { fullName } from "../../../shared/naming";
+import { PlayerAvatar } from "./PlayerName";
 import { Avatar } from "./PlayerBar";
 import type { useBroadcastAudio } from "../useBroadcastAudio";
 
@@ -61,10 +62,10 @@ export function Studio({ game, audio }: { game: Game; audio: ReturnType<typeof u
           </div>
         ) : (
           <div key={`iv${it.when}${it.color}`} className="studio-item interview">
-            <Avatar personality={(it.color === "w" ? game.white : game.black).personality} />
+            <PlayerAvatar player={it.color === "w" ? game.white : game.black} size={36} />
             <div style={{ flex: 1 }}>
               <div className="who">
-                {it.when === "pre" ? "Pre-game interview" : "Post-game interview"} · {personalityById((it.color === "w" ? game.white : game.black).personality).name}
+                {it.when === "pre" ? "Pre-game interview" : "Post-game interview"} · {fullName(it.color === "w" ? game.white : game.black)}
               </div>
               <div className="bubble">{it.text}</div>
             </div>

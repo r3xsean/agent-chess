@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { personalityById } from "../../../shared/personalities";
 import { useFetch, type MemoryModel } from "../api";
-import { Avatar } from "../components/PlayerBar";
+import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { LessonsPanel } from "../components/LessonsPanel";
 
 const colorName = (c: "w" | "b") => (c === "w" ? "White" : "Black");
@@ -9,16 +8,14 @@ const colorName = (c: "w" | "b") => (c === "w" ? "White" : "Black");
 function PlayerJournal({ entry }: { entry: MemoryModel["players"][number] }) {
   const [all, setAll] = useState(false);
   const { player, journal } = entry;
-  const p = personalityById(player.ref.personality);
   const shown = [...journal].reverse().slice(0, all ? undefined : 3);
   return (
     <div className="card" style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "var(--panel-2)" }}>
-        <Avatar personality={p.id} />
-        <a href={`#/player/${encodeURIComponent(player.id)}`} style={{ fontWeight: 700 }}>
-          {p.name}
+        <PlayerAvatar player={player.ref} size={36} />
+        <a href={`#/player/${encodeURIComponent(player.id)}`}>
+          <PlayerName player={player.ref} />
         </a>
-        <span className="chip">{player.ref.effort}</span>
         <span style={{ color: "var(--muted)", fontSize: 13 }}>
           {player.rating} · {player.wins}W / {player.draws}D / {player.losses}L
         </span>

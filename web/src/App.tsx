@@ -6,6 +6,7 @@ import { TournamentPage } from "./pages/TournamentPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { PersonalitiesPage } from "./pages/PersonalitiesPage";
 import { NewGameModal, NewTournamentModal } from "./components/NewGame";
+import { VideoPage } from "./video/VideoPage";
 
 function useHash() {
   const [hash, setHash] = useState(location.hash);
@@ -20,8 +21,12 @@ function useHash() {
 export function App() {
   const route = useHash();
   const [modal, setModal] = useState<"game" | "tournament" | null>(null);
-  const [, section, arg] = route.split("/");
+  const [path, search = ""] = route.split("?");
+  const [, section, arg] = path.split("/");
   const id = arg ? decodeURIComponent(arg) : "";
+
+  // Video frames render bare, without the site chrome.
+  if (section === "video" && id) return <VideoPage key={id} id={id} query={new URLSearchParams(search)} />;
 
   let page: React.ReactNode;
   if (section === "game" && id) page = <GamePage key={id} id={id} />;
@@ -49,10 +54,11 @@ export function App() {
         <a className={`nav-item ${section === "personalities" ? "active" : ""}`} href="#/personalities">
           <span className="ico">🎭</span> Personalities
         </a>
-        <button className="nav-item" style={{ background: "none", border: "none", textAlign: "left" }} onClick={() => setModal("game")}>
-          <span className="ico">♟</span> New game
+        <div className="nav-sep" />
+        <button className="nav-item" onClick={() => setModal("game")}>
+          <span className="ico">♟️</span> New game
         </button>
-        <button className="nav-item" style={{ background: "none", border: "none", textAlign: "left" }} onClick={() => setModal("tournament")}>
+        <button className="nav-item" onClick={() => setModal("tournament")}>
           <span className="ico">🏆</span> Tournament
         </button>
       </nav>

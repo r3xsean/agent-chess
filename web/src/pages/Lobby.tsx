@@ -2,18 +2,16 @@ import type { PlayerRef } from "../../../shared/types";
 import { personalityById } from "../../../shared/personalities";
 import { useStream, type GameSummary, type Lobby as LobbyData } from "../api";
 import { Avatar } from "../components/PlayerBar";
+import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
   return (
     <a className="pcell" href={`#/player/${encodeURIComponent(p.id)}`} onClick={(e) => e.stopPropagation()}>
-      <Avatar personality={p.personality} />
+      <PlayerAvatar player={p} size={36} />
       <div>
         <div className="nm">
-          {personalityById(p.personality).name}
+          <PlayerName player={p} />
           {rating !== undefined && <span style={{ color: "var(--muted)", fontWeight: 500 }}> ({rating})</span>}
-        </div>
-        <div className="md">
-          {p.modelLabel} · {p.effort}
         </div>
       </div>
     </a>

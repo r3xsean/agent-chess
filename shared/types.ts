@@ -151,7 +151,29 @@ export interface Game {
   nextTriggered?: boolean;
   /** Lessons version each seat was shown in its post-game brief (optimistic concurrency for shared lessons). */
   lessonsSeen?: Partial<Record<Color, number>>;
+  /** Version of the move-classification rules the stored verdicts came from. */
+  classifierVersion?: number;
+  /** The broadcaster's picks for the video replay, made after the game. */
+  video?: VideoPlan;
   interviewsCompleteAt: number | null;
+}
+
+/** A moment the video slows down for. */
+export interface VideoMoment {
+  ply: number;
+  /** Why it matters (for the editor and chapter titles; not shown in the video). */
+  why: string;
+  /** 3 = headline, 2 = strong (both cuts), 1 = minor (YouTube only). */
+  importance: 1 | 2 | 3;
+  /** Verbatim excerpt of the mover's thinking on this move, shown as a speech bubble before it. */
+  thought?: string;
+}
+
+export interface VideoPlan {
+  moments: VideoMoment[];
+  /** The best verbatim line from each interview, for the short cut. */
+  interviewLines: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
+  createdAt: number;
 }
 
 export interface PlayerStats {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Chess } from "chess.js";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { personalityById } from "../shared/personalities";
+import { fullName, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
@@ -19,7 +20,7 @@ const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r:
 
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
-  return `${personalityById(p.personality).name} (${p.modelLabel}, ${p.effort} effort, rating ${ratingOf(p)})`;
+  return `${fullName(p)} (${p.effort} effort, rating ${ratingOf(p)})`;
 }
 
 export function asciiBoard(fen: string, orientation: Color): string {
@@ -173,7 +174,7 @@ function lessonsBlock(g: Game, color: Color): string[] {
 }
 
 /** Engine line as SAN, starting from a position. */
-function pvSan(fen: string, pv: string[] | undefined, plies = 6): string {
+export function pvSan(fen: string, pv: string[] | undefined, plies = 6): string {
   if (!pv?.length) return "";
   const c = new Chess(fen);
   const out: string[] = [];
@@ -291,13 +292,13 @@ export function broadcasterEvents(g: Game): FeedEvent[] {
   ev.push({ id: "matchup", ts: g.createdAt, text: `[MATCHUP] White: ${W}  vs  Black: ${B}` });
   for (const c of ["w", "b"] as Color[]) {
     const i = g.interviews.pre[c];
-    if (i) ev.push({ id: `pre-${c}`, ts: i.ts, text: `[PRE-GAME INTERVIEW — ${colorName(c)}, ${personalityById(playerOf(g, c).personality).name}] "${i.text}"` });
+    if (i) ev.push({ id: `pre-${c}`, ts: i.ts, text: `[PRE-GAME INTERVIEW — ${colorName(c)}, ${sideName(g, c)}] "${i.text}"` });
   }
   if (g.playStartedAt) ev.push({ id: "start", ts: g.playStartedAt, text: "[GAME STARTED] White is on move." });
   for (const m of g.moves) {
     if (!m.analysis) break; // wait for the engine so every move event carries its review
     const a = m.analysis;
-    const who = `${colorName(m.color)} (${personalityById(playerOf(g, m.color).personality).name})`;
+    const who = `${colorName(m.color)} (${sideName(g, m.color)})`;
     const no = `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
     const parts = [
       `[MOVE ${no} ${m.san}] by ${who}, thought for ${Math.round(m.thinkMs / 1000)}s.`,

@@ -1,6 +1,7 @@
 import { personalityById } from "../../../shared/personalities";
 import { useFetch, type PlayerPage as Data } from "../api";
 import { Avatar } from "../components/PlayerBar";
+import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { GamesTable } from "./Lobby";
 import { LessonsPanel } from "../components/LessonsPanel";
 
@@ -12,11 +13,13 @@ export function PlayerPage({ id }: { id: string }) {
   return (
     <div className="page">
       <div className="hero">
-        <Avatar personality={p.id} size={72} />
+        <PlayerAvatar player={player.ref} size={72} />
         <div style={{ flex: 1 }}>
-          <h1>{p.name}</h1>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <PlayerName player={player.ref} />
+          </h1>
           <p className="sub" style={{ margin: 0 }}>
-            {player.ref.modelLabel} · {player.ref.effort} effort · {p.tagline}
+            {p.tagline}
           </p>
         </div>
         <div style={{ textAlign: "right" }}>

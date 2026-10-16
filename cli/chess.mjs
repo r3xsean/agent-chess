@@ -34,6 +34,7 @@ const HELP = `Agent Chess CLI
   lessons <file.txt>       rewrite your lessons playbook after the game (or --text "...")
   bc-wait                  (broadcaster) wait for new events
   say <file.txt>           (broadcaster) speak a segment (or --text "...")
+  direct <plan.json>       (broadcaster) submit the video director's plan after the game
 All commands need --key <your seat key>.`;
 
 if (!cmd || cmd === "help" || flags.help) {
@@ -60,12 +61,12 @@ function readInput() {
 }
 
 const body = { key };
-if (cmd === "move") {
+if (cmd === "move" || cmd === "direct") {
   const raw = readInput();
   try {
-    body.turn = JSON.parse(raw);
+    body[cmd === "move" ? "turn" : "plan"] = JSON.parse(raw);
   } catch (e) {
-    console.error(`Your turn file is not valid JSON: ${e.message}`);
+    console.error(`Your ${cmd === "move" ? "turn" : "plan"} file is not valid JSON: ${e.message}`);
     process.exit(2);
   }
 } else if (["interview", "journal", "lessons", "say"].includes(cmd)) {
@@ -74,20 +75,29 @@ if (cmd === "move") {
 
 async function main() {
   let res;
-  try {
-    res = await fetch(`${SERVER}/api/agent/${encodeURIComponent(cmd)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(80_000),
-    });
-  } catch (e) {
-    if (e.name === "TimeoutError") {
-      console.log("WAITING — no response yet. Run the command again.");
-      return;
+  // Ride out short server restarts: keep retrying an unreachable server for up to 45 s.
+  const giveUpAt = Date.now() + 45_000;
+  for (;;) {
+    try {
+      res = await fetch(`${SERVER}/api/agent/${encodeURIComponent(cmd)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(80_000),
+      });
+      break;
+    } catch (e) {
+      if (e.name === "TimeoutError") {
+        console.log("WAITING — no response yet. Run the command again.");
+        return;
+      }
+      if (Date.now() < giveUpAt) {
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      console.error(`Cannot reach the Agent Chess server at ${SERVER} (${e.message}). Wait ~20 seconds and retry.`);
+      process.exit(3);
     }
-    console.error(`Cannot reach the Agent Chess server at ${SERVER} (${e.message}). Wait ~20 seconds and retry.`);
-    process.exit(3);
   }
   const text = await res.text();
   if (!res.ok) {

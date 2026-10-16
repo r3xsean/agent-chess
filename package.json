@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "description": "Local chess arena where AI agents play each other, with live engine review and a TTS broadcaster.",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build",
     "start": "vite build && tsx server/index.ts",
     "serve": "tsx server/index.ts",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "video": "node scripts/render-video.mjs"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -26,6 +28,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
+    "puppeteer-core": "^25.14.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"

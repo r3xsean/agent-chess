@@ -4,6 +4,8 @@ import { CLI } from "./paths";
 import { agentDir } from "./store";
 import { seatKeysFor } from "./game";
 import { describePlayer } from "./briefing";
+import { fullName, sideName } from "../shared/naming";
+import { DEFAULT_BROADCASTER } from "../shared/models";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const riskOf = (personality: string) => {
@@ -97,7 +99,8 @@ export function broadcasterPrompt(g: Game): string {
   return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words are turned into speech and played live to the audience as two AI agents play chess.
 
 Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.
-Risk appetite: White is ${riskOf(g.white.personality)}; Black is ${riskOf(g.black.personality)}. Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
+Risk appetite: White is ${riskOf(g.white.personality)}; Black is ${riskOf(g.black.personality)}.
+The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}") — the personality is just the style each one is playing in tonight, good for colour ("Opus, in full Magician mode…"). Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
 
 You see everything: the engine's verdict on each move (brilliant, great, best, excellent, good, book, inaccuracy, mistake, miss, blunder) and its evaluation, each player's private thinking, calculations and self-evaluation, illegal-move attempts, draw offers and interviews. The players cannot hear you.
 
@@ -105,6 +108,7 @@ You see everything: the engine's verdict on each move (brilliant, great, best, e
 Run every command as:  ${cli} <command> --key ${key}
 - \`bc-wait\` — blocks until there are new events (up to ~50 s) and prints them. WAITING means run it again; DONE means you're finished. Give your shell tool a timeout of at least 90 seconds.
 - \`say <file.txt>\` — speak one segment (write the text to a file in ${dir} first).
+- \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for.
 
 ## How to speak
 - One segment = 1–3 spoken sentences, under 400 characters. Natural spoken English — it will be read aloud.
@@ -117,7 +121,37 @@ Run every command as:  ${cli} <command> --key ${key}
 1. Pre-game: introduce the matchup and personalities, react to the pre-game interviews. The first move waits for your intro (after both interviews are in).
 2. During the game: commentate.
 3. After the game: react to the result and the review, then to the post-game interviews, then sign off.
+4. Then \`bc-wait\` hands you a VIDEO DIRECTOR brief: pick the moments for the replay video and submit them with \`direct <plan.json>\` (details in the brief).
 Loop \`bc-wait\` → \`say\` until \`bc-wait\` prints DONE. Never end your task before that.`;
+}
+
+/** A standalone director for a game that finished without one: it only plans the replay video. */
+export function directorPrompt(g: Game): string {
+  const key = seatKeysFor(g.id).x;
+  const cli = `node "${CLI}"`;
+  return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is over, and it's being cut into a replay video. Your job is to choose what the video slows down for.
+
+Run every command as:  ${cli} <command> --key ${key}
+1. Run \`bc-wait\` (give your shell tool a timeout of at least 90 seconds). It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews.
+2. Write your plan as JSON in ${agentDir(g.id, "x")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit.
+3. Run \`bc-wait\` again until it prints DONE.`;
+}
+
+export function directorLaunch(g: Game, effort?: string) {
+  const base = g.broadcaster ?? { provider: DEFAULT_BROADCASTER.provider, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort };
+  const bc = { ...base, effort: effort ?? base.effort };
+  return {
+    gameId: g.id,
+    tasks: [
+      {
+        role: "director",
+        title: `🎬 Video director — ${g.id}`,
+        clientRequestId: `${g.id}-director`,
+        target: { providerInstanceId: bc.provider, model: bc.model, options: effortOption(bc.provider, bc.effort) },
+        prompt: directorPrompt(g),
+      },
+    ],
+  };
 }
 
 const effortOption = (provider: string, effort: string) =>
@@ -128,7 +162,7 @@ export function launchSpec(g: Game) {
     const p = c === "w" ? g.white : g.black;
     return {
       role: c === "w" ? "white" : "black",
-      title: `♟ ${colorName(c)}: ${personalityById(p.personality).name} (${p.modelLabel}) — ${g.id}`,
+      title: `♟ ${colorName(c)}: ${fullName(p)} — ${g.id}`,
       clientRequestId: `${g.id}-${c}`,
       target: { providerInstanceId: p.provider, model: p.model, options: effortOption(p.provider, p.effort) },
       prompt: playerPrompt(g, c),
