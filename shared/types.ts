@@ -195,12 +195,16 @@ export interface Lessons {
   history: { version: number; ts: number; gameId: string | null; text: string }[];
 }
 
+/** How much objective soundness a personality will trade for practical chances. */
+export type Risk = "calm" | "bold" | "wild";
+
 export interface Personality {
   id: string;
   name: string;
   emoji: string;
   color: string;
   tagline: string;
+  risk: Risk;
   style: string;
   voice: string;
 }

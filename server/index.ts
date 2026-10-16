@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Color, Game, PlayerRef, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
-import { PERSONALITIES, personalityById } from "../shared/personalities";
+import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, ROOT } from "./paths";
 import { adminToken, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournament, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
@@ -313,6 +313,28 @@ app.get(
       })
       .sort((a, b) => (b.lessons.updatedAt ?? 0) - (a.lessons.updatedAt ?? 0) || b.players.length - a.players.length);
   }),
+);
+
+/** Every personality with its record across models. */
+app.get(
+  "/api/personalities",
+  handle(() =>
+    PERSONALITIES.map((p) => {
+      const ps = Object.values(players).filter((x) => x.ref.personality === p.id);
+      const total = ps.reduce((a, x) => ({ games: a.games + x.games, wins: a.wins + x.wins, draws: a.draws + x.draws, losses: a.losses + x.losses }), {
+        games: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+      });
+      return {
+        personality: p,
+        riskRule: riskRule(p),
+        record: total,
+        players: ps.sort((a, b) => b.rating - a.rating),
+      };
+    }),
+  ),
 );
 
 /* ------------------------------ tournaments ------------------------------ */

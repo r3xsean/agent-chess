@@ -4,6 +4,7 @@ import { Lobby } from "./pages/Lobby";
 import { PlayerPage } from "./pages/PlayerPage";
 import { TournamentPage } from "./pages/TournamentPage";
 import { MemoryPage } from "./pages/MemoryPage";
+import { PersonalitiesPage } from "./pages/PersonalitiesPage";
 import { NewGameModal, NewTournamentModal } from "./components/NewGame";
 
 function useHash() {
@@ -27,6 +28,7 @@ export function App() {
   else if (section === "player" && id) page = <PlayerPage id={id} />;
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
   else if (section === "memory") page = <MemoryPage />;
+  else if (section === "personalities") page = <PersonalitiesPage />;
   else page = <Lobby onNewGame={() => setModal("game")} onNewTournament={() => setModal("tournament")} />;
 
   return (
@@ -43,6 +45,9 @@ export function App() {
         </a>
         <a className={`nav-item ${section === "memory" ? "active" : ""}`} href="#/memory">
           <span className="ico">🧠</span> Memory
+        </a>
+        <a className={`nav-item ${section === "personalities" ? "active" : ""}`} href="#/personalities">
+          <span className="ico">🎭</span> Personalities
         </a>
         <button className="nav-item" style={{ background: "none", border: "none", textAlign: "left" }} onClick={() => setModal("game")}>
           <span className="ico">♟</span> New game

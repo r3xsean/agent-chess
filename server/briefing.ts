@@ -115,7 +115,7 @@ export function turnBrief(g: Game, color: Color): string {
   }
   if (g.pendingIllegal[color].length) out.push(`(Rejected this turn: ${g.pendingIllegal[color].join(", ")})`);
   const lessons = g.options?.learning ? readLessons(playerOf(g, color).model).text : "";
-  if (lessons) out.push("", "Your lessons from past games (keep them in mind):", lessons);
+  if (lessons) out.push("", "Your lessons from past games (keep them in mind — they sharpen your execution, they don't change your style or risk appetite):", lessons);
   out.push("", `Board image (same position, as it looks on screen): ${img}`);
   out.push("", "Submit with: move <turn.json>   (see your instructions for the JSON format)");
   return out.join("\n");
@@ -236,6 +236,11 @@ export function postgameBrief(g: Game, color: Color): string {
       return `- ${no} ${m.san}: ${a.classification.toUpperCase()}${a.bestSan && a.bestSan !== m.san ? ` (engine preferred ${a.bestSan})` : ""}, eval after ${formatScore(a.evalAfter)}`;
     }),
   ];
+  if (personalityById(playerOf(g, color).personality).risk === "wild")
+    out.push(
+      "",
+      "Note: you play for practical chances, so the engine will mark some deliberate risks as inaccuracies or mistakes. Judge a risk by whether it was a real practical chance, not by the engine's number — but a risk that simply lost material for nothing is still a mistake.",
+    );
   if (g.options?.learning) out.push("", "Your worst moves, in detail (diagrams from your side):", ...worstMoves(g, color));
   const needs: string[] = [];
   if (!g.interviews.post[color]) {
@@ -262,6 +267,7 @@ export function postgameBrief(g: Game, color: Color): string {
       `   Study your worst moves above. Then rewrite the WHOLE list: at most ${MAX_LESSON_LINES} bullet items and ${MAX_LESSONS} characters in total. Keep what still matters, merge duplicates, sharpen vague items, drop what's stale, add what this game taught you.`,
       "   Each item is one bullet in the form \"- When [situation] → [what to do]\", e.g. \"- When a piece leaves a diagonal or file → re-check what that line now opens for BOTH sides, especially a queen or bishop standing behind it.\"",
       "   Lessons are GENERAL PRINCIPLES about how you think, calculate and check moves — no opening move sequences, no specific positions.",
+      "   They're shared by every personality you play, calm or wild, so they're about EXECUTION, never about how much risk to take: no \"avoid gambits\", \"play solid\" or \"don't sacrifice\". Your personality decides the risk; lessons make you better at whatever style you're playing (e.g. \"- When I sacrifice for an attack → count the attackers and defenders around the king before committing.\").",
       `   Your current lessons: ${l.text ? `\n${l.text}` : "(none yet)"}`,
       "   Submit with: lessons <file.txt>",
     );

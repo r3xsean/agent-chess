@@ -1,5 +1,6 @@
 import type { Meta } from "../api";
 import { Avatar } from "./PlayerBar";
+import { RiskBadge } from "./RiskBadge";
 
 export interface SeatChoice {
   model: string;
@@ -56,7 +57,9 @@ export function SeatPicker({ meta, value, onChange, compact }: { meta: Meta; val
               <button key={p.id} className={`persona ${value.personality === p.id ? "on" : ""}`} onClick={() => onChange({ ...value, personality: p.id })} title={p.style}>
                 <Avatar personality={p.id} />
                 <div>
-                  <b>{p.name}</b>
+                  <b>
+                    {p.name} <RiskBadge risk={p.risk} />
+                  </b>
                   <span>{p.tagline}</span>
                 </div>
               </button>

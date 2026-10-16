@@ -1123,3 +1123,21 @@ input[type="text"] {
   color: var(--muted);
   margin-bottom: 3px;
 }
+
+/* risk appetite badge */
+.risk-badge.risk-calm,
+.risk-badge.risk-bold,
+.risk-badge.risk-wild {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  vertical-align: middle;
+  line-height: 1.5;
+}
+.risk-badge.risk-calm { background: #3d5a46; color: #b9e0c3; }
+.risk-badge.risk-bold { background: #6b5320; color: #f5d27a; }
+.risk-badge.risk-wild { background: #7a2b2b; color: #ffb3a8; }

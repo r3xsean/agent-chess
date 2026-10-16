@@ -1,26 +1,41 @@
 import type { Color, Game } from "../shared/types";
-import { personalityById, STYLE_CONTRACT } from "../shared/personalities";
+import { personalityById, RISK_LABEL, riskRule } from "../shared/personalities";
 import { CLI } from "./paths";
 import { agentDir } from "./store";
 import { seatKeysFor } from "./game";
 import { describePlayer } from "./briefing";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
+const riskOf = (personality: string) => {
+  const r = RISK_LABEL[personalityById(personality).risk];
+  return `${r.label.toLowerCase()} (${r.blurb.toLowerCase()})`;
+};
 
 export function playerPrompt(g: Game, color: Color): string {
   const me = color === "w" ? g.white : g.black;
-  const p = personalityById(me.personality);
-  const key = seatKeysFor(g.id)[color];
-  const dir = agentDir(g.id, color);
+  return renderPlayerPrompt({
+    color,
+    personality: me.personality,
+    opponent: describePlayer(g, color === "w" ? "b" : "w"),
+    key: seatKeysFor(g.id)[color],
+    dir: agentDir(g.id, color),
+    learning: !!g.options?.learning,
+  });
+}
+
+/** The exact player prompt, as a pure template (the Personalities page renders it with placeholders). */
+export function renderPlayerPrompt(o: { color: Color; personality: string; opponent: string; key: string; dir: string; learning: boolean }): string {
+  const { color, opponent, key, dir, learning } = o;
+  const p = personalityById(o.personality);
   const cli = `node "${CLI}"`;
   return `You are a chess player in Agent Chess Arena, playing a real game of chess against another AI agent. A website streams the game live to a human audience, with an engine review of every move and a broadcaster commentating.
 
 ## Who you are
 You play ${colorName(color)}. You are **${p.name}** — ${p.tagline}.
 Style: ${p.style}
-${STYLE_CONTRACT}
+Risk appetite — ${RISK_LABEL[p.risk].label}: ${riskRule(p)}
 Voice: ${p.voice} Use this voice in your commentary and interviews.
-Your opponent: ${describePlayer(g, color === "w" ? "b" : "w")}.
+Your opponent: ${opponent}.
 
 ## Fair play (strict)
 - You see the game the way a human sees a chess.com board: the board, the last move, whether you're in check, captured pieces and the move list. Nothing else.
@@ -38,8 +53,8 @@ Commands:
 - \`resign\` — resign.
 - \`interview <file.txt>\` — answer an interview question.
 - \`journal <file.txt>\` — write your post-game journal entry.${
-    g.options?.learning
-      ? "\n- `lessons <file.txt>` — after the game, rewrite your LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game)."
+    learning
+      ? "\n- `lessons <file.txt>` — after the game, rewrite your LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game). Lessons make you better at executing your style; they never override your style or risk appetite."
       : ""
   }
 - \`status\` — print the current position again.
@@ -66,7 +81,7 @@ Write a JSON file in your scratch folder, then run \`move <path>\`:
 
 ## The loop — keep going until the CLI prints DONE
 1. Run \`wait\`.
-2. It prints one of: PRE-GAME (answer the interview), YOUR MOVE (think, then submit), GAME OVER (post-game interview, journal${g.options?.learning ? ", then lessons" : ""}), WAITING (run \`wait\` again), DONE (you are finished).
+2. It prints one of: PRE-GAME (answer the interview), YOUR MOVE (think, then submit), GAME OVER (post-game interview, journal${learning ? ", then lessons" : ""}), WAITING (run \`wait\` again), DONE (you are finished).
 3. Act, then go back to step 1.
 Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it.
 If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). Run \`status\`, re-read the board and image square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
@@ -82,6 +97,7 @@ export function broadcasterPrompt(g: Game): string {
   return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words are turned into speech and played live to the audience as two AI agents play chess.
 
 Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.
+Risk appetite: White is ${riskOf(g.white.personality)}; Black is ${riskOf(g.black.personality)}. Wild players knowingly take objectively dubious risks for practical chances, so when the engine frowns at their gambit or sacrifice, the story is whether the gamble pays off.
 
 You see everything: the engine's verdict on each move (brilliant, great, best, excellent, good, book, inaccuracy, mistake, miss, blunder) and its evaluation, each player's private thinking, calculations and self-evaluation, illegal-move attempts, draw offers and interviews. The players cannot hear you.
 
