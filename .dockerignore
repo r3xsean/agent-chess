@@ -1,0 +1,12 @@
+.git
+node_modules
+dist
+data
+*.log
+*.err
+.server.pid
+vendor/stockfish-dl
+vendor/piper-venv
+vendor/voices
+vendor/music
+vendor/sfx-download

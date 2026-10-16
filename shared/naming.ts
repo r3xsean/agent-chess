@@ -38,6 +38,12 @@ export function selfEvalColors(g: Pick<Game, "white" | "black">): Record<Color, 
  * (a model with no personality keeps its model name); when even that matches, the model and its effort.
  */
 export function sideName(g: Pick<Game, "white" | "black">, c: Color): string {
+  const mine = baseSideName(g, c);
+  // Still the same (e.g. a human who named themselves after the model they're playing): say which side.
+  return mine === baseSideName(g, c === "w" ? "b" : "w") ? `${mine} (${c === "w" ? "White" : "Black"})` : mine;
+}
+
+function baseSideName(g: Pick<Game, "white" | "black">, c: Color): string {
   const me = c === "w" ? g.white : g.black;
   const opp = c === "w" ? g.black : g.white;
   if (isHuman(me) || me.modelLabel !== opp.modelLabel) return me.modelLabel;

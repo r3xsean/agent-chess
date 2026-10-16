@@ -55,6 +55,7 @@ export function renderPlayerPrompt(o: {
   chess960?: { n: number; fen: string };
 }): string {
   const { color, opponent, key, dir, learning } = o;
+  const plain = !!personalityById(o.personality).plain;
   const cli = `node "${CLI}"`;
   const against = o.vsHuman ? "a human, who plays their moves on the website" : "another AI agent";
   const variant = o.chess960
@@ -85,7 +86,7 @@ Commands:
 - \`interview <file.txt>\` — answer an interview question.
 - \`journal <file.txt>\` — write your post-game journal entry.${
     learning
-      ? "\n- `lessons <file.txt>` — after the game, rewrite your LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game). Lessons make you better at executing your style; they never override your style or risk appetite."
+      ? `\n- \`lessons <file.txt>\` — after the game, rewrite your LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game). ${plain ? "Lessons are about how you think, calculate and check moves." : "Lessons make you better at executing your style; they never override your style or risk appetite."}`
       : ""
   }
 - \`status\` — print the current position again.
@@ -96,7 +97,7 @@ After each \`wait\` that gives you the move, the board image at ${dir}\\board.pn
 Write a JSON file in your scratch folder, then run \`move <path>\`:
 {
   "move": "Nf3",
-  "commentary": "Your thinking for this move, in character.",
+  "commentary": "Your thinking for this move${plain ? "" : ", in character"}.",
   "eval": "+0.4",
   "lines": [
     { "moves": "Nf3 Nc6 Bb5 a6 Ba4 Nf6", "note": "Main line: I keep pressure on e5." },
