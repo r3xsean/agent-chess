@@ -242,7 +242,9 @@ async function push() {
     return;
   }
   inFlight = false;
-  if (pendingGames.size || pendingMeta || pendingJournals.size || pendingLessons.size) schedule(1500);
+  // Changes that arrived during the push: moves go out at once, everything else shortly.
+  if (pendingGames.size) schedule(300);
+  else if (pendingMeta || pendingJournals.size || pendingLessons.size) schedule(1500);
 }
 
 /* ------------------------------ the public side: receive ------------------------------ */
