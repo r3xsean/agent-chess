@@ -226,10 +226,10 @@ export function directorBrief(g: Game): string {
     "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
     "- asides: lines said in passing while the game plays on, in the player's own voice, with nothing drawn. The board doesn't stop for them: each is said as its move is played, and the next moves play on under it. They keep the players talking between your moments, so use them for anything worth hearing even when nothing big happens on the board: what they're going for, a plan, a worry, a read on the opponent, a habit, a joke, a line that comes back later. Each is { \"ply\": 7, \"quote\": \"…\", \"delivery\": \"…\" } (delivery optional), quoted exactly from that move's `commentary:` (or from what was `said with illegal attempt` on it), at most 25 words. Shorter is better, and a clause works (\"I take space in the center\"). Not on a ply that's one of your moments, nor on the last move.",
     "  - Open with a short exchange: 4–6 asides over the first 10–16 plies, the two players taking turns, a few words each (5–12 is ideal), so the opening has them talking through their choices instead of silent theory. Not one on every ply: the moves need room to play between the lines. Where asides do come one after another, each move waits for the line before it, so keep those short.",
-    `  - Every aside is in the YouTube cut. Mark the best few with \`"short": true\` (at most ${MAX_SHORT_ASIDES}) to say them in the TikTok cut too, over its quick quiet moves: one or two from the opening, and the ones that set up your headline moments or carry the most personality.`,
+    `  - Every aside is in the YouTube cut. Mark the ones the TikTok cut says too with \`"short": true\`: it shows only your importance 2–3 moments and its quiet moves fly by, so the short's asides are what keep it talking between them. Pick the ones that set up your headline moments or carry the most personality, one or two from the opening, and enough that the short never goes more than ${MAX_SILENCE.portrait} seconds with nothing said (the server checks this too). At most ${MAX_SHORT_ASIDES}.`,
     "  - An illegal attempt gets an aside on its move: usually the player owning up to it (the move's commentary often does), or what they meant by it. It's said while the rejected move is on the board.",
     "  - An aside that wouldn't be over before the next moment starts up to 4 plies early, over the quiet moves before it; otherwise the board waits for it.",
-    `  - The YouTube cut must never go quiet for long: from the first move to the result, at most ${MAX_SILENCE} seconds may pass with nothing said (no quote, aside or engine line on screen). The server works out the video's timing and sends the plan back with every silent stretch, by ply: fill each with an aside or two from the plies in it.`,
+    `  - The YouTube cut must never go quiet for long: from the first move to the result, at most ${MAX_SILENCE.landscape} seconds may pass with nothing said (no quote, aside or engine line on screen). The server works out the video's timing and sends the plan back with every silent stretch, by ply: fill each with an aside or two from the plies in it.`,
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff, and fit it to the kind of game: for a built attack, the shot with the attacker's calculation (not the defender's mistake); for a swindle, the winning side's most confident line just before it turns; for a thrown-away win, the leader's line on the move that throws it; otherwise usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
     "- packaging (required): `title` for YouTube (at most 80 characters, the story not the notation, names the models); `caption` for TikTok (at most 150 characters, may end with a few hashtags); `thumbnail`: the move whose position makes the thumbnail and at most 4 words of big text.",
@@ -469,21 +469,26 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
       `Together the quotes, asides, hook and interview lines come to ${total} characters of speech; keep them under ${VOICE_BUDGET}. Shorten the longest quotes and asides, or drop the quotes from a few importance-1 moments.`,
     );
 
-  const quiet = silentStretches(g, plan);
+  const quiet = silentStretches(g, plan, "landscape");
   if (quiet.length)
     throw new ActionError(
-      `The YouTube cut goes more than ${MAX_SILENCE} s with nothing said here:\n${quiet.map((q) => `- ${q}`).join("\n")}\nFill each with an aside or two from the plies in it (or a moment, where one belongs).`,
+      `The YouTube cut goes more than ${MAX_SILENCE.landscape} s with nothing said here:\n${quiet.map((q) => `- ${q}`).join("\n")}\nFill each with an aside or two from the plies in it (or a moment, where one belongs).`,
+    );
+  const quietShort = silentStretches(g, plan, "portrait");
+  if (quietShort.length)
+    throw new ActionError(
+      `The TikTok cut goes more than ${MAX_SILENCE.portrait} s with nothing said here:\n${quietShort.map((q) => `- ${q}`).join("\n")}\nFill each by marking an aside from the plies in it \`"short": true\` (or adding one), so the short says it too.`,
     );
   return plan;
 }
 
-/** How long the YouTube cut may go with nothing said, from the first move to the result. */
-const MAX_SILENCE = 15;
+/** How long each cut may go with nothing said, from the first move to the result: the short, quicker, sooner. */
+const MAX_SILENCE: Record<"landscape" | "portrait", number> = { landscape: 15, portrait: 8 };
 /** Roughly how fast the voices speak, in words of the spoken text a second: to time a plan before it's recorded. */
 const SPOKEN_WPS = 2.5;
 const MAX_ASIDES = 80;
-/** How many asides the TikTok cut may say: its quiet moves fly by, so only the best few. */
-const MAX_SHORT_ASIDES = 8;
+/** How many asides the TikTok cut may say (its quiet moves fly by, so they're fewer than the YouTube cut's). */
+const MAX_SHORT_ASIDES = 30;
 
 /** The plan's lines as long as they'll roughly take to say, for timing a plan that isn't recorded yet. */
 function estimatedVoice(g: Game): VoiceManifest {
@@ -495,21 +500,22 @@ function estimatedVoice(g: Game): VoiceManifest {
   return { clips };
 }
 
-/** The YouTube cut as this plan would time it (the voices estimated). */
-const plannedTimeline = (g: Game, plan: VideoPlan) => {
+/** A cut (the YouTube one unless said) as this plan would time it, the voices estimated. */
+const plannedTimeline = (g: Game, plan: VideoPlan, format: "landscape" | "portrait" = "landscape") => {
   const pg = { ...g, video: plan };
-  return buildTimeline(pg, "landscape", { voice: estimatedVoice(pg) });
+  return buildTimeline(pg, format, { voice: estimatedVoice(pg) });
 };
 
 /**
- * Where the YouTube cut goes quiet for too long, by ply, leaving out stretches with nothing to quote (a
- * human's moves, or plies already used).
+ * Where a cut goes quiet for too long, by ply, leaving out stretches with nothing left to quote there (a
+ * human's moves, plies already said in that cut, or moments the cut leaves out, which can't take an aside).
  */
-function silentStretches(g: Game, plan: VideoPlan): string[] {
-  const tl = plannedTimeline(g, plan);
-  const used = new Set([...plan.moments.map((x) => x.ply), ...(plan.asides ?? []).map((a) => a.ply)]);
+function silentStretches(g: Game, plan: VideoPlan, format: "landscape" | "portrait"): string[] {
+  const tl = plannedTimeline(g, plan, format);
+  const said = (plan.asides ?? []).filter((a) => format === "landscape" || a.short);
+  const used = new Set([...plan.moments.map((x) => x.ply), ...said.map((a) => a.ply)]);
   const out: string[] = [];
-  for (const gap of silences(tl, MAX_SILENCE)) {
+  for (const gap of silences(tl, MAX_SILENCE[format])) {
     const plies = tl.scenes.flatMap((s) => (s.kind === "move" && !s.hook && s.start >= gap.from - 0.01 && s.start < gap.to ? [g.moves[s.i]] : []));
     if (!plies.some((m) => m.commentary.trim() && !used.has(m.ply))) continue;
     const [a, b] = [plies[0], plies[plies.length - 1]];
