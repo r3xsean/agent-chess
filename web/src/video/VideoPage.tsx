@@ -353,7 +353,22 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
     // The director's refs: exactly the words it said point at the board.
     for (const l of mk.lit ?? []) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(a0 * shown(l.at)), at: l.at });
   }
-  return { marks: arrows.length || rings.length ? { arrows, rings } : undefined, lit };
+  // The same arrow or circle drawn by two marks at once (the idea coming off, the next one drawing it
+  // again) is one drawing: as solid and as settled as the more so, so it stays put rather than fading out
+  // and popping back in.
+  const once = <T extends { o: number; pop: number }>(items: T[], key: (x: T) => string) => {
+    const by = new Map<string, T>();
+    for (const x of items) {
+      const had = by.get(key(x));
+      by.set(key(x), had ? { ...had, o: Math.max(had.o, x.o), pop: Math.max(had.pop, x.pop) } : x);
+    }
+    return [...by.values()];
+  };
+  const drawn = {
+    arrows: once(arrows, (a) => `${a.from}${a.to}${a.hit ? "~" : ""}${a.own}`),
+    rings: once(rings, (r) => `${r.sq}${r.own}`),
+  };
+  return { marks: arrows.length || rings.length ? drawn : undefined, lit };
 }
 
 /** How many of a thought's arrows and rings reach the ranks a bubble at that edge covers (White at the bottom). */
