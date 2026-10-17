@@ -238,10 +238,12 @@ export interface ThoughtMark {
    * mark imagines it: a move named (`san`), played on from the moves before it, or (`hit`) a piece on that
    * board attacking or defending a square ("d4>f3", the knight that has just landed there forking).
    */
-  arrows: { san: string; from: string; to: string; color: Color; word: number; hit?: boolean }[];
+  arrows: { san: string; from: string; to: string; color: Color; word: number; hit?: boolean; say?: [number, number] }[];
   /** Squares named, as rings. */
-  rings: { sq: string; word: number }[];
+  rings: { sq: string; word: number; say?: [number, number] }[];
 }
+// `say` on an arrow or ring: the words the director gave for it (first and last word), which it appears on
+// and lights up in the bubble; without them, the words are found for it (see markColors).
 
 /** The cold open: the payoff moment, played first, before "how did we get here?". */
 export interface VideoHook {

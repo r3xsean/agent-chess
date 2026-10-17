@@ -170,6 +170,7 @@ export function directorBrief(g: Game): string {
     "- line (optional): play an engine line out on the board right after this move, then hold on your `caption`. Use it where the viewer has to see what didn't happen to understand the moment: `instead` plays what the engine wanted in place of this move (what a miss missed, what a blunder should have been); `after` plays the engine's best play from the position this move left, for when the game went another way (the punishment the reply didn't find, or the point of a brilliant or great move that never got played out). Only the options listed under a move as `line option` exist. Lines are where the video shows what the players couldn't see, so don't leave the good ones out: a `miss` at importance 2–3 needs its `instead` line (without it the viewer can't see what was missed); on a thrown-away win, the `instead` on the move that threw it shows how close it was; a tactic nobody played (a blunder's `after`, when the reply missed it) is the ghost of the game and usually worth showing; an unsound sacrifice that worked gets the defence that would have refuted it; a great or brilliant move whose point never got played out gets its `after`. Skip a line when the real moves play it out anyway. A blunder's `after` and the reply's `instead` are often the same line: show it once, on whichever moment tells the story better. A game with several swings usually uses 3–6; a game with no line options listed has none. Each one costs the viewer a few seconds, and in the TikTok cut only importance 2–3 moments show theirs.",
     "- marks (on every quote that points at the board, the hook's included): while the quote is spoken, you draw on the board what it's talking about, the way a streamer draws arrows and circles nonstop while they talk through a position. Be generous: a streamer's board is almost never empty while they talk, and every piece, square and move they mention gets a circle or an arrow the moment they say it. Each mark is one idea (a line, a threat, a fork, a pin, a piece stuck defending, a material count, a weak square, the move they missed): its drawing builds up as the words are said, and the board wipes for the next mark. Each mark has `at`, the words of the quote where the idea starts (exactly as they appear), and `arrows` and/or `squares`:",
     "  - `arrows`, in the order they're said: moves in SAN (\"Rxe8+\", \"Kf7\"), and a piece's attack, defence or reach as \"from>to\" (\"d4>f3\"): a fork is two of them from the forking piece, a pin or a skewer one through the pinned piece to what's behind it, a piece stuck defending one to what it guards, a passed pawn one up its file. Arrows are drawn on the board as the player imagines it: each move is played on from the moves before it in the same mark, and a reach is from where the piece stands by then, so \"after Nd4 the knight hits f3 and e6\" is `[\"Nd4\", \"d4>f3\", \"d4>e6\"]`, and a piece moving twice goes on from where it landed. Each arrow appears as its words are said (the move, or the square a reach is to); when the quote only describes it (\"the king attacks the rook\"), give the item as { \"draw\": \"f7>e8\", \"at\": \"the king attacks the rook\" } so it appears on those words.",
+    "  - What lights up: as each arrow and circle appears, the words in the bubble that name what it touches light up in the same colour as the drawing (green for the speaker's pieces and moves, red for the opponent's, amber for an empty square), each as it's said. When you give an item `at` words, those are the words it appears on and the ones that light up, so give the words that name its piece or square: { \"sq\": \"e8\", \"at\": \"the pinned knight\" } lights \"knight\", { \"draw\": \"f7>e8\", \"at\": \"the king attacks the rook\" } lights \"king\" and \"rook\". Without `at`, the nearest words naming its squares or pieces light up, which can pick the wrong one of two (\"Rook + 3 pawns vs knight + 3 pawns\": give Black's pawns \"Rook + 3 pawns\" and White's \"knight + 3 pawns\", since `at` finds the first place its words appear).",
     "  - `squares`: squares to circle, each as it's said, or as { \"sq\": \"f2\", \"at\": \"Rook\" } to circle a piece as the words name it: a hanging piece, a weak square, the square a plan aims for, and every piece the quote names by its kind (\"the rook\", \"my knight\", \"the d-pawn\", \"the pinned knight\"). Circle a piece where the viewer sees it: on the board as it stands while they think, or where a move drawn earlier in the same mark brings it. A piece that's only there after the move they're about to play (\"I take the rook… my knight\" circling the rook's square) reads as the wrong piece: circle it where it is now, or draw the move first in that mark.",
     "  - The board starts from the position while they think (the mover to play) or from just after the move they're about to play, whichever makes the mark hold; add `from`: \"before\" or \"after\" when both would. A threat (the opponent's move named before it's their turn) or two moves in a row by one side are fine as they are. A move they look back on (\"Kf7 attacked my rook\", \"I lost it by playing Nxc5\") is drawn from the position where it was played, up to 10 moves back: just list it, and anything after it in the mark goes on from there.",
     "  - A mark comes off at the end of its sentence, or when the next mark starts. When the idea runs on into the next sentence with nothing new to draw, add `until`: the words it stays up through. A reaction to a blunder (\"Ouch, I walked into Nd4+… I should have seen it\") keeps the refutation up with `until` to the end of the quote. A mark that ends on the move they're about to play stays up until it's played.",
@@ -479,8 +480,8 @@ const MARK_LOOKBACK = 10;
 /**
  * Everything a quote points at on the board gets drawn while it's said: each square it names (alone, or as
  * a move's or a piece's square: "e4", "Nc5") is on an arrow or a ring, and each piece it names by kind
- * ("the rook", "3 pawns", "the d-pawn") has an arrow or a ring on a piece of that kind, in the same sentence
- * or the same mark. A piece of that kind is one on that square now, just after the move, or in the
+ * ("the rook", "3 pawns", "the d-pawn") has an arrow or a ring on a piece of that kind, in the mark that's
+ * up while it's said (the board has wiped the earlier ones). A piece of that kind is one on that square now, just after the move, or in the
  * positions looked back on. The director is sent back to draw what it skipped.
  */
 function checkDrawn(g: Game, m: MoveRecord, quote: string, marks: ThoughtMark[], where: string): void {
@@ -498,13 +499,16 @@ function checkDrawn(g: Game, m: MoveRecord, quote: string, marks: ThoughtMark[],
   const markOf = (k: number) => marks.reduce((at, mk, n) => (mk.word <= k ? n : at), -1);
   const missing = new Map<number, string[]>();
   ws.forEach((w, k) => {
-    const at = pointsAt(w);
-    if (!at) return;
+    const targets = pointsAt(w);
+    if (!targets.length) return;
     const s = spans.findIndex(([a, b]) => k >= a && k <= b);
-    const [a, b] = spans[s];
-    const near = items.filter((it) => (it.word >= a && it.word <= b) || it.n === markOf(k));
-    const drawn = "sq" in at ? near.some((it) => it.sqs.includes(at.sq)) : near.some((it) => it.kind === at.kind || it.sqs.some((sq) => kindsOn(sq).has(at.kind)));
-    if (!drawn) missing.set(s, [...(missing.get(s) ?? []), plainWord(w)]);
+    // Drawn in the mark up while the word is said: an earlier one has been wiped by then.
+    const near = items.filter((it) => it.n === markOf(k));
+    // Each square of "f2/g2/h2" on its own.
+    for (const at of targets) {
+      const drawn = "sq" in at ? near.some((it) => it.sqs.includes(at.sq)) : near.some((it) => it.kind === at.kind || it.sqs.some((sq) => kindsOn(sq).has(at.kind)));
+      if (!drawn) missing.set(s, [...(missing.get(s) ?? []), targets.length > 1 && "sq" in at ? at.sq : plainWord(w)]);
+    }
   });
   if (missing.size) {
     const list = [...missing].map(([s, named]) => `"${ws.slice(spans[s][0], spans[s][1] + 1).join(" ")}": ${[...new Set(named)].join(", ")}`);
@@ -565,6 +569,12 @@ function markList(g: Game, m: MoveRecord, quote: string, raw: unknown[], where: 
       if (k < 0 || k > last) throw new ActionError(`${where}.at must be words of this mark's part of the quote, exactly as they appear ("${phrase}" isn't).`);
       return k;
     };
+    // The words given for an item, first to last: it appears on them and lights them up.
+    const say = (phrase: string | undefined, start: number): { say?: [number, number] } => {
+      if (!phrase || start < 0) return {};
+      const end = phraseEnd(quote, phrase, start);
+      return end >= start ? { say: [start, end] } : {};
+    };
     const rawList = x.arrows ?? x.moves;
     const list = (Array.isArray(rawList) ? rawList : typeof rawList === "string" ? rawList.split(/\s+/) : []).map((r: unknown) => markItem(r, "draw"));
     // Move numbers ("27.", "27...") are dropped; "27...g6" keeps its move.
@@ -607,7 +617,7 @@ function markList(g: Game, m: MoveRecord, quote: string, raw: unknown[], where: 
         k = said;
         look = said + 1;
       } else if (j) k = Math.max(k, Math.min(k + 2, last));
-      return { san: d.san, from: d.from, to: d.to, color: d.color, word: k, ...(d.hit && { hit: true }) };
+      return { san: d.san, from: d.from, to: d.to, color: d.color, word: k, ...(d.hit && { hit: true }), ...say(items[j].at, given) };
     });
     const sqs = (Array.isArray(x.squares) ? x.squares : []).map((r: unknown) => markItem(r, "sq")).filter((it: { what: string }) => it.what);
     if (sqs.length > MAX_MARK_RINGS) throw new ActionError(`${w}.squares: ${sqs.length} squares; keep it to at most ${MAX_MARK_RINGS}.`);
@@ -621,7 +631,7 @@ function markList(g: Game, m: MoveRecord, quote: string, raw: unknown[], where: 
       const given = wordsAt(it.at, `${w}.squares[${j}]`);
       const ringWord = given >= 0 ? given : Math.max(word, squareWordAt(quote, sq, word, next));
       if (it.at) ringNamesWhatsThere(m.fenBefore, arrows, sq, it.at, ringWord, `${w}.squares[${j}]`);
-      return [{ sq, word: ringWord }];
+      return [{ sq, word: ringWord, ...say(it.at, given) }];
     });
     if (!arrows.length && !rings.length) throw new ActionError(`${w}: give it arrows or squares to draw.`);
     let until: number | undefined;
@@ -647,10 +657,10 @@ const PIECE_NAMES: Record<string, string> = { k: "king", q: "queen", r: "rook", 
  * reads as the wrong piece.
  */
 function ringNamesWhatsThere(fen: string, arrows: { san: string; to: string; word: number; hit?: boolean }[], sq: string, at: string, word: number, where: string): void {
-  const named = quoteWords(at).map(pointsAt);
+  const named = quoteWords(at).flatMap(pointsAt);
   // Words that name the square itself ("the knight blocks on e4", "my rook on e8") are about the square.
-  if (named.some((p) => p && "sq" in p && p.sq === sq)) return;
-  const kinds = new Set(named.flatMap((p) => (p && "kind" in p ? [p.kind] : [])));
+  if (named.some((p) => "sq" in p && p.sq === sq)) return;
+  const kinds = new Set(named.flatMap((p) => ("kind" in p ? [p.kind] : [])));
   if (!kinds.size) return;
   const board = boardOf(fen);
   const here = board.get(sq)?.type;
@@ -675,14 +685,15 @@ function hookMarksFrom(moment: VideoMoment | undefined, quote: string | undefine
   const off = mw.findIndex((_, o) => hw.every((h, j) => mw[o + j] === h));
   if (off < 0) return undefined;
   const inside = (k: number) => k >= off && k < off + hw.length;
+  const shift = ([a, b]: [number, number]): [number, number] => [a - off, Math.min(b, off + hw.length - 1) - off];
   const marks = moment.marks
     .filter((mk) => inside(mk.word) && mk.arrows.every((a) => inside(a.word)) && mk.rings.every((r) => inside(r.word)))
     .map((mk) => ({
       ...mk,
       word: mk.word - off,
       ...(mk.until !== undefined && { until: Math.min(mk.until, off + hw.length - 1) - off }),
-      arrows: mk.arrows.map((a) => ({ ...a, word: a.word - off })),
-      rings: mk.rings.map((r) => ({ ...r, word: r.word - off })),
+      arrows: mk.arrows.map((a) => ({ ...a, word: a.word - off, ...(a.say && { say: shift(a.say) }) })),
+      rings: mk.rings.map((r) => ({ ...r, word: r.word - off, ...(r.say && { say: shift(r.say) }) })),
     }));
   return marks.length ? marks : undefined;
 }

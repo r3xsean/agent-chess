@@ -172,10 +172,10 @@ interface BoardView {
   arrow?: [string, string];
   /**
    * What a thinking player names, drawn as it's said: arrows (the mover's side's, or the opponent's; `hit`,
-   * a piece's reach rather than a move) and rings, each at opacity `o` and `pop` of the way through
-   * snapping in.
+   * a piece's reach rather than a move) and rings (`own`: around the mover's piece, or the opponent's;
+   * neither, an empty square), each at opacity `o` and `pop` of the way through snapping in.
    */
-  marks?: { arrows: { from: string; to: string; own: boolean; hit?: boolean; o: number; pop: number }[]; rings: { sq: string; o: number; pop: number }[] };
+  marks?: { arrows: { from: string; to: string; own: boolean; hit?: boolean; o: number; pop: number }[]; rings: { sq: string; own?: boolean; o: number; pop: number }[] };
   illegal?: { attempt: string; sq?: string; color: Color; p: number };
   /** A marker on a king: the draw offer or the white flag. */
   mark?: { sq: string; emoji: string; s: number };
@@ -320,6 +320,9 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
   const rings: NonNullable<BoardView["marks"]>["rings"] = [];
   const lit: Lit[] = [];
   const pop = (at: number) => r3(clamp01((local - at) / 0.2));
+  // Everything is coloured by what it points at, on the board and in the bubble alike: the speaker's
+  // piece (or move) green, the opponent's red, an empty square amber.
+  const sideColor = (c: Color | undefined) => (c ? (c === mover ? OWN_ARROW : OPP_ARROW) : RING);
   const shown = (at: number) => clamp01((local - at) / 0.08);
   for (const mk of marks) {
     if (local < mk.start || local >= mk.end + MARK_FADE) continue;
@@ -334,13 +337,15 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
       }
       const own = a.color === mover;
       arrows.push({ from: a.from, to: a.to, own, ...(a.hit && { hit: true }), o: r3(o), pop: pop(a.at) });
-      if (a.said) lit.push({ word: a.word, color: own ? OWN_ARROW : OPP_ARROW, o: r3(o) });
+      // Each word lights up as it's said (an arrow can name a piece a few words later: "Rxe8+ … the rook"),
+      // in the colour of the side whose piece it names: an arrow to the opponent's knight lights "Nd7" red.
+      for (const l of a.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)) });
     }
     for (const r of mk.rings) {
       if (r.at > local) continue;
       const o = a0 * shown(r.at);
-      rings.push({ sq: r.sq, o: r3(o), pop: pop(r.at) });
-      if (r.said) lit.push({ word: r.word, color: RING, o: r3(o) });
+      rings.push({ sq: r.sq, ...(r.side && { own: r.side === mover }), o: r3(o), pop: pop(r.at) });
+      for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)) });
     }
   }
   return { marks: arrows.length || rings.length ? { arrows, rings } : undefined, lit };
@@ -651,9 +656,9 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
       })}
       {(b.arrow || b.marks) && (
         <svg className="v-arrows" viewBox="0 0 8 8">
-          {b.marks?.rings.map((r, k) => <Ring key={k} at={at(r.sq)} o={r.o} pop={r.pop} />)}
+          {b.marks?.rings.map((r, k) => <Ring key={k} at={at(r.sq)} color={r.own === undefined ? RING : r.own ? OWN_ARROW : OPP_ARROW} o={r.o} pop={r.pop} />)}
           {b.marks?.arrows.map((a, k) => <Arrow key={k} from={at(a.from)} to={at(a.to)} color={a.own ? OWN_ARROW : OPP_ARROW} o={a.o} pop={a.pop} thin={a.hit} />)}
-          {b.arrow && <Arrow from={at(b.arrow[0])} to={at(b.arrow[1])} color={OWN_ARROW} />}
+          {b.arrow && <Arrow from={at(b.arrow[0])} to={at(b.arrow[1])} color={ENGINE_ARROW} />}
         </svg>
       )}
       {b.mark && (
@@ -682,10 +687,15 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
   );
 }
 
-/** Arrow colours, as on lichess: green for the player's own moves (and the engine's pick), red for the opponent's; rings in amber. */
+/**
+ * Mark colours, by what they point at: green for the thinking player's pieces and moves, red for the
+ * opponent's, amber for an empty square, and the engine's pick in blue, apart from the players (lichess's
+ * arrow colours).
+ */
 const OWN_ARROW = "#15781b";
 const OPP_ARROW = "#b0302a";
 const RING = "#e68f00";
+const ENGINE_ARROW = "#2f6fd0";
 
 type XY = { x: number; y: number };
 
@@ -718,8 +728,8 @@ function Arrow({ from, to, color, o = 1, pop = 1, thin = false }: { from: XY; to
 }
 
 /** A ring around a square, landing a touch wide and settling (`pop` 0 → 1). */
-function Ring({ at, o, pop }: { at: XY; o: number; pop: number }) {
-  return <circle cx={at.x + 0.5} cy={at.y + 0.5} r={0.44 * (1 + 0.12 * (1 - easeOut(pop)))} fill="none" stroke={RING} strokeWidth={0.07} opacity={r3(0.9 * o)} />;
+function Ring({ at, color, o, pop }: { at: XY; color: string; o: number; pop: number }) {
+  return <circle cx={at.x + 0.5} cy={at.y + 0.5} r={0.44 * (1 + 0.12 * (1 - easeOut(pop)))} fill="none" stroke={color} strokeWidth={0.07} opacity={r3(0.9 * o)} />;
 }
 
 /** A player's own evaluation on the bar: White's win% as they see it, in their colour. */

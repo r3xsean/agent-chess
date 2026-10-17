@@ -1,6 +1,6 @@
 import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
-import { quoteWords, sentenceEnd, spokenWord, wordNames } from "../../../shared/thoughtMarks";
+import { markColors, quoteWords, sentenceEnd, spokenWord } from "../../../shared/thoughtMarks";
 import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
 import { shownLine, type LineKind } from "../../../shared/engineLine";
 
@@ -35,16 +35,30 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
  * One of the director's marks during a thought (see ThoughtMark), in seconds into the scene: it builds up
  * from `start` (its first arrow or ring), each arrow and ring from just before its words are said, and
  * comes off at `end` (the end of its sentence, or `until`, or the next mark starting), fading over
- * MARK_FADE. `keep`: it ends on the move about to be played, so it stays up into the move. `word` is each
- * item's word in the quote, and `said` whether that word names it (so the bubble can light it up).
+ * MARK_FADE. `keep`: it ends on the move about to be played, so it stays up into the move. `lit`: the
+ * words of the quote each item lights up in the bubble while it's drawn (see markLights), each once it's said.
  */
 export interface SceneMark {
   start: number;
   end: number;
   keep?: boolean;
-  arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; word: number; said: boolean }[];
-  rings: { sq: string; at: number; word: number; said: boolean }[];
+  arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; lit: SceneLit[] }[];
+  /** `side`: whose piece is in the circle (none: an empty square), which sets its colour. */
+  rings: { sq: string; at: number; side?: Color; lit: SceneLit[] }[];
 }
+
+/**
+ * A word an item lights up, from `at`: once the item is drawn and the word has been said. `color`: the side
+ * whose piece (or move) it names, which it's lit in; none for an empty square, lit in the item's colour.
+ */
+export interface SceneLit {
+  word: number;
+  at: number;
+  color?: Color;
+}
+
+/** How far back a mark's board may be, for moves looked back on (as the director allows). */
+const MARK_LOOKBACK = 10;
 
 /** How long a mark takes to come off; how early each item is drawn before its word; how long a mark stays after its sentence. */
 export const MARK_FADE = 0.2;
@@ -114,9 +128,12 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   };
   // A thought's marks, timed to the voice: to the word where the clip has word timings, else spread over
   // the clip by word, else (no voice) at reading speed.
-  // A mark that ends on the move about to be played (`m`) is kept up into it.
-  const timedMarks = (id: string, quote: string, marks: ThoughtMark[] | undefined, dur: number, m: { from: string; to: string }): { marks?: SceneMark[] } => {
+  // A mark that ends on the move about to be played (move i) is kept up into it.
+  const timedMarks = (id: string, quote: string, marks: ThoughtMark[] | undefined, dur: number, i: number): { marks?: SceneMark[] } => {
     if (!marks?.length) return {};
+    const m = g.moves[i];
+    const fens = [m.fenBefore, m.fenAfter, ...g.moves.slice(Math.max(0, i - MARK_LOOKBACK), i).reverse().map((mv) => mv.fenBefore)];
+    const colors = markColors(quote, marks, fens, m.color);
     const clip = clipOf(id);
     const total = Math.max(1, spokenWord(quote, Infinity));
     const qw = quoteWords(quote);
@@ -129,18 +146,19 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     // When word k has been said: the next word starts, or the line ends.
     const after = (k: number) => (k + 1 < qw.length ? at(k + 1) : clip ? VOICE_AT + clip.dur / rate : at(qw.length));
     const drawAt = (k: number) => Math.min(Math.max(0, at(k) - MARK_LEAD), dur);
-    const timed = marks.map((mk) => {
-      const arrows = mk.arrows.map((a) => ({
+    const timed = marks.map((mk, n) => {
+      const arrows = mk.arrows.map((a, j) => ({
         from: a.from,
         to: a.to,
-        color: a.color,
+        color: colors[n].arrows[j].side ?? a.color,
         at: drawAt(a.word),
         ...(a.hit && { hit: true }),
-        word: a.word,
-        // A move is said by its SAN or just its square ("d4 attacks both…"); a reach by either of its squares.
-        said: wordNames(qw[a.word], { sans: a.hit ? [] : [a.san], sq: a.to }) || (!!a.hit && wordNames(qw[a.word], { sq: a.from })),
+        lit: colors[n].arrows[j].lit.map((w) => ({ ...w, at: Math.max(drawAt(a.word), drawAt(w.word)) })),
       }));
-      const rings = mk.rings.map((r) => ({ sq: r.sq, at: drawAt(r.word), word: r.word, said: wordNames(qw[r.word], { sq: r.sq }) }));
+      const rings = mk.rings.map((r, j) => {
+        const c = colors[n].rings[j];
+        return { sq: r.sq, at: drawAt(r.word), ...(c.side && { side: c.side }), lit: c.lit.map((w) => ({ ...w, at: Math.max(drawAt(r.word), drawAt(w.word)) })) };
+      });
       const start = Math.min(...arrows.map((a) => a.at), ...rings.map((r) => r.at));
       const last = Math.max(mk.word, ...mk.arrows.map((a) => a.word), ...mk.rings.map((r) => r.word));
       return { start, natural: after(mk.until ?? sentenceEnd(quote, last)) + MARK_HOLD, arrows, rings };
@@ -162,7 +180,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     let carry: SceneMark | undefined;
     if (quote && opts.thoughts !== false) {
       const v = voiced("hook", Math.max(2, 0.6 + read(quote)));
-      const tm = timedMarks("hook", quote, plan.hook.marks, v.dur, g.moves[hookAt]);
+      const tm = timedMarks("hook", quote, plan.hook.marks, v.dur, hookAt);
       carry = kept(tm.marks);
       push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...v, ...tm });
     }
@@ -203,7 +221,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     if (thought) {
       const v = voiced(`moment:${m.ply}`, 0.3 + read(thought));
       // The marks go with the director's quote (the fallback's thinking has none).
-      const tm = picked ? timedMarks(`moment:${m.ply}`, thought, picked.marks, v.dur, m) : {};
+      const tm = picked ? timedMarks(`moment:${m.ply}`, thought, picked.marks, v.dur, i) : {};
       carry = kept(tm.marks);
       push({ kind: "think", i, thought, ...v, ...tm });
     }
