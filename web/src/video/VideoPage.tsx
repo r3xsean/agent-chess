@@ -190,8 +190,12 @@ interface View {
   callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string; engine?: boolean };
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
-  /** `side`: the edge of the board the bubble covers; `away`: not its speaker's edge (so no tail to their card). */
-  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom"; away?: boolean };
+  /**
+   * `side`: the edge of the board the bubble covers, or "off" the board (beside it in the YouTube cut, above
+   * it in the short) when the thought's marks leave neither edge clear; `away`: not its speaker's edge (so
+   * no tail to their card).
+   */
+  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off"; away?: boolean };
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -296,9 +300,12 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
   return out;
 }
 
-/** How many of a thought's arrows and rings reach the three ranks a bubble at that edge covers (White at the bottom). */
-function underBubble(marks: SceneMark[], side: "top" | "bottom"): number {
-  const covered = (lo: number, hi: number) => (side === "bottom" ? lo <= 3 : hi >= 6);
+/** How far the bubble sits in from the board's edge (video.css .v-bubble). */
+const BUBBLE_INSET = 22;
+
+/** How many of a thought's arrows and rings reach the ranks a bubble at that edge covers (White at the bottom). */
+function underBubble(marks: SceneMark[], side: "top" | "bottom", ranks: number): number {
+  const covered = (lo: number, hi: number) => (side === "bottom" ? lo <= ranks : hi >= 9 - ranks);
   const rank = (sq: string) => Number(sq[1]);
   let n = 0;
   for (const mk of marks) {
@@ -311,7 +318,8 @@ function underBubble(marks: SceneMark[], side: "top" | "bottom"): number {
 /** Worth calling out: the mover is far from the truth, or has just come back to it. */
 const telling = (b: Belief | null) => !!b && (!!b.state || b.change === "realizes");
 
-function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
+/** `bubbles`: the height of each marked thought's bubble on the board, by scene index (see BubbleSizer). */
+function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<number, number>): View {
   const s = sceneAt(tl, t);
   const idx = tl.scenes.indexOf(s);
   const local = Math.max(0, t - s.start);
@@ -368,12 +376,16 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
       };
     }
     v.callout = { label: `${name} is thinking…`, evalText: formatScore(score), status: true };
-    // The bubble covers the edge of the board by its speaker's card. When the thought's marks are drawn
-    // there and the far edge is clearer, it sits at the far edge for the whole thought.
+    // The bubble covers the edge of the board by its speaker's card, as many ranks as its measured height
+    // reaches. When the thought's marks are drawn there, it sits at the far edge for the whole thought if
+    // that's clear of them, or else off the board.
     const home = m.color === "b" ? "top" : "bottom";
     const away = home === "top" ? "bottom" : "top";
-    const side = s.marks && underBubble(s.marks, home) > underBubble(s.marks, away) ? away : home;
-    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side, away: side !== home };
+    const h = bubbles.get(idx);
+    const ranks = h === undefined ? 3 : Math.ceil((BUBBLE_INSET + h) / ((tl.format === "landscape" ? 860 : 900) / 8));
+    const clear = (edge: "top" | "bottom") => !s.marks || underBubble(s.marks, edge, ranks) === 0;
+    const side = clear(home) ? home : clear(away) ? away : "off";
+    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side, away: side === away };
     // While they think, the bar already shows where they believe their move leaves them; the engine's
     // level only moves once it lands.
     v.focus = { i: s.i, label: telling(prep.belief[s.i]) };
@@ -836,11 +848,50 @@ function ThoughtLabel({ g, t }: { g: Game; t: NonNullable<View["thought"]> }) {
 /** The mover's thinking as a speech bubble over the board, coming out of their player card. */
 function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]>; size: number }) {
   return (
-    <div className={`v-bubble ${(t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"} ${t.away ? "away" : ""}`} style={{ opacity: t.fade }}>
+    <div
+      className={`v-bubble ${t.side === "off" ? "off" : (t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"} ${t.away ? "away" : ""}`}
+      style={{ opacity: t.fade }}
+    >
       <ThoughtLabel g={g} t={t} />
       <div className="v-bubble-text" style={{ fontSize: fitFont(size, t.text.length) }}>
         {t.text}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The bubbles of the thoughts that draw marks, laid out unseen at their size on the board, so the frame
+ * knows how many ranks each one covers. Measured in the real font, once it has loaded (or after 3 s, if it
+ * never reports in).
+ */
+function BubbleSizer({ g, tl, onSized }: { g: Game; tl: Timeline; onSized: (heights: Map<number, number>) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const items = tl.scenes.flatMap((s, idx) => (s.kind === "think" && s.marks?.length ? [{ idx, s }] : []));
+  useLayoutEffect(() => {
+    let alive = true;
+    Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 3000))]).then(() => {
+      if (!alive || !box.current) return;
+      const heights = new Map<number, number>();
+      for (const el of box.current.querySelectorAll<HTMLElement>("[data-idx]"))
+        heights.set(Number(el.dataset.idx), el.querySelector(".v-bubble")!.getBoundingClientRect().height);
+      onSized(heights);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [tl]);
+  const { w, h } = FRAME[tl.format];
+  return (
+    <div ref={box} className={`v-frame ${tl.format} v-sizer`} style={{ width: w, height: h }} aria-hidden>
+      {items.map(({ idx, s }) => {
+        const m = g.moves[s.i];
+        return (
+          <div key={idx} data-idx={idx} style={{ position: "relative", width: tl.format === "landscape" ? 860 : 900 }}>
+            <ThoughtBubble g={g} t={{ text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: 1 }} size={30} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -939,7 +990,9 @@ type Ratings = Record<Color, { before: number; after: number }> | null;
 function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep; wide: boolean; ratings: Ratings }) {
   const b = v.board!;
   const t = v.thought;
-  const bubble = t && <ThoughtBubble g={g} t={t} size={30} />;
+  // Off the board, the bubble has room for bigger type.
+  const offBoard = t?.side === "off";
+  const bubble = t && !offBoard && <ThoughtBubble g={g} t={t} size={30} />;
   const line = v.line && (
     <>
       <span className="v-line-label" style={v.line.color ? { color: v.line.color } : undefined}>
@@ -993,15 +1046,22 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
             <span className="v-logo">♞ Agent Chess</span>
             <span className="v-opening">{opening}</span>
           </div>
-          {callout}
+          {/* With the thought in the panel, its label already says who's thinking. */}
+          {!offBoard && callout}
           {/* Only moves have an engine line; while a player thinks the broadcaster box moves up instead of leaving a gap. */}
           {!t && (
           <div className="v-line">{line}</div>
           )}
           {/* The cold open and its rewind hold the big caption where the move list and chart go. */}
-          {hook ?? engine ?? (
+          {/* Off the board in the cold open, the thought goes under a smaller hook caption. */}
+          {offBoard && hook ? (
             <>
-              <MoveList g={g} ply={b.i + 1} />
+              <div className="v-hook-compact">{hook}</div>
+              <ThoughtBubble g={g} t={t!} size={40} />
+            </>
+          ) : hook ?? engine ?? (
+            <>
+              {offBoard ? <ThoughtBubble g={g} t={t!} size={44} /> : <MoveList g={g} ply={b.i + 1} />}
               <ChartLegend g={g} />
               <EvalGraph prep={prep} g={g} ply={b.i + 1} width={840} height={130} />
             </>
@@ -1015,21 +1075,31 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
       <div className="v-p-title">
         <span className="v-opening">{opening}</span>
       </div>
-      <div className="v-p-callout">{callout}</div>
-      {!hook && !engine && <div className="v-p-line v-line">{line}</div>}
-      {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead (and an engine line's box during one). */}
-      <div className={`v-p-caption ${hook || engine ? "hooked" : ""}`}>
-        {hook ? (
-          hook
-        ) : engine ? (
-          engine
-        ) : (
-          <div className="v-p-chart">
-            <ChartLegend g={g} />
-            <EvalGraph prep={prep} g={g} ply={b.i + 1} width={900} height={150} />
+      {/* Off the board, the thought takes the space above it (its label already says who's thinking). */}
+      {offBoard ? (
+        <div className="v-p-bubble">
+          {hook && <div className="v-hook-compact">{hook}</div>}
+          <ThoughtBubble g={g} t={t!} size={hook ? 28 : 36} />
+        </div>
+      ) : (
+        <>
+          <div className="v-p-callout">{callout}</div>
+          {!hook && !engine && <div className="v-p-line v-line">{line}</div>}
+          {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead (and an engine line's box during one). */}
+          <div className={`v-p-caption ${hook || engine ? "hooked" : ""}`}>
+            {hook ? (
+              hook
+            ) : engine ? (
+              engine
+            ) : (
+              <div className="v-p-chart">
+                <ChartLegend g={g} />
+                <EvalGraph prep={prep} g={g} ply={b.i + 1} width={900} height={150} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
       <div className="v-p-top-card">{card("b")}</div>
       <div className="v-p-evalbar">
         <EvalBar w={b.evalW} text={b.evalText} length={900} thickness={28} marks={barMarks(g, prep, b, v.focus)} />
@@ -1396,8 +1466,11 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   const tl = useMemo(() => game && voice && buildTimeline(game, format, { thoughts, pace, voice }), [game, format, thoughts, pace, voice]);
   const prep = useMemo(() => game && prepare(game), [game]);
   const cues = useMemo(() => game && tl && sfxCues(tl, game), [game, tl]);
-  const ready = !!(game && tl && prep && ratings !== undefined && rival !== undefined);
-  const v = ready ? derive(game!, tl!, prep!, Math.min(t, tl!.duration - 1e-3)) : null;
+  // Where each thought's bubble goes depends on its measured size, so nothing is drawn (or rendered) before.
+  const [bubbles, setBubbles] = useState<{ tl: Timeline; heights: Map<number, number> } | null>(null);
+  const sized = !!tl && bubbles?.tl === tl;
+  const ready = !!(game && tl && prep && ratings !== undefined && rival !== undefined && sized);
+  const v = ready ? derive(game!, tl!, prep!, Math.min(t, tl!.duration - 1e-3), bubbles!.heights) : null;
   if (v) keyRef.current = JSON.stringify(v);
 
   // The renderer drives the clock: seek, wait for paint, report what's on screen.
@@ -1495,7 +1568,13 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   }, [render]);
 
   if (error) return <div className="v-msg">Couldn't load game: {error}</div>;
-  if (!ready || !v) return <div className="v-msg">Loading…</div>;
+  if (!ready || !v)
+    return (
+      <div className="v-msg">
+        Loading…
+        {game && tl && !sized && <BubbleSizer g={game} tl={tl} onSized={(heights) => setBubbles({ tl, heights })} />}
+      </div>
+    );
   if (query.get("thumb") === "1") return <div className="v-render">{<Thumbnail g={game!} prep={prep!} />}</div>;
 
   const frame = <Frame g={game!} tl={tl!} prep={prep!} v={v} ratings={ratings!} rival={rival ?? null} />;
