@@ -107,6 +107,12 @@ export interface AsideCue {
 
 /** How many plies before its own move an aside may start, to be said before the next moment comes. */
 const ASIDE_LEAD = 4;
+/**
+ * Asides play this much quicker than the cut's other lines, time-stretched with the pitch kept (the render
+ * uses rubberband, the preview the browser's own), and never past ASIDE_RATE_MAX, where speech starts to smear.
+ */
+const ASIDE_SPEED = 1.15;
+const ASIDE_RATE_MAX = 1.3;
 
 /**
  * A quiet move holds for as long as its reply took to think of, against the game's other quiet moves: from
@@ -174,10 +180,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const voiceId = line && voiceOf(g, line.color);
     return line && clip && voiceId && clip.sig === lineSig(voiceId, line) ? clip : undefined;
   };
-  const voiced = (id: string, dur: number) => {
+  const voiced = (id: string, dur: number, r = rate) => {
     const clip = clipOf(id);
     if (!clip) return { dur };
-    return { voice: { url: clip.url, rate }, dur: Math.max(dur, VOICE_AT + clip.dur / rate + VOICE_TAIL) };
+    return { voice: { url: clip.url, rate: r }, dur: Math.max(dur, VOICE_AT + clip.dur / r + VOICE_TAIL) };
   };
   // A thought's marks, timed to the voice: to the word where the clip has word timings, else spread over
   // the clip by word, else (no voice) at reading speed.
@@ -310,12 +316,13 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     return paced(i) && meanWeight > 0 ? usual * Math.min(HOLD_MAX, Math.max(HOLD_MIN, weight(i) / meanWeight)) : usual;
   };
 
-  // Asides, in the YouTube cut (the short's quiet moves fly by): each is said over its move, and the board
-  // plays on under it. Thinking, a moment, an engine line or the next aside waits for it to be said (the
-  // board holding on the last quiet move), so where they come thick, as in the opening, the voices set the
-  // pace. One that wouldn't be over before the next of those starts up to ASIDE_LEAD plies early, over quiet
-  // moves only.
-  const asideOf = new Map(wide && opts.thoughts !== false ? (plan?.asides ?? []).map((a) => [a.ply, a] as const) : []);
+  // Asides (all of them in the YouTube cut, the director's few picks in the short, whose quiet moves fly by):
+  // each is said over its move, a little quicker than the other lines, and the board plays on under it.
+  // Thinking, a moment, an engine line or the next aside waits for it to be said (the board holding on the
+  // last quiet move), so where they come thick the voices set the pace. One that wouldn't be over before the
+  // next of those starts up to ASIDE_LEAD plies early, over quiet moves only.
+  const asideOf = new Map(opts.thoughts !== false ? (plan?.asides ?? []).filter((a) => wide || a.short).map((a) => [a.ply, a] as const) : []);
+  const asideRate = Math.min(ASIDE_RATE_MAX, rate * ASIDE_SPEED);
   const asides: AsideCue[] = [];
   let talkEnd = 0;
   let quietFrom = t;
@@ -340,7 +347,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   const sayAside = (i: number, early: boolean) => {
     const a = asideOf.get(g.moves[i].ply)!;
     waitTalk();
-    const v = voiced(`aside:${a.ply}`, 0.3 + read(a.quote));
+    const v = voiced(`aside:${a.ply}`, 0.3 + read(a.quote), asideRate);
     const short = v.dur - room(i);
     const start = early && short > 0 ? Math.max(talkEnd, quietFrom, moveStart[i - ASIDE_LEAD] ?? quietFrom, t - short) : t;
     asides.push({ start, dur: v.dur, i, text: a.quote, ...(v.voice && { voice: v.voice }) });

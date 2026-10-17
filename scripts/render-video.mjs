@@ -12,7 +12,7 @@
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
 // --package redoes just the YouTube upload text and thumbnail, each cut's subtitles and the TikTok cover (after a change to the plan's packaging or chapters).
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -108,12 +108,20 @@ function soundCues(scenes, asides, effects) {
   return [...voices, ...effects];
 }
 
-/** A sound as raw stereo samples; `tempo` speeds it up without changing its pitch (the short's quicker voices). */
+/**
+ * Whether this ffmpeg has rubberband, which keeps sped-up speech clean (formants kept, no phasing); without
+ * it, atempo, which is fine at the short's small speed-up but smears speech sooner.
+ */
+let rubberband;
+const hasRubberband = () => (rubberband ??= /\brubberband\b/.test(spawnSync("ffmpeg", ["-hide_banner", "-filters"], { encoding: "utf8" }).stdout ?? ""));
+
+/** A sound as raw stereo samples; `tempo` speeds it up without changing its pitch (the short's and the asides' quicker voices). */
 const decoded = new Map();
 async function decode(file, tempo = 1) {
   const key = `${file}|${tempo}`;
   if (!decoded.has(key)) {
-    const filter = tempo !== 1 ? ["-af", `atempo=${tempo}`] : [];
+    const stretch = hasRubberband() ? `rubberband=tempo=${tempo}:pitchq=quality:formant=preserved` : `atempo=${tempo}`;
+    const filter = tempo !== 1 ? ["-af", stretch] : [];
     const buf = await run("ffmpeg", ["-v", "error", "-i", file, ...filter, "-f", "f32le", "-ac", "2", "-ar", String(RATE), "-"]);
     decoded.set(key, new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
   }

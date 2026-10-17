@@ -339,8 +339,8 @@ export interface PublishState {
 }
 
 /**
- * A line said in passing while the game plays on (YouTube only): no drawings, and the board doesn't stop
- * for it. It's said over its move (or a few plies before it, to be done before the next moment), and the
+ * A line said in passing while the game plays on (all of them in the YouTube cut, the ones marked `short` in
+ * the TikTok cut too): no drawings, and the board doesn't stop for it. It's said over its move (or a few plies before it, to be done before the next moment), and the
  * board waits for it only where the next line or moment would otherwise cut it off.
  */
 export interface VideoAside {
@@ -348,6 +348,8 @@ export interface VideoAside {
   /** Verbatim excerpt of the mover's commentary on that move, or of what they wrote with an illegal attempt on it. */
   quote: string;
   delivery?: string;
+  /** Said in the TikTok cut too (the YouTube cut has every aside). */
+  short?: boolean;
 }
 
 export interface VideoPlan {

@@ -1017,61 +1017,30 @@
   color: #e8e6e3;
   letter-spacing: 0.5px;
 }
+/* What a player says, always off the board: under the move list in the side panel, or above the board in
+   the short (a thought in place of the status line and the chart, an aside in the chart's place). */
 .v-bubble {
-  position: absolute;
-  left: 22px;
-  right: 22px;
-  z-index: 20;
-  padding: 18px 24px 20px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px 32px 28px;
+  border: 5px solid;
   border-radius: 22px;
   background: rgba(250, 249, 245, 0.96);
   color: #1e1d1a;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
 }
-.v-bubble.from-top {
-  top: 22px;
+.v-bubble.aside {
+  padding: 16px 28px 20px;
 }
-.v-bubble.from-bottom {
-  bottom: 22px;
+.v-bubble.aside .v-bubble-who {
+  margin-bottom: 6px;
 }
-.v-bubble::after {
-  content: "";
-  position: absolute;
-  left: 34px;
-  border: 18px solid transparent;
+.v-bubble.aside .v-thought-label {
+  font-size: 22px;
 }
-.v-bubble.from-top::after {
-  top: -34px;
-  border-bottom-color: rgba(250, 249, 245, 0.96);
-}
-.v-bubble.from-bottom::after {
-  bottom: -34px;
-  border-top-color: rgba(250, 249, 245, 0.96);
-}
-/* Where the bubbles are measured, unseen (see BubbleSizer). */
-.v-sizer {
-  position: fixed;
-  left: -100000px;
-  top: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-/* Off the board (marks at both edges): in the side panel in place of the move list, or above the board
-   in the short, in place of the status line and the chart. */
-.v-bubble.off {
-  position: relative;
-  left: auto;
-  right: auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 26px 34px 30px;
-  border: 6px solid;
-}
-.v-bubble.off::after {
-  display: none;
-}
-/* Who's speaking, off the board: their avatar beside the label. */
+/* Who's speaking: their avatar beside the label. */
 .v-bubble-who {
   display: flex;
   align-items: center;
@@ -1087,24 +1056,41 @@
 .v-panel > .v-bubble.off .v-thought-label {
   font-size: 26px;
 }
-/* The move list, and an aside under it while one is said (the list giving it room). */
+/* The move list, and the speech box under it (see SpeechBox), which opens to the height its line needs (set
+   from the page, gap included), the list giving it room. Its lines sit at its bottom, rising into view. */
 .v-ml-wrap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
 }
-.v-ml-wrap > .v-bubble.off.aside {
+.v-speech {
+  position: relative;
   flex: none;
-  padding: 16px 28px 20px;
-  border-width: 5px;
+  overflow: hidden;
 }
-.v-ml-wrap > .v-bubble.aside .v-bubble-who {
-  margin-bottom: 6px;
+.v-speech-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
-.v-ml-wrap > .v-bubble.aside .v-thought-label {
-  font-size: 22px;
+/* The bubble itself stays put behind the lines (each line is just its words, see SpeechBox). */
+.v-speech-frame {
+  position: absolute;
+  inset: 0;
+  border: 5px solid;
+  border-radius: 22px;
+  background: rgba(250, 249, 245, 0.96);
+}
+.v-speech-line > .v-bubble {
+  background: transparent;
+  border-color: transparent !important;
+  box-shadow: none;
+}
+/* The short's aside, in the chart's box. */
+.v-p-aside > .v-bubble {
+  flex: 1;
 }
 .v-p-bubble {
   top: 166px;

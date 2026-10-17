@@ -180,8 +180,8 @@ export function directorBrief(g: Game): string {
           },
         ],
         asides: [
-          { ply: 1, quote: "…a few words from ply 1's commentary…" },
-          { ply: 2, quote: "…", delivery: "easy, sure of itself" },
+          { ply: 1, quote: "…a few words from ply 1's commentary…", short: true },
+          { ply: 4, quote: "…", delivery: "easy, sure of itself" },
           { ply: 31, quote: "…a plan, a worry, a read on the opponent…" },
         ],
         interviewLines: { pre: { w: "…", b: "…" }, post: { w: "…", b: "…" } },
@@ -224,8 +224,9 @@ export function directorBrief(g: Game): string {
     "- line.caption (optional, one line, at most 14 words): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
     "  - line.squares, line.draw, line.refs: what the board shows with the caption, at the end of the line, as in marks. The line's moves are played out on the board, but nothing else is drawn unless you say: `squares` circles pieces or squares (\"e6\"), each up while its piece stays there; `draw` adds a piece's attack or defence as \"from>to\" (\"e6>e2\": the rook guarding the pawn), checked against the board. `refs`: every word of the caption that names a square, a move or a piece goes in a ref saying what it points at: { \"words\": \"the rook\", \"to\": \"e6\" }, or one of the line's moves: { \"words\": \"Kg4\", \"to\": \"Kg4\" }. A square a ref points at must be drawn: circled, at an end of a reach, or where one of the line's moves went from or to (a piece the line takes can be pointed at where it was taken). Those words light up in the colour of what they point at: green for the side the line favours, red for the other, amber for an empty square. A caption without refs lights nothing.",
     "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
-    "- asides (YouTube only): lines said in passing while the game plays on, in the player's own voice, with nothing drawn. The board doesn't stop for them: each is said as its move is played, and the next moves play on under it. They keep the players talking between your moments, so use them for anything worth hearing even when nothing big happens on the board: what they're going for, a plan, a worry, a read on the opponent, a habit, a joke, a line that comes back later. Each is { \"ply\": 7, \"quote\": \"…\", \"delivery\": \"…\" } (delivery optional), quoted exactly from that move's `commentary:` (or from what was `said with illegal attempt` on it), at most 25 words. Shorter is better, and a clause works (\"I take space in the center\"). Not on a ply that's one of your moments, nor on the last move.",
-    "  - Open with a conversation: an aside on most of the first 10–16 plies, a few words each (5–12 is ideal), so the opening plays as the two of them talking through their choices instead of as silent theory. Where asides come one after another like this, each move waits for the line before it, so keep them short.",
+    "- asides: lines said in passing while the game plays on, in the player's own voice, with nothing drawn. The board doesn't stop for them: each is said as its move is played, and the next moves play on under it. They keep the players talking between your moments, so use them for anything worth hearing even when nothing big happens on the board: what they're going for, a plan, a worry, a read on the opponent, a habit, a joke, a line that comes back later. Each is { \"ply\": 7, \"quote\": \"…\", \"delivery\": \"…\" } (delivery optional), quoted exactly from that move's `commentary:` (or from what was `said with illegal attempt` on it), at most 25 words. Shorter is better, and a clause works (\"I take space in the center\"). Not on a ply that's one of your moments, nor on the last move.",
+    "  - Open with a short exchange: 4–6 asides over the first 10–16 plies, the two players taking turns, a few words each (5–12 is ideal), so the opening has them talking through their choices instead of silent theory. Not one on every ply: the moves need room to play between the lines. Where asides do come one after another, each move waits for the line before it, so keep those short.",
+    `  - Every aside is in the YouTube cut. Mark the best few with \`"short": true\` (at most ${MAX_SHORT_ASIDES}) to say them in the TikTok cut too, over its quick quiet moves: one or two from the opening, and the ones that set up your headline moments or carry the most personality.`,
     "  - An illegal attempt gets an aside on its move: usually the player owning up to it (the move's commentary often does), or what they meant by it. It's said while the rejected move is on the board.",
     "  - An aside that wouldn't be over before the next moment starts up to 4 plies early, over the quiet moves before it; otherwise the board waits for it.",
     `  - The YouTube cut must never go quiet for long: from the first move to the result, at most ${MAX_SILENCE} seconds may pass with nothing said (no quote, aside or engine line on screen). The server works out the video's timing and sends the plan back with every silent stretch, by ply: fill each with an aside or two from the plies in it.`,
@@ -481,6 +482,8 @@ const MAX_SILENCE = 15;
 /** Roughly how fast the voices speak, in words of the spoken text a second: to time a plan before it's recorded. */
 const SPOKEN_WPS = 2.5;
 const MAX_ASIDES = 80;
+/** How many asides the TikTok cut may say: its quiet moves fly by, so only the best few. */
+const MAX_SHORT_ASIDES = 8;
 
 /** The plan's lines as long as they'll roughly take to say, for timing a plan that isn't recorded yet. */
 function estimatedVoice(g: Game): VoiceManifest {
@@ -536,8 +539,11 @@ function asideList(g: Game, raw: unknown, moments: VideoMoment[]): VideoAside[] 
       throw new ActionError(`${where}: the quote must match that move's commentary exactly (ply ${m.ply}, ${m.san})${sources.length > 1 ? ", or what was said with an illegal attempt on it" : ""}. It doesn't.`);
     if (words(quote) > 30 || quote.length > 240) throw new ActionError(`${where}: the quote is too long (${words(quote)} words); keep it to at most 25.`);
     const d = delivery(x.delivery, `${where}.delivery`);
-    return { ply: m.ply, quote, ...(d && { delivery: d }) };
+    if (x.short !== undefined && typeof x.short !== "boolean") throw new ActionError(`${where}.short: true or false.`);
+    return { ply: m.ply, quote, ...(d && { delivery: d }), ...(x.short === true && { short: true }) };
   });
+  const short = out.filter((a) => a.short).length;
+  if (short > MAX_SHORT_ASIDES) throw new ActionError(`${short} asides are marked \`short\`; keep it to at most ${MAX_SHORT_ASIDES}, the best of them.`);
   out.sort((a, b) => a.ply - b.ply);
   return out.length ? out : undefined;
 }
@@ -986,13 +992,14 @@ export function planReadback(g: Game, plan: VideoPlan): string {
   const tl = plannedTimeline(g, plan);
   if (tl.asides.length) {
     const stamp = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
-    out.push("Asides (YouTube), in the order they're said, timed by an estimate of the voices:");
+    out.push("Asides in the YouTube cut, in the order they're said, timed by an estimate of the voices (★: in the TikTok cut too):");
     for (const a of tl.asides) {
       const m = g.moves[a.i];
+      const star = plan.asides?.find((x) => x.ply === m.ply)?.short ? "★ " : "";
       // The move on the board as it starts: its own, or one played before it.
       const over = tl.scenes.find((s) => (s.kind === "move" || s.kind === "illegal") && !("hook" in s && s.hook) && s.start + s.dur > a.start + 0.01);
       const early = over && "i" in over && over.i < a.i ? `, starting ${a.i - over.i} ${a.i - over.i === 1 ? "ply" : "plies"} early, over ${moveNo(g.moves[over.i].ply)} ${g.moves[over.i].san}` : "";
-      out.push(`  ${stamp(a.start)} ${sideName(g, m.color)} (${moveNo(m.ply)} ${m.san}${early}): "${a.text}"`);
+      out.push(`  ${star}${stamp(a.start)} ${sideName(g, m.color)} (${moveNo(m.ply)} ${m.san}${early}): "${a.text}"`);
     }
     out.push("");
   }
