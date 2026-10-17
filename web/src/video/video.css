@@ -1087,6 +1087,25 @@
 .v-panel > .v-bubble.off .v-thought-label {
   font-size: 26px;
 }
+/* The move list, and an aside under it while one is said (the list giving it room). */
+.v-ml-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.v-ml-wrap > .v-bubble.off.aside {
+  flex: none;
+  padding: 16px 28px 20px;
+  border-width: 5px;
+}
+.v-ml-wrap > .v-bubble.aside .v-bubble-who {
+  margin-bottom: 6px;
+}
+.v-ml-wrap > .v-bubble.aside .v-thought-label {
+  font-size: 22px;
+}
 .v-p-bubble {
   top: 166px;
   left: 90px;

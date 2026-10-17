@@ -9,7 +9,7 @@ import { speakable } from "./speech";
  */
 
 export interface VideoLine {
-  /** "moment:<ply>", "hook" or "interview:<pre|post>:<w|b>". */
+  /** "moment:<ply>", "aside:<ply>", "hook" or "interview:<pre|post>:<w|b>". */
   id: string;
   color: Color;
   text: string;
@@ -60,6 +60,10 @@ export function videoLines(g: Game): VideoLine[] {
   for (const m of plan.moments) {
     const c = colorOf(m.ply);
     if (c && m.thought) out.push({ id: `moment:${m.ply}`, color: c, text: m.thought, delivery: m.delivery });
+  }
+  for (const a of plan.asides ?? []) {
+    const c = colorOf(a.ply);
+    if (c) out.push({ id: `aside:${a.ply}`, color: c, text: a.quote, delivery: a.delivery });
   }
   if (plan.hook?.quote) {
     const c = colorOf(plan.hook.ply);

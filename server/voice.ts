@@ -19,11 +19,12 @@ export const VOICE_DIR = path.join(DATA, "voice");
 const API = "https://api.elevenlabs.io/v1";
 /**
  * How much speech one plan may have (characters sent, delivery tags and spelled-out notation included).
- * A typical plan is about 2,500. The director's plan is checked against this when it's submitted, so a
- * plan that passed always gets its voices; the recorder's own cap is a backstop with room for interview
- * lines that arrive after the plan.
+ * A typical plan's moments, hook and interviews come to about 2,500, and its asides (the opening's
+ * conversation, and what keeps the quiet stretches talking) to as much again. The director's plan is checked
+ * against this when it's submitted, so a plan that passed always gets its voices; the recorder's own cap is a
+ * backstop with room for interview lines that arrive after the plan.
  */
-export const VOICE_BUDGET = 6000;
+export const VOICE_BUDGET = 8000;
 const MAX_CHARS_PER_GAME = VOICE_BUDGET + 2000;
 
 let savedKey: string | undefined;

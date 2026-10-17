@@ -1,10 +1,14 @@
-import type { Classification, Color, Game, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoHook, VideoMoment, VideoPackaging, VideoPlan } from "../shared/types";
+import type { Classification, Color, Game, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoAside, VideoHook, VideoMoment, VideoPackaging, VideoPlan } from "../shared/types";
+import type { VoiceManifest } from "../shared/voices";
+import { speakable } from "../shared/speech";
+import { triesOf } from "../shared/explain";
+import { buildTimeline, silences } from "../web/src/video/timeline";
 import { humanSide, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { beliefs } from "../shared/belief";
 import { rivalry, seriesLine } from "./rivalry";
 import { spokenText, VOICE_BUDGET } from "./voice";
-import { LATE_INTERVIEW_CHARS, videoLines, voiceOf } from "../shared/videoLines";
+import { LATE_INTERVIEW_CHARS, lineSig, videoLines, voiceOf } from "../shared/videoLines";
 import { describePlayer, pvSan } from "./briefing";
 import { variantOf, type RulesMove } from "../shared/rules";
 import { ActionError } from "./game";
@@ -49,7 +53,7 @@ export function directorBrief(g: Game): string {
   const out: string[] = [
     "VIDEO DIRECTOR — the broadcast is over. One last job: plan the replay video of this game.",
     "",
-    "The game is cut into a YouTube video (every move) and a TikTok video (quiet moves fly by in under a second). Both slow down only for the moments you pick: a quote from the mover's own commentary on that move appears as a speech bubble, then they play it and the board holds on the move and its engine verdict.",
+    "The game is cut into a YouTube video (every move) and a TikTok video (quiet moves fly by in under a second). Both slow down only for the moments you pick: a quote from the mover's own commentary on that move appears as a speech bubble, then they play it and the board holds on the move and its engine verdict. Between your moments, the YouTube cut keeps the players talking with asides: short lines from their commentary, said while the moves play on (see `asides` below).",
     "",
     "Before picking anything, read the whole game (start with `## Shape of the game` below) and decide what kind of game it is, because that decides where the slow-downs go:",
     "- A built attack or combination: one side made it and calculated it. The story is the idea: the quiet move that set it up, the shot, the defences the attacker saw coming, the finish.",
@@ -74,7 +78,7 @@ export function directorBrief(g: Game): string {
     "",
     "Be honest about soundness and quality, because it makes the better story. A sacrifice the engine doesn't trust that still worked is a swindle, and the defence the opponent missed is the payoff (show it as a line). A 'combination' that only collected a piece left hanging is a punishment, not genius. Use the accuracy, the error counts and the verdicts to decide how good the game really was, and let `why`, the chapters and the line captions say it: \"both of them missed it\" is a story; \"a masterpiece\" about a game decided by a hung queen is not.",
     "",
-    "Beyond those arcs, pick the other moments a viewer must not miss: big misjudgments (marked `misjudged` below), the moment a player finally sees the truth (marked `realizes`), and the finish. The engine's labels are a guide, not the answer. A move rated 'good' can be the real story (say, the move that allowed the trick), and a technical inaccuracy can be dull. Illegal-move attempts and quiet moves are importance 1 unless they change the story. Skip routine theory.",
+    "Beyond those arcs, pick the other moments a viewer must not miss: big misjudgments (marked `misjudged` below), the moment a player finally sees the truth (marked `realizes`), and the finish. The engine's labels are a guide, not the answer. A move rated 'good' can be the real story (say, the move that allowed the trick), and a technical inaccuracy can be dull. Illegal-move attempts and quiet moves are importance 1 unless they change the story. Skip routine theory as moments: what the players say through the opening goes in asides.",
     "",
     "Also pick the single best line from each interview for the short cut: funny, bold, or what came true (or didn't).",
     "",
@@ -122,6 +126,9 @@ export function directorBrief(g: Game): string {
         `  line option "${l.kind}": ${l.moves.map((mv) => mv.san).join(" ")} → ${l.fact}${l.punish ? `; allows: ${m.san} ${l.punish.moves.slice(1).map((mv) => mv.san).join(" ")} → ${l.punish.fact}` : ""}`,
       );
     if (m.illegalAttempts.length) out.push(`  tried illegal moves first: ${m.illegalAttempts.join(", ")}`);
+    triesOf(m.illegalAttempts, m.tries).forEach((t, n) => {
+      if (t?.commentary.trim()) out.push(`  said with illegal attempt ${m.illegalAttempts[n]}: ${t.commentary.trim()}`);
+    });
     if (m.offeredDraw) out.push(`  offered a draw with this move`);
     if (m.commentary.trim()) out.push(`  commentary: ${m.commentary.trim()}`);
     for (const b of g.broadcast.filter((l) => l.ply === m.ply && l.ts <= (g.endedAt ?? Infinity))) out.push(`  you said: ${b.text}`);
@@ -172,6 +179,11 @@ export function directorBrief(g: Game): string {
             ],
           },
         ],
+        asides: [
+          { ply: 1, quote: "…a few words from ply 1's commentary…" },
+          { ply: 2, quote: "…", delivery: "easy, sure of itself" },
+          { ply: 31, quote: "…a plan, a worry, a read on the opponent…" },
+        ],
         interviewLines: { pre: { w: "…", b: "…" }, post: { w: "…", b: "…" } },
         interviewDelivery: { pre: { w: "cocky", b: "measured" }, post: { w: "rueful", b: "gracious" } },
         hook: { ply: 55, quote: "…exact sentences from ply 55's commentary…", delivery: "breezy, totally sure", caption: "Black thinks the rook is safe. It's already lost." },
@@ -212,12 +224,17 @@ export function directorBrief(g: Game): string {
     "- line.caption (optional, one line, at most 14 words): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
     "  - line.squares, line.draw, line.refs: what the board shows with the caption, at the end of the line, as in marks. The line's moves are played out on the board, but nothing else is drawn unless you say: `squares` circles pieces or squares (\"e6\"), each up while its piece stays there; `draw` adds a piece's attack or defence as \"from>to\" (\"e6>e2\": the rook guarding the pawn), checked against the board. `refs`: every word of the caption that names a square, a move or a piece goes in a ref saying what it points at: { \"words\": \"the rook\", \"to\": \"e6\" }, or one of the line's moves: { \"words\": \"Kg4\", \"to\": \"Kg4\" }. A square a ref points at must be drawn: circled, at an end of a reach, or where one of the line's moves went from or to (a piece the line takes can be pointed at where it was taken). Those words light up in the colour of what they point at: green for the side the line favours, red for the other, amber for an empty square. A caption without refs lights nothing.",
     "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
+    "- asides (YouTube only): lines said in passing while the game plays on, in the player's own voice, with nothing drawn. The board doesn't stop for them: each is said as its move is played, and the next moves play on under it. They keep the players talking between your moments, so use them for anything worth hearing even when nothing big happens on the board: what they're going for, a plan, a worry, a read on the opponent, a habit, a joke, a line that comes back later. Each is { \"ply\": 7, \"quote\": \"…\", \"delivery\": \"…\" } (delivery optional), quoted exactly from that move's `commentary:` (or from what was `said with illegal attempt` on it), at most 25 words. Shorter is better, and a clause works (\"I take space in the center\"). Not on a ply that's one of your moments, nor on the last move.",
+    "  - Open with a conversation: an aside on most of the first 10–16 plies, a few words each (5–12 is ideal), so the opening plays as the two of them talking through their choices instead of as silent theory. Where asides come one after another like this, each move waits for the line before it, so keep them short.",
+    "  - An illegal attempt gets an aside on its move: usually the player owning up to it (the move's commentary often does), or what they meant by it. It's said while the rejected move is on the board.",
+    "  - An aside that wouldn't be over before the next moment starts up to 4 plies early, over the quiet moves before it; otherwise the board waits for it.",
+    `  - The YouTube cut must never go quiet for long: from the first move to the result, at most ${MAX_SILENCE} seconds may pass with nothing said (no quote, aside or engine line on screen). The server works out the video's timing and sends the plan back with every silent stretch, by ply: fill each with an aside or two from the plies in it.`,
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff, and fit it to the kind of game: for a built attack, the shot with the attacker's calculation (not the defender's mistake); for a swindle, the winning side's most confident line just before it turns; for a thrown-away win, the leader's line on the move that throws it; otherwise usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
     "- packaging (required): `title` for YouTube (at most 80 characters, the story not the notation, names the models); `caption` for TikTok (at most 150 characters, may end with a few hashtags); `thumbnail`: the move whose position makes the thumbnail and at most 4 words of big text.",
     "- Selling the video without spoiling it: the title, thumbnail and caption are what people see before they click. They may name the twist (the blunder, the trap, the comeback), because the viewer still wants to see how it happened, but never the ending: who won, that it was drawn, or that someone escaped. Make the title and thumbnail a pair that never says the same thing twice. One sets up the stakes (who was winning, how sure they were) and the other delivers the turn. The thumbnail shows the position after its move with that move's engine verdict icon (a blunder's ?? already says something went wrong). When the title names the twist, the thumbnail sells the stakes instead of showing the punishment again: the winning side's last strong move before the turn (\"MATE IN 24…\"), or the blunder with the mover's false confidence (\"TOTALLY SAFE\"). When the title only sets things up, the punishment itself can be the thumbnail.",
-    `- Everything spoken (quotes, hook, interview lines) is voiced, and together it must stay under ${VOICE_BUDGET} characters. Plans that follow the limits above fit easily.`,
-    "If the server rejects the plan it says why; fix it and submit again. Once it passes, it's read back to you: every quote with its lit words, and every drawing and ref with what it points at on the board and its colour. Check each line against what the player meant, then run `confirm` to save it, or fix the plan and submit it again. Then run `bc-wait`.",
+    `- Everything spoken (quotes, asides, hook, interview lines) is voiced, and together it must stay under ${VOICE_BUDGET} characters. Plans that follow the limits above fit easily.`,
+    "If the server rejects the plan it says why; fix it and submit again. Once it passes, it's read back to you: every quote with its lit words, every drawing and ref with what it points at on the board and its colour, and when each aside is said. Check each line against what the player meant (and that the asides read in order as a conversation), then run `confirm` to save it, or fix the plan and submit it again. Then run `bc-wait`.",
   );
   return out.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
 }
@@ -432,7 +449,8 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
     thumbnail: { ply: moveAt(g, pk.thumbnail?.ply, "packaging.thumbnail").ply, text: thumbText },
   };
 
-  const plan: VideoPlan = { moments, interviewLines, interviewDelivery, hook, packaging, createdAt: Date.now() };
+  const asides = asideList(g, p.asides, moments);
+  const plan: VideoPlan = { moments, ...(asides && { asides }), interviewLines, interviewDelivery, hook, packaging, createdAt: Date.now() };
 
   // Every line is spoken in the player's voice, which is paid by the character: a plan that passes here
   // always gets its voices, so the limit is enforced now, while the director can still trim.
@@ -447,9 +465,81 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
   const total = [...spoken].reduce((n, s) => n + s.length - s.indexOf("|") - 1, 0) + late;
   if (total > VOICE_BUDGET)
     throw new ActionError(
-      `Together the quotes, hook and interview lines come to ${total} characters of speech; keep them under ${VOICE_BUDGET}. Shorten the longest quotes or drop the quotes from a few importance-1 moments.`,
+      `Together the quotes, asides, hook and interview lines come to ${total} characters of speech; keep them under ${VOICE_BUDGET}. Shorten the longest quotes and asides, or drop the quotes from a few importance-1 moments.`,
+    );
+
+  const quiet = silentStretches(g, plan);
+  if (quiet.length)
+    throw new ActionError(
+      `The YouTube cut goes more than ${MAX_SILENCE} s with nothing said here:\n${quiet.map((q) => `- ${q}`).join("\n")}\nFill each with an aside or two from the plies in it (or a moment, where one belongs).`,
     );
   return plan;
+}
+
+/** How long the YouTube cut may go with nothing said, from the first move to the result. */
+const MAX_SILENCE = 15;
+/** Roughly how fast the voices speak, in words of the spoken text a second: to time a plan before it's recorded. */
+const SPOKEN_WPS = 2.5;
+const MAX_ASIDES = 80;
+
+/** The plan's lines as long as they'll roughly take to say, for timing a plan that isn't recorded yet. */
+function estimatedVoice(g: Game): VoiceManifest {
+  const clips: VoiceManifest["clips"] = {};
+  for (const l of videoLines(g)) {
+    const voice = voiceOf(g, l.color);
+    if (voice) clips[l.id] = { url: "", dur: words(speakable(l.text)) / SPOKEN_WPS, sig: lineSig(voice, l) };
+  }
+  return { clips };
+}
+
+/** The YouTube cut as this plan would time it (the voices estimated). */
+const plannedTimeline = (g: Game, plan: VideoPlan) => {
+  const pg = { ...g, video: plan };
+  return buildTimeline(pg, "landscape", { voice: estimatedVoice(pg) });
+};
+
+/**
+ * Where the YouTube cut goes quiet for too long, by ply, leaving out stretches with nothing to quote (a
+ * human's moves, or plies already used).
+ */
+function silentStretches(g: Game, plan: VideoPlan): string[] {
+  const tl = plannedTimeline(g, plan);
+  const used = new Set([...plan.moments.map((x) => x.ply), ...(plan.asides ?? []).map((a) => a.ply)]);
+  const out: string[] = [];
+  for (const gap of silences(tl, MAX_SILENCE)) {
+    const plies = tl.scenes.flatMap((s) => (s.kind === "move" && !s.hook && s.start >= gap.from - 0.01 && s.start < gap.to ? [g.moves[s.i]] : []));
+    if (!plies.some((m) => m.commentary.trim() && !used.has(m.ply))) continue;
+    const [a, b] = [plies[0], plies[plies.length - 1]];
+    out.push(`plies ${a.ply}–${b.ply} (${moveNo(a.ply)} ${a.san} to ${moveNo(b.ply)} ${b.san}): about ${Math.round(gap.to - gap.from)} s with nothing said`);
+  }
+  return out;
+}
+
+/** The director's asides (see VideoAside): quoted exactly and short, one per ply, never on a moment or the last move. */
+function asideList(g: Game, raw: unknown, moments: VideoMoment[]): VideoAside[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new ActionError("`asides` must be an array.");
+  if (raw.length > MAX_ASIDES) throw new ActionError(`${raw.length} asides; keep it to at most ${MAX_ASIDES}.`);
+  const seen = new Set<number>();
+  const out = raw.map((x: any, n): VideoAside => {
+    const where = `asides[${n}]`;
+    const m = moveAt(g, x?.ply, where);
+    if (seen.has(m.ply)) throw new ActionError(`${where}: ply ${m.ply} already has an aside; give it one.`);
+    seen.add(m.ply);
+    if (moments.some((y) => y.ply === m.ply)) throw new ActionError(`${where}: ply ${m.ply} is one of your moments, so its quote is said there. Put the line in that quote, or give the aside to another ply.`);
+    if (m === g.moves[g.moves.length - 1]) throw new ActionError(`${where}: the last move is a moment of its own; give the aside to another ply.`);
+    const sources = [m.commentary, ...(m.tries ?? []).map((t) => t.commentary)].filter((s) => s.trim());
+    if (!sources.length) throw new ActionError(`${where}: ${sideName(g, m.color)} is a human and shared no commentary on ply ${m.ply}, so there's nothing to quote.`);
+    const quote = str(x.quote).trim();
+    if (!quote) throw new ActionError(`${where}: give the quote.`);
+    if (!sources.some((s) => isExcerpt(quote, s)))
+      throw new ActionError(`${where}: the quote must match that move's commentary exactly (ply ${m.ply}, ${m.san})${sources.length > 1 ? ", or what was said with an illegal attempt on it" : ""}. It doesn't.`);
+    if (words(quote) > 30 || quote.length > 240) throw new ActionError(`${where}: the quote is too long (${words(quote)} words); keep it to at most 25.`);
+    const d = delivery(x.delivery, `${where}.delivery`);
+    return { ply: m.ply, quote, ...(d && { delivery: d }) };
+  });
+  out.sort((a, b) => a.ply - b.ply);
+  return out.length ? out : undefined;
 }
 
 function moveAt(g: Game, rawPly: unknown, where: string): MoveRecord {
@@ -889,6 +979,21 @@ export function planReadback(g: Game, plan: VideoPlan): string {
     out.push(`Ply ${x.ply}, the "${ln.kind}" line (green: ${sideName(g, sl.for)}):`);
     if (ln.punish && sl.punish) note("What it allowed", ln.punish.caption, ln.punish.refs, ln.punish.draw, ln.punish.rings, m.fenBefore, sl.punish.moves, ln.punish.at);
     if (ln.caption) note("The line", ln.caption, ln.refs, ln.draw, ln.rings, sl.fen, sl.moves, sl.moves.length);
+    out.push("");
+  }
+  // The asides in the order they're said, and when (by an estimate of the voices), so they can be read
+  // through as the conversation the video will play.
+  const tl = plannedTimeline(g, plan);
+  if (tl.asides.length) {
+    const stamp = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+    out.push("Asides (YouTube), in the order they're said, timed by an estimate of the voices:");
+    for (const a of tl.asides) {
+      const m = g.moves[a.i];
+      // The move on the board as it starts: its own, or one played before it.
+      const over = tl.scenes.find((s) => (s.kind === "move" || s.kind === "illegal") && !("hook" in s && s.hook) && s.start + s.dur > a.start + 0.01);
+      const early = over && "i" in over && over.i < a.i ? `, starting ${a.i - over.i} ${a.i - over.i === 1 ? "ply" : "plies"} early, over ${moveNo(g.moves[over.i].ply)} ${g.moves[over.i].san}` : "";
+      out.push(`  ${stamp(a.start)} ${sideName(g, m.color)} (${moveNo(m.ply)} ${m.san}${early}): "${a.text}"`);
+    }
     out.push("");
   }
   return out.join("\n");

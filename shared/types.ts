@@ -338,8 +338,22 @@ export interface PublishState {
   errors?: Partial<Record<PublishPlatform, string>>;
 }
 
+/**
+ * A line said in passing while the game plays on (YouTube only): no drawings, and the board doesn't stop
+ * for it. It's said over its move (or a few plies before it, to be done before the next moment), and the
+ * board waits for it only where the next line or moment would otherwise cut it off.
+ */
+export interface VideoAside {
+  ply: number;
+  /** Verbatim excerpt of the mover's commentary on that move, or of what they wrote with an illegal attempt on it. */
+  quote: string;
+  delivery?: string;
+}
+
 export interface VideoPlan {
   moments: VideoMoment[];
+  /** Lines said in passing between the moments: the opening's conversation, and what keeps the quiet stretches talking. */
+  asides?: VideoAside[];
   /** The best verbatim line from each interview, for the short cut. */
   interviewLines: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
   /** How each interview line is spoken (see VideoMoment.delivery). */

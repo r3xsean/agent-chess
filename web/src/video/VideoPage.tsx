@@ -16,7 +16,7 @@ import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, LINE_SLIDE, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, LINE_SLIDE, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type AsideCue, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
@@ -203,6 +203,8 @@ interface View {
    * YouTube cut, above it in the short) when the thought's marks are under it there.
    */
   thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off"; lit?: Lit[] };
+  /** An aside being said while the game plays on (see AsideCue), under the move list. */
+  aside?: { text: string; color: Color; fade: number };
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -420,6 +422,8 @@ const PANEL_GAP = 18;
 
 /** How far the bubble sits in from the board's edge (video.css .v-bubble). */
 const BUBBLE_INSET = 22;
+/** Asides less than this far apart share one bubble, the next taking the last one's place. */
+const ASIDE_JOIN = 0.6;
 
 /**
  * A word of the thought lit up in the colour of what it names while that's on the board, at opacity o, from
@@ -516,6 +520,21 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
 
   if (s.kind === "interview") v.reveal = s.text.split(/\s+/).length;
   if ((s.kind === "think" || s.kind === "move") && s.hook) v.hook = s.hook;
+  // An aside's bubble fades in and out, except into the next one straight after (the opening's conversation),
+  // which takes its place without the bubble going away in between.
+  const k = isGameScene(s) ? tl.asides.findIndex((a) => t < a.start + a.dur) : -1;
+  const aside = tl.asides[k];
+  if (aside) {
+    const end = (n: number) => tl.asides[n].start + tl.asides[n].dur;
+    const joinedIn = k > 0 && aside.start - end(k - 1) < ASIDE_JOIN;
+    const joinedOut = k + 1 < tl.asides.length && tl.asides[k + 1].start - end(k) < ASIDE_JOIN;
+    if (t >= aside.start || joinedIn)
+      v.aside = {
+        text: aside.text,
+        color: g.moves[aside.i].color,
+        fade: r3(Math.min(joinedIn ? 1 : clamp01((t - aside.start) / 0.25), joinedOut ? 1 : clamp01((end(k) - t) / 0.3))),
+      };
+  }
 
   if (s.kind === "rewind") {
     // The game winds back from the cold open's move to the start, quickly at first, settling at move 0.
@@ -830,6 +849,13 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
       took: s.key ? took(m.thinkMs) : undefined,
     };
     v.clocks = prep.clocks[s.i + 1];
+    // Once it has landed, the hold is the next player thinking: their clock runs, to their total after their move.
+    if (s.clock) {
+      const n = g.moves[s.i + 1];
+      const from = s.anim + 0.15;
+      const spent = Math.floor((n.thinkMs * clamp01((local - from) / Math.max(0.1, s.dur - from))) / 1000) * 1000;
+      v.clocks = { ...v.clocks, [n.color]: v.clocks[n.color] + spent };
+    }
     // The reveal is the bar: the engine's level slides away from (or back to) the mover's marker as the move lands.
     const callOut = s.key && telling(prep.belief[s.i]);
     v.focus = { i: s.i, label: callOut };
@@ -1177,12 +1203,12 @@ function ThoughtLabel({ g, t }: { g: Game; t: NonNullable<View["thought"]> }) {
  * with no card to come out of (and next to the opponent's in the short), it carries the speaker's avatar
  * and a border in their colour instead.
  */
-function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]>; size: number }) {
+function ThoughtBubble({ g, t, size, aside = false }: { g: Game; t: NonNullable<View["thought"]>; size: number; aside?: boolean }) {
   const ref = t.color === "w" ? g.white : g.black;
   const off = t.side === "off";
   return (
     <div
-      className={`v-bubble ${off ? "off" : (t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"}`}
+      className={`v-bubble ${off ? "off" : (t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"}${aside ? " aside" : ""}`}
       style={{ opacity: t.fade, ...(off && { borderColor: makerOf(ref.provider).color }) }}
     >
       {off ? (
@@ -1532,7 +1558,11 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
               {offBoard ? (
                 <ThoughtBubble g={g} t={t!} size={44} />
               ) : (
-                <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} />
+                // An aside goes under the move list, which makes room for it (the newest moves stay in sight).
+                <div className="v-ml-wrap">
+                  <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} />
+                  {v.aside && <ThoughtBubble g={g} t={{ ...v.aside, selfEval: "", side: "off" }} size={34} aside />}
+                </div>
               )}
               <ChartLegend g={g} />
               <EvalGraph prep={prep} g={g} ply={listPly} width={840} height={130} compare={engine?.compare} />
@@ -1867,7 +1897,7 @@ async function loadRatings(g: Game): Promise<Ratings> {
 
 declare global {
   interface Window {
-    __video?: { ready: boolean; duration: number; scenes: Scene[]; cues: SfxCue[]; fps: number; seek: (t: number) => string; settle: () => Promise<void> };
+    __video?: { ready: boolean; duration: number; scenes: Scene[]; asides: AsideCue[]; cues: SfxCue[]; fps: number; seek: (t: number) => string; settle: () => Promise<void> };
   }
 }
 
@@ -1934,6 +1964,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       ready: true,
       duration: tl!.duration,
       scenes: tl!.scenes,
+      asides: tl!.asides,
       cues: cues!,
       fps: 30,
       seek: (time) => {
@@ -1972,24 +2003,35 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   // Preview playback speaks the recorded lines as their scenes come up (a render mixes them into the
   // soundtrack instead).
   const sceneIdx = v?.idx ?? -1;
-  useEffect(() => {
-    const s = tl?.scenes[sceneIdx];
-    if (render || !playing || !s?.voice) return;
-    const audio = new Audio(s.voice.url);
-    audio.playbackRate = s.voice.rate;
-    // Picks up from wherever the preview is in the scene: its start, or mid-line after a seek or a pause.
-    const into = (t - s.start - VOICE_AT) * s.voice.rate;
+  // A line recorded for something starting at `from` (a scene, an aside): it picks up from wherever the preview
+  // is in it, its start or mid-line after a seek or a pause.
+  const speak = (voice: { url: string; rate: number }, from: number) => {
+    const audio = new Audio(voice.url);
+    audio.playbackRate = voice.rate;
+    const into = (t - from - VOICE_AT) * voice.rate;
     const start = () => {
       audio.currentTime = Math.max(0, into);
       audio.play().catch(() => {});
     };
-    const wait = setTimeout(start, Math.max(0, -into / s.voice.rate) * 1000);
+    const wait = setTimeout(start, Math.max(0, -into / voice.rate) * 1000);
     return () => {
       clearTimeout(wait);
       audio.pause();
     };
+  };
+  useEffect(() => {
+    const s = tl?.scenes[sceneIdx];
+    if (render || !playing || !s?.voice) return;
+    return speak(s.voice, s.start);
     // A new scene, play/pause or a seek starts or stops a line; time running on within the scene doesn't.
   }, [sceneIdx, playing, tl, render, seeks]);
+  // The asides, over the scenes, the same way.
+  const asideIdx = tl ? tl.asides.findIndex((a) => t >= a.start && t < a.start + a.dur) : -1;
+  useEffect(() => {
+    const a = tl?.asides[asideIdx];
+    if (render || !playing || !a?.voice) return;
+    return speak(a.voice, a.start);
+  }, [asideIdx, playing, tl, render, seeks]);
 
   // ...and its sound effects, the ones the render mixes in, as the clock passes them. A jump (a seek)
   // plays nothing for the stretch it skipped.

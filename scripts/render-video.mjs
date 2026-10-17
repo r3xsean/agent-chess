@@ -99,12 +99,12 @@ const SFX_DIR = resolve("vendor/sfx");
 /** Seconds into a voiced scene that its line starts (web/src/video/timeline.ts VOICE_AT). */
 const VOICE_AT = 0.3;
 /**
- * What the soundtrack plays: each speaker's recorded line (thinking, interviews) at the offset
- * the timeline allows for, and the sound effects, which the page cues itself (sfxCues in
+ * What the soundtrack plays: each speaker's recorded line (thinking, asides, interviews) at the
+ * offset the timeline allows for, and the sound effects, which the page cues itself (sfxCues in
  * web/src/video/timeline.ts, which the site's preview plays too).
  */
-function soundCues(scenes, effects) {
-  const voices = scenes.filter((s) => s.voice).map((s) => ({ t: s.start + VOICE_AT, file: `${SERVER}${s.voice.url}`, rate: s.voice.rate, gain: 1 }));
+function soundCues(scenes, asides, effects) {
+  const voices = [...scenes, ...asides].filter((s) => s.voice).map((s) => ({ t: s.start + VOICE_AT, file: `${SERVER}${s.voice.url}`, rate: s.voice.rate, gain: 1 }));
   return [...voices, ...effects];
 }
 
@@ -295,9 +295,10 @@ function pieces(text) {
  * What's spoken in a cut, as SRT: each voiced line from when it starts to the breath after it, its
  * pieces sharing that time by length. Lines are shown as written (moves in notation), not as spoken.
  */
-function subtitles(scenes) {
+function subtitles(scenes, asides) {
   const cues = [];
-  for (const s of scenes) {
+  // An aside is a line over the scenes, with its text (`text`) like an interview's.
+  for (const s of [...scenes, ...asides].sort((a, b) => a.start - b.start)) {
     const text = s.voice && (s.kind === "think" ? s.thought : s.text);
     if (!text) continue;
     const from = s.start + VOICE_AT;
@@ -315,9 +316,9 @@ function subtitles(scenes) {
 }
 
 /** The cut's subtitles beside it (none when nothing is spoken, e.g. a render without voices). */
-function writeSubtitles(format, scenes) {
+function writeSubtitles(format, scenes, asides) {
   const file = join(outDir, FILES[`${cut(format)}Subtitles`]);
-  const srt = subtitles(scenes);
+  const srt = subtitles(scenes, asides);
   if (srt) writeFileSync(file, srt);
   else rmSync(file, { force: true });
   if (srt && packageOnly) console.log(file);
@@ -357,16 +358,19 @@ try {
     await page.evaluate(() => document.fonts.ready);
     const duration = await page.evaluate(() => window.__video.duration);
     const scenes = await page.evaluate(() => window.__video.scenes);
+    const asides = await page.evaluate(() => window.__video.asides);
     const effects = await page.evaluate(() => window.__video.cues);
     // What the frames were timed to. --audio-only reuses the frames, so it must find the same timing:
-    // new voice lines, a re-plan or the short's voice speed all move scenes about.
-    const timing = createHash("sha1").update(JSON.stringify(scenes.map((s) => [s.kind, s.start, s.dur]))).digest("hex");
+    // new voice lines, a re-plan or the short's voice speed all move scenes (and asides) about.
+    const timed = scenes.map((s) => [s.kind, s.start, s.dur]);
+    if (asides.length) timed.push(...asides.map((a) => ["aside", a.start, a.dur]));
+    const timing = createHash("sha1").update(JSON.stringify(timed)).digest("hex");
     const out = join(outDir, FILES[cut(format)]);
     const timingFile = `${out}.timing`;
     if (packageOnly) {
       // Subtitles for frames timed differently would drift, so they're only made to match a render.
       if (existsSync(timingFile) && readFileSync(timingFile, "utf8").trim() === timing) {
-        writeSubtitles(format, scenes);
+        writeSubtitles(format, scenes, asides);
         if (format === "portrait") await writeCover(page, scenes);
       } else if (existsSync(out)) console.error(`${format}: the timing changed since ${out} was rendered, so its subtitles and cover weren't redone: render it again.`);
       await page.close();
@@ -436,7 +440,7 @@ try {
 
     // Effects and voices share one track (so the music ducks under both); --sfx off drops only the effects.
     const sfxOn = opt("sfx", "on") !== "off";
-    const cues = soundCues(scenes, sfxOn ? effects : []);
+    const cues = soundCues(scenes, asides, sfxOn ? effects : []);
     let sfx = null;
     if (cues.length) {
       sfx = `${out}.sfx.wav`;
@@ -449,7 +453,7 @@ try {
     for (const f of [silent, `${out}.sfx.wav`]) rmSync(f, { force: true });
     writeFileSync(timingFile, timing);
     console.log(`\r${format}: ${out}  (${duration.toFixed(1)}s, ${note}${((Date.now() - started) / 1000).toFixed(0)}s)${music ? "" : "  [no music]"}`);
-    writeSubtitles(format, scenes);
+    writeSubtitles(format, scenes, asides);
 
     if (format === "landscape") await writePackaging(scenes, duration);
   }
