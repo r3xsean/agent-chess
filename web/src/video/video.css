@@ -1031,15 +1031,6 @@
   color: #1e1d1a;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
 }
-.v-bubble.aside {
-  padding: 16px 28px 20px;
-}
-.v-bubble.aside .v-bubble-who {
-  margin-bottom: 6px;
-}
-.v-bubble.aside .v-thought-label {
-  font-size: 22px;
-}
 /* Who's speaking: their avatar beside the label. */
 .v-bubble-who {
   display: flex;
@@ -1088,9 +1079,52 @@
   border-color: transparent !important;
   box-shadow: none;
 }
-/* The short's aside, in the chart's box. */
-.v-p-aside > .v-bubble {
+/* The legend and the chart, dimmed together while a player thinks. */
+.v-chart-block {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+/* An aside: a comment in the move list, indented under its move like a variation, behind a rule in the
+   speaker's colour, in the list's own dark style. In the short it takes the chart's box. */
+.v-aside-fold {
+  margin-left: 70px;
+  overflow: hidden;
+}
+.v-aside-body {
+  padding: 4px 0 8px;
+}
+.v-aside {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 8px 18px 10px 18px;
+  border-left: 4px solid;
+  border-radius: 0 10px 10px 0;
+  background: rgba(255, 255, 255, 0.06);
+}
+.v-aside-text {
+  font-size: 28px;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1.32;
+  color: #e8e6e3;
+}
+.v-aside-box,
+.v-aside-box .v-aside-body {
   flex: 1;
+  display: flex;
+  padding: 0;
+}
+.v-aside.compact {
+  flex: 1;
+  align-items: center;
+  padding: 16px 26px;
+  background: rgba(0, 0, 0, 0.28);
+}
+.v-aside.compact .v-aside-text {
+  font-size: 34px;
 }
 .v-p-bubble {
   top: 166px;

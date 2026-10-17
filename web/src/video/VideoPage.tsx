@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { looseChess, newRules, START_FEN, variantOf, type RulesMove, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, LineReach, LineRef, PlayerRef, Rivalry, Score } from "../../../shared/types";
@@ -199,13 +199,18 @@ interface View {
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
   /**
-   * What's being said, off the board: the thought before a key move, or an aside while the game plays on. In
-   * the YouTube cut it's a box under the move list, which makes room for it as it opens; in the short, a
-   * thought takes the space above the board and an aside the chart's place. `open`: how far the box is open
-   * (0 → 1 as a line starts, back to 0 after). `prev`: the line it's taking over from, which it crossfades
-   * with by `mix` (0 → 1), the box's height going from one's to the other's.
+   * The thought before a key move, while the game stops for it: a bright bubble off the board, under the move
+   * list in the YouTube cut (which makes room for it as it opens, and dims), above the board in the short.
+   * `open`: how far the box is open (0 → 1 as it starts, back to 0 after). `prev`: the thought it's taking
+   * over from, if one ran straight into it, by `mix` (0 → 1), the box going from one's height to the other's.
    */
   speech?: { now: Said; prev?: Said; mix: number; open: number };
+  /**
+   * Asides being said while the game plays on: comments in the move list, the way an annotated game writes
+   * them, under the move they hang from (`after`, a move index), scrolling up with the list as moves come.
+   * In the short, in the chart's place. `open`: how far each has folded open.
+   */
+  asides?: { text: string; color: Color; after: number; open: number }[];
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -238,8 +243,8 @@ interface View {
   };
 }
 
-/** A line in the speech box: a thought (with its self-eval, and the words its marks light up) or an aside. */
-type Said = { text: string; color: Color; selfEval: string; kind: "think" | "aside"; lit?: Lit[] };
+/** A thought in the speech box, with its self-eval and the words its marks light up. */
+type Said = { text: string; color: Color; selfEval: string; lit?: Lit[] };
 
 const GAME_SCENES: Scene["kind"][] =["move", "illegal", "think", "draw", "resign", "rewind", "line"];
 const isGameScene = (s: Scene | undefined) => !!s && GAME_SCENES.includes(s.kind);
@@ -434,35 +439,65 @@ const SPEECH_JOIN = 0.6;
 /** The gap above the speech box once it's open (video.css .v-ml-wrap). */
 const SPEECH_GAP = 14;
 
-/** Everything said over the game, in order: the thoughts before key moves and the asides, each with its span. */
+/** The thoughts before key moves, in order, each with its span and its think scene (whose marks light its words). */
 interface SpeechSpan {
   start: number;
   end: number;
   said: Said;
-  /** The think scene it is (its words light up with the marks). */
-  scene?: number;
+  scene: number;
 }
 const speechCache = new WeakMap<Timeline, SpeechSpan[]>();
 function speechOf(g: Game, tl: Timeline): SpeechSpan[] {
   let spans = speechCache.get(tl);
   if (!spans) {
-    spans = [
-      ...tl.scenes.flatMap((s, scene): SpeechSpan[] => {
-        if (s.kind !== "think") return [];
-        const m = g.moves[s.i];
-        return [{ start: s.start, end: s.start + s.dur, scene, said: { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, kind: "think" } }];
-      }),
-      ...tl.asides.map((a): SpeechSpan => ({ start: a.start, end: a.start + a.dur, said: { text: a.text, color: g.moves[a.i].color, selfEval: "", kind: "aside" } })),
-    ].sort((a, b) => a.start - b.start);
+    spans = tl.scenes.flatMap((s, scene): SpeechSpan[] => {
+      if (s.kind !== "think") return [];
+      const m = g.moves[s.i];
+      return [{ start: s.start, end: s.start + s.dur, scene, said: { text: s.thought, color: m.color, selfEval: m.selfEvalRaw } }];
+    });
     speechCache.set(tl, spans);
   }
   return spans;
 }
 
 /**
- * What's being said at time t, if anything: the box opens as a line starts and closes after it ends, unless
- * the next line follows straight on, which then takes over in the open box (the opening's conversation, or
- * an aside running into a thought). `lit`: the words the current think scene's marks light up.
+ * Where each aside hangs in the move list: under the last move on the board when it starts (its own move,
+ * or one before it when it starts early; before a rejected attempt, the move before).
+ */
+const anchorCache = new WeakMap<Timeline, number[]>();
+function asideAnchors(tl: Timeline): number[] {
+  let anchors = anchorCache.get(tl);
+  if (!anchors) {
+    anchors = tl.asides.map((a) => {
+      let at = -1;
+      for (const s of tl.scenes) {
+        if (s.start > a.start + 0.01) break;
+        if (s.kind === "move" && !s.hook) at = s.i;
+        else if (s.kind === "illegal") at = s.i - 1;
+      }
+      return at;
+    });
+    anchorCache.set(tl, anchors);
+  }
+  return anchors;
+}
+
+/** The asides showing at time t, each folding open as its line starts and away after it ends. */
+function asidesAt(g: Game, tl: Timeline, t: number): View["asides"] {
+  const anchors = asideAnchors(tl);
+  const out = tl.asides.flatMap((a, k) => {
+    const end = a.start + a.dur;
+    if (t < a.start || t >= end + SPEECH_OPEN) return [];
+    const open = Math.min(ease(clamp01((t - a.start) / SPEECH_OPEN)), t < end ? 1 : 1 - ease(clamp01((t - end) / SPEECH_OPEN)));
+    return open > 0 ? [{ text: a.text, color: g.moves[a.i].color, after: anchors[k], open: r3(open) }] : [];
+  });
+  return out.length ? out : undefined;
+}
+
+/**
+ * The thought being said at time t, if any: the box opens as it starts and closes after it ends, unless the
+ * next follows straight on, which then takes over in the open box. `lit`: the words the current think
+ * scene's marks light up.
  */
 function speechAt(g: Game, tl: Timeline, t: number, idx: number, lit: Lit[]): View["speech"] {
   const spans = speechOf(g, tl);
@@ -883,7 +918,10 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     v.focus = { i: s.i, label: callOut };
     v.line = verdictLine(g, prep, s.i, bad, callOut && settled);
   }
-  if (isGameScene(s)) v.speech = speechAt(g, tl, t, idx, thinkLit);
+  if (isGameScene(s)) {
+    v.speech = speechAt(g, tl, t, idx, thinkLit);
+    v.asides = asidesAt(g, tl, t);
+  }
   return v;
 }
 
@@ -1222,13 +1260,13 @@ function ThoughtLabel({ g, t }: { g: Game; t: Said }) {
 }
 
 /**
- * What a player says, off the board (never over it, where it would hide what their words point at): their
- * avatar and a border in their colour say who it is. An aside is the compact kind.
+ * A thought, off the board (never over it, where it would hide what their words point at): their avatar and
+ * a border in their colour say who it is.
  */
 function ThoughtBubble({ g, t, size, style }: { g: Game; t: Said; size: number; style?: CSSProperties }) {
   const ref = t.color === "w" ? g.white : g.black;
   return (
-    <div className={`v-bubble off ${t.kind}`} style={{ ...style, borderColor: makerOf(ref.provider).color }}>
+    <div className="v-bubble off" style={{ ...style, borderColor: makerOf(ref.provider).color }}>
       <div className="v-bubble-who">
         <Avatar player={ref} size={Math.round(size * 1.5)} />
         <ThoughtLabel g={g} t={t} />
@@ -1256,7 +1294,6 @@ function SpeechBox({ g, sp }: { g: Game; sp: NonNullable<View["speech"]> }) {
     const hp = prev.current?.offsetHeight ?? hn;
     box.current.style.height = `${(hp + (hn - hp) * sp.mix) * sp.open}px`;
   });
-  const size = (s: Said) => (s.kind === "think" ? 36 : 32);
   const border = (s: Said) => makerOf((s.color === "w" ? g.white : g.black).provider).color;
   // One bubble stays up through a handover, its border turning to the new speaker's colour; the words go
   // first, then the new ones come, so the two never show over each other.
@@ -1266,21 +1303,40 @@ function SpeechBox({ g, sp }: { g: Game; sp: NonNullable<View["speech"]> }) {
       <div className="v-speech-frame" style={{ borderColor: color }} />
       {sp.prev && (
         <div ref={prev} className="v-speech-line" style={{ opacity: r3(1 - clamp01(sp.mix / 0.45)) }}>
-          <ThoughtBubble g={g} t={sp.prev} size={size(sp.prev)} />
+          <ThoughtBubble g={g} t={sp.prev} size={36} />
         </div>
       )}
       <div ref={now} className="v-speech-line" style={{ opacity: r3(sp.prev ? clamp01((sp.mix - 0.45) / 0.55) : 1) }}>
-        <ThoughtBubble g={g} t={sp.now} size={size(sp.now)} />
+        <ThoughtBubble g={g} t={sp.now} size={36} />
       </div>
     </div>
   );
 }
 
-/** How much of what's said is a thought (o: how much of it shows), and which: the one taking over, or the one it's taking over from. */
-function speechPart(sp: View["speech"], kind: Said["kind"]): { said?: Said; o: number } {
-  if (!sp) return { o: 0 };
-  const o = sp.open * ((sp.now.kind === kind ? sp.mix : 0) + (sp.prev?.kind === kind ? 1 - sp.mix : 0));
-  return { said: sp.now.kind === kind ? sp.now : sp.prev?.kind === kind ? sp.prev : undefined, o: r3(o) };
+/**
+ * An aside as a comment in the move list: indented under the move it hangs from behind a rule in the
+ * speaker's colour, their avatar and the words in the list's own dark style (not the bright bubble of a
+ * thought, which stops the game). It folds open to its height and away again, the rows below moving with
+ * it. `compact`: the short's, in the chart's place, which just fades.
+ */
+function AsideComment({ g, a, compact = false }: { g: Game; a: NonNullable<View["asides"]>[number]; compact?: boolean }) {
+  const fold = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (compact || !fold.current || !body.current) return;
+    fold.current.style.height = `${body.current.offsetHeight * a.open}px`;
+  });
+  const ref = a.color === "w" ? g.white : g.black;
+  return (
+    <div ref={fold} className={compact ? "v-aside-box" : "v-aside-fold"} style={{ opacity: a.open }}>
+      <div ref={body} className="v-aside-body">
+        <div className={`v-aside ${compact ? "compact" : ""}`} style={{ borderColor: makerOf(ref.provider).color }}>
+          <Avatar player={ref} size={compact ? 52 : 40} />
+          <div className="v-aside-text">{a.text}</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -1362,7 +1418,7 @@ function Variation({ e, compact = false }: { e: NonNullable<View["engine"]>; com
  * The moves played so far (never the ones to come), newest at the bottom, with their verdicts. `branch`: a
  * variation under the last move; `current`: whether that move is highlighted as the one on the board.
  */
-function MoveList({ g, ply, branch, current = true }: { g: Game; ply: number; branch?: ReactNode; current?: boolean }) {
+function MoveList({ g, ply, branch, current = true, comments = [], dim = 1 }: { g: Game; ply: number; branch?: ReactNode; current?: boolean; comments?: NonNullable<View["asides"]>; dim?: number }) {
   // More than ever fit: the list fills its box from the bottom, the oldest rows going off the top.
   const ROWS = 30;
   const rows: { no: number; w?: number; b?: number }[] = [];
@@ -1392,15 +1448,22 @@ function MoveList({ g, ply, branch, current = true }: { g: Game; ply: number; br
     const room = box.current.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     box.current.classList.toggle("full", list.current.scrollHeight > room + 1);
   });
+  // An aside hangs under the row of the move it's from; one from before the first move, at the top.
+  const under = (r: { w?: number; b?: number } | null) =>
+    comments.filter((c) => (r ? c.after === r.w || c.after === r.b : c.after < 0)).map((c, k) => <AsideComment key={`${c.after}-${k}-${c.text}`} g={g} a={c} />);
   return (
-    <div ref={box} className="v-movelist">
+    <div ref={box} className="v-movelist" style={dim < 1 ? { opacity: r3(dim) } : undefined}>
       <div ref={list} className="v-ml-rows">
+        {under(null)}
         {rows.slice(-ROWS).map((r) => (
-          <div key={r.no} className="v-ml-row">
-            <span className="v-ml-no">{r.no}.</span>
-            {cell(r.w)}
-            {cell(r.b)}
-          </div>
+          <Fragment key={r.no}>
+            <div className="v-ml-row">
+              <span className="v-ml-no">{r.no}.</span>
+              {cell(r.w)}
+              {cell(r.b)}
+            </div>
+            {under(r)}
+          </Fragment>
         ))}
         {branch}
       </div>
@@ -1505,8 +1568,11 @@ type Ratings = Record<Color, { before: number; after: number }> | null;
 function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep; wide: boolean; ratings: Ratings }) {
   const b = v.board!;
   const sp = v.speech;
-  const thought = speechPart(sp, "think");
-  const aside = speechPart(sp, "aside");
+  const thoughtO = sp?.open ?? 0;
+  const asides = v.asides ?? [];
+  const asideO = Math.max(0, ...asides.map((a) => a.open));
+  // While the game stops for a thought, the rest of the panel dims under its bright bubble.
+  const dim = r3(1 - 0.55 * thoughtO);
   const line = v.line && (
     <>
       <span className="v-line-label" style={v.line.color ? { color: v.line.color } : undefined}>
@@ -1538,7 +1604,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
   const listPly = engine?.ply ?? b.i + 1;
   // The line under the verdict folds away while a player thinks (there's no verdict yet) and for an engine
   // line, the boxes below rising with it, and unfolds again after.
-  const under = r3(Math.min(engine?.under ?? 1, 1 - thought.o));
+  const under = r3(Math.min(engine?.under ?? 1, 1 - thoughtO));
 
   if (wide)
     return (
@@ -1576,13 +1642,15 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
             )
           ) : (
             <>
-              {/* What's said goes under the move list, which makes room for it (its newest moves in sight). */}
+              {/* Asides are comments in the move list; a thought goes under it, the list making room. */}
               <div className="v-ml-wrap">
-                <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} />
+                <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} comments={asides} dim={dim} />
                 {sp && <SpeechBox g={g} sp={sp} />}
               </div>
-              <ChartLegend g={g} />
-              <EvalGraph prep={prep} g={g} ply={listPly} width={840} height={130} compare={engine?.compare} />
+              <div className="v-chart-block" style={dim < 1 ? { opacity: dim } : undefined}>
+                <ChartLegend g={g} />
+                <EvalGraph prep={prep} g={g} ply={listPly} width={840} height={130} compare={engine?.compare} />
+              </div>
             </>
           )}
         </div>
@@ -1603,7 +1671,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
         <>
           {/* A thought crossfades with everything above the board, an aside with the chart: each in its place,
               so nothing moves. */}
-          <div className="v-p-callout" style={thought.o ? { opacity: r3(1 - thought.o) } : undefined}>
+          <div className="v-p-callout" style={thoughtO ? { opacity: r3(1 - thoughtO) } : undefined}>
             {callout}
           </div>
           {/* The line under the verdict and the chart fade out for an engine line, its variation fading in over
@@ -1619,7 +1687,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
             </div>
           )}
           {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead. */}
-          <div className={`v-p-caption ${hook ? "hooked" : ""}`} style={{ opacity: r3((engine && !hook ? engine.under : 1) * (1 - Math.max(thought.o, aside.o))) }}>
+          <div className={`v-p-caption ${hook ? "hooked" : ""}`} style={{ opacity: r3((engine && !hook ? engine.under : 1) * (1 - Math.max(thoughtO, asideO))) }}>
             {hook ? (
               hook
             ) : (
@@ -1629,14 +1697,15 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
               </div>
             )}
           </div>
-          {!hook && aside.said && (
-            <div className="v-p-caption v-p-aside" style={{ opacity: aside.o }}>
-              <ThoughtBubble g={g} t={aside.said} size={28} />
-            </div>
-          )}
-          {!hook && thought.said && (
-            <div className="v-p-bubble" style={{ opacity: thought.o }}>
-              <ThoughtBubble g={g} t={thought.said} size={36} />
+          {!hook &&
+            asides.map((a, k) => (
+              <div key={`${a.after}-${k}-${a.text}`} className="v-p-caption v-p-aside">
+                <AsideComment g={g} a={a} compact />
+              </div>
+            ))}
+          {!hook && sp && (
+            <div className="v-p-bubble" style={{ opacity: thoughtO }}>
+              <ThoughtBubble g={g} t={sp.now} size={36} />
             </div>
           )}
         </>
