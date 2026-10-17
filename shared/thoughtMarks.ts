@@ -82,11 +82,6 @@ export function phraseEnd(quote: string, phrase: string, from = 0): number {
 /** A move or a square, as a word reads once compared ("Rxe8+" → "re8", "exd5" → "ed5", "O-O" → "o-o"). */
 const SQUARE_OR_MOVE = /^(?:[kqrbn][a-h]?[1-8]?[a-h][1-8]|[a-h][a-h]?[1-8](?:[qrbn])?|o-o(?:-o)?)$/;
 
-/** The words of a quote that name a move or a square ("Kf3", "...Rxe8+", "e2", "O-O"), as written. */
-export function boardWords(quote: string): string[] {
-  return quoteWords(quote).filter((w) => SQUARE_OR_MOVE.test(sanKey(w)));
-}
-
 /** Whether quote word `w` itself names this move (as written or as played) or, ending it, this square. */
 export function wordNames(w: string | undefined, what: { sans?: string[]; sq?: string }): boolean {
   if (!w) return false;
@@ -113,9 +108,43 @@ export function sentenceEnd(quote: string, k: number): number {
   return ws.length - 1;
 }
 
+/** A word naming a piece by its kind: "rook", "knights", "the d-pawn", "e8-knight", "passer". */
+const PIECE_WORD = /(?:^|-)(?:king|queen|rook|bishop|knight|pawn|passer)(?:s|'s)?$/;
+
+/** The quote's sentences, as word-index spans [first, last]. */
+export function sentences(quote: string): [number, number][] {
+  const out: [number, number][] = [];
+  const n = quoteWords(quote).length;
+  for (let k = 0; k < n; ) {
+    const end = sentenceEnd(quote, k);
+    out.push([k, end]);
+    k = end + 1;
+  }
+  return out;
+}
+
+const KIND: Record<string, string> = { king: "k", queen: "q", rook: "r", bishop: "b", knight: "n", pawn: "p", passer: "p" };
+
+/**
+ * What word w of a quote points at on the board: a square (on its own, or the square a move goes to or a
+ * piece stands on: "e4", "Nc5", "Rxe8+"), or a piece by its kind ("the rook", "3 pawns", "the d-pawn").
+ */
+export function pointsAt(w: string): { sq: string } | { kind: string } | undefined {
+  const key = sanKey(w);
+  if (SQUARE_OR_MOVE.test(key)) {
+    const sq = key.match(/([a-h][1-8])[qrbn]?$/)?.[1];
+    return sq ? { sq } : undefined;
+  }
+  const piece = bare(w).match(PIECE_WORD);
+  return piece ? { kind: KIND[piece[0].replace(/^-/, "").replace(/(?:s|'s)$/, "")] } : undefined;
+}
+
+/** A word as shown in a message: no surrounding punctuation. */
+export const plainWord = (w: string) => w.replace(/^[^\p{L}\p{N}.]+|[^\p{L}\p{N}+#]+$/gu, "");
+
 type Piece = { type: string; color: Color };
 
-function boardOf(fen: string): Map<string, Piece> {
+export function boardOf(fen: string): Map<string, Piece> {
   const out = new Map<string, Piece>();
   fen
     .split(" ")[0]

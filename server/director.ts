@@ -10,7 +10,7 @@ import { variantOf } from "../shared/rules";
 import { ActionError } from "./game";
 import { lineOptions, shownLine } from "../shared/engineLine";
 import { leftEnPrise } from "./wintr";
-import { boardWords, drawnLine, moveWordAt, phraseAt, phraseEnd, quoteWords, squareWordAt } from "../shared/thoughtMarks";
+import { boardOf, drawnLine, moveWordAt, phraseAt, phraseEnd, plainWord, pointsAt, quoteWords, sentences, squareWordAt } from "../shared/thoughtMarks";
 
 /*
  * After the game the broadcaster turns video director: it reads the whole game and picks the
@@ -168,12 +168,21 @@ export function directorBrief(g: Game): string {
     "- delivery (optional, on any quote, the hook and interviewDelivery): how the voice actor should say it, in at most 6 words, no brackets: \"smug, unbothered\", \"stunned, then quietly deflated\", \"nervous, talking fast\". You know what happens next and the player doesn't, so play the irony: a doomed move said with total confidence lands harder than one said worriedly. Leave it out when a neutral read is right.",
     "- chapter (importance 2–3 only, optional): a YouTube chapter title for this moment, at most 6 words, written like a story beat (\"The pawn fork nobody saw\"), not notation. Chapters show on the progress bar and in search before anyone presses play, so none may give away how the game ends: \"The fork\", not \"The fork that saved Astra\" or \"The winning blow\".",
     "- line (optional): play an engine line out on the board right after this move, then hold on your `caption`. Use it where the viewer has to see what didn't happen to understand the moment: `instead` plays what the engine wanted in place of this move (what a miss missed, what a blunder should have been); `after` plays the engine's best play from the position this move left, for when the game went another way (the punishment the reply didn't find, or the point of a brilliant or great move that never got played out). Only the options listed under a move as `line option` exist. Lines are where the video shows what the players couldn't see, so don't leave the good ones out: a `miss` at importance 2–3 needs its `instead` line (without it the viewer can't see what was missed); on a thrown-away win, the `instead` on the move that threw it shows how close it was; a tactic nobody played (a blunder's `after`, when the reply missed it) is the ghost of the game and usually worth showing; an unsound sacrifice that worked gets the defence that would have refuted it; a great or brilliant move whose point never got played out gets its `after`. Skip a line when the real moves play it out anyway. A blunder's `after` and the reply's `instead` are often the same line: show it once, on whichever moment tells the story better. A game with several swings usually uses 3–6; a game with no line options listed has none. Each one costs the viewer a few seconds, and in the TikTok cut only importance 2–3 moments show theirs.",
-    "- marks (on any quote, the hook's included): while the quote is spoken, you draw on the board what it's talking about, the way a streamer draws arrows and circles while they talk through a position. Each mark is one idea (a line, a threat, a fork, a pin, a piece stuck defending, a weak square, the move they missed): its drawing builds up as the words are said, and the board wipes for the next mark. Each mark has `at`, the words of the quote where the idea starts (exactly as they appear), and `arrows` and/or `squares`:",
+    "- marks (on every quote that points at the board, the hook's included): while the quote is spoken, you draw on the board what it's talking about, the way a streamer draws arrows and circles nonstop while they talk through a position. Be generous: a streamer's board is almost never empty while they talk, and every piece, square and move they mention gets a circle or an arrow the moment they say it. Each mark is one idea (a line, a threat, a fork, a pin, a piece stuck defending, a material count, a weak square, the move they missed): its drawing builds up as the words are said, and the board wipes for the next mark. Each mark has `at`, the words of the quote where the idea starts (exactly as they appear), and `arrows` and/or `squares`:",
     "  - `arrows`, in the order they're said: moves in SAN (\"Rxe8+\", \"Kf7\"), and a piece's attack, defence or reach as \"from>to\" (\"d4>f3\"): a fork is two of them from the forking piece, a pin or a skewer one through the pinned piece to what's behind it, a piece stuck defending one to what it guards, a passed pawn one up its file. Arrows are drawn on the board as the player imagines it: each move is played on from the moves before it in the same mark, and a reach is from where the piece stands by then, so \"after Nd4 the knight hits f3 and e6\" is `[\"Nd4\", \"d4>f3\", \"d4>e6\"]`, and a piece moving twice goes on from where it landed. Each arrow appears as its words are said (the move, or the square a reach is to); when the quote only describes it (\"the king attacks the rook\"), give the item as { \"draw\": \"f7>e8\", \"at\": \"the king attacks the rook\" } so it appears on those words.",
-    "  - `squares`: squares to circle (a hanging piece, a weak square, the square a plan is aiming for, a piece the quote names by description: \"the pinned knight\"), each as it's said, or as { \"sq\": \"e8\", \"at\": \"the pinned knight\" }.",
-    "  - The board starts from the position while they think (the mover to play) or from just after the move they're about to play, whichever makes the mark hold; add `from`: \"before\" or \"after\" when both would. A threat (the opponent's move named before it's their turn) or two moves in a row by one side are fine as they are.",
-    "  - A mark comes off at the end of its sentence, or when the next mark starts. When the idea runs on into the next sentence with nothing new to draw, add `until`: the words it stays up through. A mark that ends on the move they're about to play stays up until it's played.",
-    "  - Draw whenever the quote points at the board, not only when it calculates: the plan, the threat they fear, the trap they're proud of, what they say they missed, the pieces and squares they name. Every quote that names a move or a square needs marks; give `marks: []` only when there's truly nothing worth drawing. Usually 1–4 marks per quote. They show the viewer what the player saw, so the doomed plan and the refutation they waved away draw best. A hook that quotes words of one of your moments draws that moment's marks for them, unless you give it its own.",
+    "  - `squares`: squares to circle, each as it's said, or as { \"sq\": \"f2\", \"at\": \"Rook\" } to circle a piece as the words name it: a hanging piece, a weak square, the square a plan aims for, and every piece the quote names by its kind (\"the rook\", \"my knight\", \"the d-pawn\", \"the pinned knight\"). Circle a piece where the viewer sees it: on the board as it stands while they think, or where a move drawn earlier in the same mark brings it. A piece that's only there after the move they're about to play (\"I take the rook… my knight\" circling the rook's square) reads as the wrong piece: circle it where it is now, or draw the move first in that mark.",
+    "  - The board starts from the position while they think (the mover to play) or from just after the move they're about to play, whichever makes the mark hold; add `from`: \"before\" or \"after\" when both would. A threat (the opponent's move named before it's their turn) or two moves in a row by one side are fine as they are. A move they look back on (\"Kf7 attacked my rook\", \"I lost it by playing Nxc5\") is drawn from the position where it was played, up to 10 moves back: just list it, and anything after it in the mark goes on from there.",
+    "  - A mark comes off at the end of its sentence, or when the next mark starts. When the idea runs on into the next sentence with nothing new to draw, add `until`: the words it stays up through. A reaction to a blunder (\"Ouch, I walked into Nd4+… I should have seen it\") keeps the refutation up with `until` to the end of the quote. A mark that ends on the move they're about to play stays up until it's played.",
+    "  - What to draw, sentence by sentence (the server sends the plan back if a sentence that names a move, a square or a piece draws nothing):",
+    "    - each piece as it's named or counted: \"Rook + 3 pawns vs knight + 3 pawns\" circles the rook, then each pawn, then the knight and its pawns, in the order said; \"I have a rook against a knight\" circles both;",
+    "    - each move named, as an arrow, and a line as its arrows in order;",
+    "    - alternatives joined by \"or\" (\"if the knight blocks on e4 or e2\", \"Nd4 or Ng1\") as reaches from the piece (\"c3>e4\", \"c3>e2\"), since a mark's moves are played one after another;",
+    "    - a list of squares a piece covers (\"the Nc5 attacks a4, a6, b3…\") as one reach per square, each as it's said;",
+    "    - a consequence (\"if White's king moves away, the knight just falls\") as the line that shows it (the king stepping away, then the capture);",
+    "    - a check or capture the player waves away (\"if the knight jumps away with check…\") as that move: it's usually the refutation, and it draws best of all;",
+    "    - the doomed plan, the trap they're proud of, the threat they fear, and what they say they missed;",
+    "    - but never an arrow for what the quote says can't or won't happen (\"the rook cannot capture the knight\", \"Kxe2 isn't possible\"): an arrow always reads as \"this goes there\" or \"this hits that\", so it would show the opposite. Circle the pieces instead.",
+    "  - Usually 2–6 marks per quote; a long quote can take 8. Start each mark on words that draw something straight away, so the board isn't empty while the idea is being said. A hook that quotes words of one of your moments draws that moment's marks for them, unless you give it its own.",
     "- line.caption (optional, one line, at most 14 words): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff, and fit it to the kind of game: for a built attack, the shot with the attacker's calculation (not the defender's mistake); for a swindle, the winning side's most confident line just before it turns; for a thrown-away win, the leader's line on the move that throws it; otherwise usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
@@ -364,9 +373,17 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
   const hookMove = moveAt(g, h.ply, "hook");
   const hookQuote = moveQuote(g, hookMove, h.quote, "hook", 50, 40, 340);
   // A hook quoted from a moment's marked quote draws what the moment draws, unless the director says otherwise.
-  const hookMarks =
-    (h.marks === undefined || h.marks === null ? hookMarksFrom(moments.find((x) => x.ply === hookMove.ply), hookQuote) : undefined) ??
-    thoughtMarks(g, hookMove, hookQuote, h.marks, "hook");
+  const copied = h.marks === undefined || h.marks === null ? hookMarksFrom(moments.find((x) => x.ply === hookMove.ply), hookQuote) : undefined;
+  let hookMarks: ThoughtMark[] | undefined;
+  if (copied && hookQuote) {
+    try {
+      checkDrawn(g, hookMove, hookQuote, copied, "hook");
+      hookMarks = copied;
+    } catch {
+      // The moment's marks leave part of the hook undrawn: it needs its own.
+    }
+  }
+  hookMarks ??= thoughtMarks(g, hookMove, hookQuote, h.marks, "hook");
   const hook: VideoHook = {
     ply: hookMove.ply,
     quote: hookQuote,
@@ -453,9 +470,49 @@ function lineChoice(g: Game, i: number, raw: unknown, where: string): VideoMomen
 }
 
 /** How much one quote may draw: marks, the arrows in one mark, and its rings. */
-const MAX_MARKS = 6;
-const MAX_MARK_ARROWS = 8;
-const MAX_MARK_RINGS = 6;
+const MAX_MARKS = 8;
+const MAX_MARK_ARROWS = 10;
+const MAX_MARK_RINGS = 10;
+/** How far back in the game a mark may start, for a move the player looks back on ("Kf7 attacked my rook"). */
+const MARK_LOOKBACK = 10;
+
+/**
+ * Everything a quote points at on the board gets drawn while it's said: each square it names (alone, or as
+ * a move's or a piece's square: "e4", "Nc5") is on an arrow or a ring, and each piece it names by kind
+ * ("the rook", "3 pawns", "the d-pawn") has an arrow or a ring on a piece of that kind, in the same sentence
+ * or the same mark. A piece of that kind is one on that square now, just after the move, or in the
+ * positions looked back on. The director is sent back to draw what it skipped.
+ */
+function checkDrawn(g: Game, m: MoveRecord, quote: string, marks: ThoughtMark[], where: string): void {
+  const i = g.moves.indexOf(m);
+  const boards = [m.fenBefore, m.fenAfter, ...g.moves.slice(Math.max(0, i - MARK_LOOKBACK), i).map((mv) => mv.fenBefore)].map(boardOf);
+  const kindsOn = (sq: string) => new Set(boards.map((b) => b.get(sq)?.type).filter(Boolean));
+  // What's drawn, with the word it's drawn on and the mark it's in.
+  const items = marks.flatMap((mk, n) => [
+    ...mk.arrows.map((a) => ({ n, word: a.word, sqs: [a.from, a.to], kind: a.hit ? undefined : /^[KQRBN]/.test(a.san) ? a.san[0].toLowerCase() : /^O-O/.test(a.san) ? "k" : "p" })),
+    ...mk.rings.map((r) => ({ n, word: r.word, sqs: [r.sq], kind: undefined as string | undefined })),
+  ]);
+  const ws = quoteWords(quote);
+  const spans = sentences(quote);
+  // The mark being said at word k (marks are in quote order).
+  const markOf = (k: number) => marks.reduce((at, mk, n) => (mk.word <= k ? n : at), -1);
+  const missing = new Map<number, string[]>();
+  ws.forEach((w, k) => {
+    const at = pointsAt(w);
+    if (!at) return;
+    const s = spans.findIndex(([a, b]) => k >= a && k <= b);
+    const [a, b] = spans[s];
+    const near = items.filter((it) => (it.word >= a && it.word <= b) || it.n === markOf(k));
+    const drawn = "sq" in at ? near.some((it) => it.sqs.includes(at.sq)) : near.some((it) => it.kind === at.kind || it.sqs.some((sq) => kindsOn(sq).has(at.kind)));
+    if (!drawn) missing.set(s, [...(missing.get(s) ?? []), plainWord(w)]);
+  });
+  if (missing.size) {
+    const list = [...missing].map(([s, named]) => `"${ws.slice(spans[s][0], spans[s][1] + 1).join(" ")}": ${[...new Set(named)].join(", ")}`);
+    throw new ActionError(
+      `${where}.marks: everything a quote points at on the board is drawn as it's said, and this isn't: ${list.join("; ")}. Draw it like a streamer: circle each piece as it's named or counted (on its square), an arrow for each move, a reach ("c3>e4") for what a piece attacks, defends or could go to (alternatives joined by "or" included), and a move from earlier in the game where it was played.`,
+    );
+  }
+}
 
 /** One item of a mark's list: "Nd4+", or { draw: "d4>f3", at: "the fork" } to say which words draw it. */
 function markItem(raw: unknown, key: "draw" | "sq"): { what: string; at?: string } {
@@ -467,20 +524,22 @@ function markItem(raw: unknown, key: "draw" | "sq"): { what: string; at?: string
  * The moves, reaches and squares a quote names, drawn on the board as they're said (see ThoughtMark). Each
  * mark starts at words of the quote and builds up until the next one; its arrows are drawn on the board as
  * it imagines it, from the position before the move or after it, whichever makes them hold (or as `from`
- * says). A quote that names a move or a square must draw it, or say it draws nothing with `marks: []`.
+ * says), or else from one earlier in the game, for moves looked back on. Every sentence that names a move,
+ * a square or a piece must draw something (checkDrawn).
  */
 function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: unknown, where: string): ThoughtMark[] | undefined {
-  if (raw === undefined || raw === null) {
-    const named = quote ? [...new Set(boardWords(quote).map((w) => w.replace(/[^\p{L}\p{N}+#]+$/u, "")))] : [];
-    if (named.length)
-      throw new ActionError(
-        `${where}.marks: the quote names ${named.slice(0, 4).join(", ")}${named.length > 4 ? ", …" : ""}. Draw it the way a streamer would (the moves, what the pieces hit, the squares), or give \`marks: []\` if there's truly nothing worth drawing.`,
-      );
+  const list = raw === undefined || raw === null ? [] : raw;
+  if (!Array.isArray(list)) throw new ActionError(`${where}.marks must be a list.`);
+  if (!quote) {
+    if (list.length) throw new ActionError(`${where}.marks: marks are drawn while the quote is spoken, and there's no quote.`);
     return undefined;
   }
-  if (!Array.isArray(raw)) throw new ActionError(`${where}.marks must be a list.`);
-  if (!raw.length) return undefined;
-  if (!quote) throw new ActionError(`${where}.marks: marks are drawn while the quote is spoken, and there's no quote.`);
+  const marks = list.length ? markList(g, m, quote, list, where) : [];
+  checkDrawn(g, m, quote, marks, where);
+  return marks.length ? marks : undefined;
+}
+
+function markList(g: Game, m: MoveRecord, quote: string, raw: unknown[], where: string): ThoughtMark[] {
   if (raw.length > MAX_MARKS) throw new ActionError(`${where}.marks: ${raw.length} marks; keep it to at most ${MAX_MARKS}.`);
   const starts = raw
     .map((x: any, n: number) => {
@@ -514,12 +573,21 @@ function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: un
     const from = x.from;
     if (from !== undefined && from !== "before" && from !== "after") throw new ActionError(`${w}.from must be "before" or "after" (or left out).`);
     const fens = from === "before" ? [m.fenBefore] : from === "after" ? [m.fenAfter] : [m.fenBefore, m.fenAfter];
-    const line = items.length ? drawnLine(fens, items.map((it: { what: string }) => it.what), variant) : { drawn: [] };
+    const whats = items.map((it: { what: string }) => it.what);
+    // The board now (or just after the move) first; failing that, one from earlier in the game, for a move
+    // the player looks back on ("Kf7 attacked my rook", "I lost it by playing Nxc5").
+    const i = g.moves.indexOf(m);
+    const back = from ? [] : g.moves.slice(Math.max(0, i - MARK_LOOKBACK), i).reverse().map((mv) => mv.fenBefore);
+    let line = items.length ? drawnLine(fens, whats, variant) : { drawn: [] };
+    if ("stuck" in line && back.length) {
+      const earlier = drawnLine(back, whats, variant);
+      if (!("stuck" in earlier) || earlier.stuck > line.stuck) line = earlier;
+    }
     if ("stuck" in line) {
       const k = line.stuck;
       const before = items.slice(0, k).map((it: { what: string }) => it.what);
       throw new ActionError(
-        `${w}.arrows: ${items[k].what} can't be drawn ${before.length ? `after ${before.join(" ")}` : ""} from the position ${from === "after" ? "after" : from === "before" ? "before" : "before or after"} ${m.san}: ${line.why}. List the moves in SAN in the order played, and a piece's attack or defence as "from>to" (\"d4>f3\") from where it stands by then, starting from the board as it is while they think or from just after ${m.san}. What the player named that doesn't hold there can't be drawn: leave it out.`.replace(/\s{2,}/g, " "),
+        `${w}.arrows: ${items[k].what} can't be drawn ${before.length ? `after ${before.join(" ")}` : ""} from the position ${from === "after" ? "after" : from === "before" ? "before" : "before or after"} ${m.san}${from ? "" : `, or from any of the ${MARK_LOOKBACK} moves before it`}: ${line.why}. List the moves in SAN in the order played, and a piece's attack or defence as "from>to" (\"d4>f3\") from where it stands by then, starting from the board as it is while they think or from just after ${m.san} (or, for moves they look back on, where they were played). What the player named that doesn't hold there can't be drawn: leave it out.`.replace(/\s{2,}/g, " "),
       );
     }
     let k = word;
@@ -551,7 +619,9 @@ function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: un
       if (seen.has(sq)) return [];
       seen.add(sq);
       const given = wordsAt(it.at, `${w}.squares[${j}]`);
-      return [{ sq, word: given >= 0 ? given : Math.max(word, squareWordAt(quote, sq, word, next)) }];
+      const ringWord = given >= 0 ? given : Math.max(word, squareWordAt(quote, sq, word, next));
+      if (it.at) ringNamesWhatsThere(m.fenBefore, arrows, sq, it.at, ringWord, `${w}.squares[${j}]`);
+      return [{ sq, word: ringWord }];
     });
     if (!arrows.length && !rings.length) throw new ActionError(`${w}: give it arrows or squares to draw.`);
     let until: number | undefined;
@@ -566,6 +636,32 @@ function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: un
     }
     return { at, word, ...(until !== undefined && { until }), arrows, rings };
   });
+}
+
+const PIECE_NAMES: Record<string, string> = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
+
+/**
+ * A ring put on words that name a piece ("my knight", "the rook") circles that piece where the viewer sees
+ * it: on the board as shown while they think, or where a move drawn earlier in the same mark brings it
+ * ("Rxe8+ … the rook"). Otherwise it circles some other piece (the rook a knight is about to take), which
+ * reads as the wrong piece.
+ */
+function ringNamesWhatsThere(fen: string, arrows: { san: string; to: string; word: number; hit?: boolean }[], sq: string, at: string, word: number, where: string): void {
+  const named = quoteWords(at).map(pointsAt);
+  // Words that name the square itself ("the knight blocks on e4", "my rook on e8") are about the square.
+  if (named.some((p) => p && "sq" in p && p.sq === sq)) return;
+  const kinds = new Set(named.flatMap((p) => (p && "kind" in p ? [p.kind] : [])));
+  if (!kinds.size) return;
+  const board = boardOf(fen);
+  const here = board.get(sq)?.type;
+  if (here && kinds.has(here)) return;
+  const moverKind = (san: string) => (/^[KQRBN]/.test(san) ? san[0].toLowerCase() : /^O-O/.test(san) ? "k" : "p");
+  if (arrows.some((a) => !a.hit && a.to === sq && a.word <= word && kinds.has(moverKind(a.san)))) return;
+  const names = [...kinds].map((k) => PIECE_NAMES[k]);
+  const where_ = [...board].filter(([, p]) => kinds.has(p.type)).map(([s, p]) => `${PIECE_NAMES[p.type]} on ${s}`);
+  throw new ActionError(
+    `${where}: "${at}" names the ${names.join(" or ")}, but ${sq} holds ${here ? `a ${PIECE_NAMES[here]}` : "nothing"} on the board as shown while they think${where_.length ? ` (${where_.slice(0, 4).join(", ")})` : ""}. Circle a piece where it stands on the board shown, or draw the move that brings it there first, in the same mark (\"Nxe6\", then circle e6).`,
+  );
 }
 
 /**

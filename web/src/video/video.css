@@ -1111,6 +1111,15 @@
   justify-content: flex-end;
   overflow: hidden;
 }
+/* At least as tall as the box, so a short list sits at the top; a long one overflows it upwards. */
+.v-ml-rows {
+  flex-shrink: 0;
+  min-height: 100%;
+}
+/* Once the rows overflow, the ones going off the top fade out rather than being cut through. */
+.v-movelist.full {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 70px);
+}
 .v-ml-row {
   display: grid;
   grid-template-columns: 70px 1fr 1fr;

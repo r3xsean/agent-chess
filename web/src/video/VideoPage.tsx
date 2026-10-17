@@ -985,7 +985,8 @@ function BubbleSizer({ g, tl, onSized }: { g: Game; tl: Timeline; onSized: (heig
 
 /** The moves played so far (never the ones to come), newest at the bottom, with their verdicts. */
 function MoveList({ g, ply }: { g: Game; ply: number }) {
-  const ROWS = 11;
+  // More than ever fit: the list fills its box from the bottom, the oldest rows going off the top.
+  const ROWS = 30;
   const rows: { no: number; w?: number; b?: number }[] = [];
   for (let i = 0; i < ply; i++) {
     const m = g.moves[i];
@@ -1003,15 +1004,27 @@ function MoveList({ g, ply }: { g: Game; ply: number }) {
       </span>
     );
   };
+  // Like a scoresheet: it fills from the top, and once it's full the newest stays at the bottom, the
+  // oldest fading off the top (only then, or the first moves would be faded too).
+  const box = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!box.current || !list.current) return;
+    const cs = getComputedStyle(box.current);
+    const room = box.current.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    box.current.classList.toggle("full", list.current.scrollHeight > room + 1);
+  });
   return (
-    <div className="v-movelist">
-      {rows.slice(-ROWS).map((r) => (
-        <div key={r.no} className="v-ml-row">
-          <span className="v-ml-no">{r.no}.</span>
-          {cell(r.w)}
-          {cell(r.b)}
-        </div>
-      ))}
+    <div ref={box} className="v-movelist">
+      <div ref={list} className="v-ml-rows">
+        {rows.slice(-ROWS).map((r) => (
+          <div key={r.no} className="v-ml-row">
+            <span className="v-ml-no">{r.no}.</span>
+            {cell(r.w)}
+            {cell(r.b)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
