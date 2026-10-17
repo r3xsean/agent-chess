@@ -530,42 +530,123 @@
   pointer-events: none;
   z-index: 6;
 }
-.v-callout.engine {
-  border-color: #5d9bd5;
-  background: #1b2a3d;
-}
-.v-hook.engine {
-  background: linear-gradient(160deg, #1b2a3d, #1e1d1a 70%);
+/* An engine line as a variation under the move it branches from, the way an annotated game writes one:
+   behind a rule (red for what the move allowed, blue for the better line), then the caption as a comment. */
+/* Up top during an engine line, what it is: a "what if" in blue, or what the move allows in red. */
+.v-callout.what-if {
   border-color: #5d9bd5;
 }
-.v-hook.engine .v-hook-text {
-  font-size: 54px;
+.v-callout.what-if.punish {
+  border-color: #e0584f;
 }
-.v-engine-tag {
-  font-size: 30px;
-  font-weight: 800;
+.v-what-if-icon {
+  width: 100%;
+  height: 100%;
+  fill: #3f7fc4;
+}
+.v-callout.what-if.punish .v-what-if-icon {
+  fill: #e0584f;
+}
+.v-callout.what-if .v-callout-cls {
   color: #9cc2ea;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
-.v-engine-moves {
+.v-callout.what-if.punish .v-callout-cls {
+  color: #ff9b93;
+}
+/* Its height opens and closes with it (set as it plays), so the rows above rise and settle smoothly. */
+.v-var-fold {
+  margin-left: 70px;
+  overflow: hidden;
+}
+.v-var-body {
+  padding: 4px 0 6px;
+}
+.v-var-box {
+  flex: 1;
+  display: flex;
+}
+.v-var-box .v-var-body {
+  flex: 1;
+  display: flex;
+  padding: 0;
+}
+.v-variation {
+  padding: 6px 0 8px 20px;
+  border-left: 4px solid #5d9bd5;
+}
+.v-variation.punish {
+  border-color: #e0584f;
+}
+.v-var-moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  font-size: 26px;
+  font-weight: 700;
+  color: #9cc2ea;
+}
+.v-variation.punish .v-var-moves {
+  color: #ff9b93;
+}
+.v-var-move {
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.v-var-move.now {
+  background: rgba(93, 155, 213, 0.3);
+  color: #fff;
+}
+.v-variation.punish .v-var-move.now {
+  background: rgba(224, 88, 79, 0.32);
+}
+.v-var-move.next {
+  opacity: 0.35;
+}
+.v-var-comment {
+  margin-top: 10px;
+  min-height: 2.36em;
   font-size: 40px;
   font-weight: 800;
-  color: #cfe0f5;
-  min-height: 1.2em;
+  line-height: 1.18;
+  color: #fff;
 }
-.v-p-caption .v-hook.engine {
-  gap: 6px;
-  padding: 12px 28px;
+.v-var-comment .v-lit {
+  white-space: nowrap;
 }
-.v-p-caption .v-hook.engine .v-engine-moves {
-  font-size: 30px;
+/* In the short there's no move list to hang it from: it takes the chart's place above the board. */
+.v-variation.compact {
+  flex: 1;
+  margin: 0;
+  padding: 14px 24px;
+  border-radius: 0 12px 12px 0;
+  background: rgba(0, 0, 0, 0.28);
 }
-.v-p-caption .v-hook.engine .v-engine-tag {
-  font-size: 26px;
+.v-variation.compact .v-var-comment {
+  font-size: 38px;
 }
-.v-p-caption .v-hook.engine .v-hook-text {
-  font-size: 40px;
+/* Where the line would have led, on the eval graph: its end and the move played's, labelled. */
+.v-graph-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.v-graph-tag {
+  position: absolute;
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: rgba(30, 29, 26, 0.92);
+  font-size: 20px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.v-graph-tag.line {
+  color: #9cc2ea;
+}
+.v-graph-tag.real {
+  color: #ff8f86;
+}
+.v-graph-tag b {
+  color: #fff;
+  font-weight: 900;
 }
 
 .v-line-label {

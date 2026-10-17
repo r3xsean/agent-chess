@@ -20,8 +20,13 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "illegal"; i: number; n: number; attempt: string }
   /** `carry`: the thought's last mark, ending on this very move, fading as the piece goes. */
   | { kind: "move"; i: number; anim: number; key: boolean; hook?: string; carry?: SceneMark }
-  /** An engine line played out after move i (see shared/engineLine.ts): `intro`, then `per` seconds for each of its moves (`sans`), then a hold on its caption. */
-  | { kind: "line"; i: number; line: LineKind; caption: string; intro: number; per: number; sans: string[] }
+  /**
+   * An engine line played out after move i (see shared/engineLine.ts): each of its moves (`sans`) starts
+   * sliding in at `moveAt`, and its caption fades in at `captionAt`, held to the end. `punish` comes first:
+   * what the move played allowed, its moves after the one played (`sans`) each at `moveAt`, a pause on its
+   * caption at `captionAt` once `at` of them are on the board, then the board winds back over `back`.
+   */
+  | { kind: "line"; i: number; line: LineKind; caption: string; sans: string[]; moveAt: number[]; captionAt: number; punish?: LinePunishScene }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
   /** A draw offer made with move i, and what the opponent did about it. */
@@ -30,6 +35,19 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "result" }
   | { kind: "end" }
 );
+
+export interface LinePunishScene {
+  sans: string[];
+  moveAt: number[];
+  at: number;
+  captionAt: number;
+  caption: string;
+  back: [number, number];
+}
+
+/** How long a line's move takes to slide in; the pause before its caption fades in. */
+export const LINE_SLIDE = 0.3;
+const LINE_SETTLE = 0.15;
 
 /**
  * One of the director's marks during a thought (see ThoughtMark), in seconds into the scene: it builds up
@@ -273,9 +291,33 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const ln = ask && shownLine(g, i, ask.kind);
     if (ask && ln) {
       const caption = ask.caption ?? ln.caption;
-      const intro = 0.8 / pace;
       const per = (wide ? 0.8 : 0.65) / pace;
-      push({ kind: "line", i, line: ln.kind, caption, intro, per, sans: ln.moves.map((mv) => mv.san), dur: intro + ln.moves.length * per + Math.max(2.2, 0.6 + read(caption)) });
+      let at = 0;
+      // What the move played allowed, when the director explains it: played out, a pause on the move its
+      // caption is about, the rest, then the board winds back to before the move.
+      let punish: LinePunishScene | undefined;
+      if (ask.punish && ln.punish) {
+        const sans = ln.punish.moves.slice(1).map((mv) => mv.san);
+        const k = ask.punish.at - 1;
+        const moveAt: number[] = [];
+        let captionAt = 0;
+        at = 0.5 / pace;
+        sans.forEach((_, j) => {
+          moveAt.push(at);
+          at += per;
+          if (j + 1 === k) {
+            captionAt = moveAt[j] + LINE_SLIDE + LINE_SETTLE;
+            at = captionAt + Math.max(1.8, 0.6 + read(ask.punish!.caption));
+          }
+        });
+        if (k < sans.length) at += 0.6;
+        const back: [number, number] = [at, at + 0.18 * (sans.length + 1) + 0.15];
+        punish = { sans, moveAt, at: k, captionAt, caption: ask.punish.caption, back };
+        at = back[1] + 0.25;
+      } else at = 0.8 / pace;
+      const moveAt = ln.moves.map((_, j) => at + j * per);
+      const captionAt = moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE;
+      push({ kind: "line", i, line: ln.kind, caption, sans: ln.moves.map((mv) => mv.san), moveAt, captionAt, ...(punish && { punish }), dur: captionAt + Math.max(2.6, 0.8 + read(caption)) });
     }
 
     // Draw offers get their own beat, with the answer: declined if the game went on.
@@ -335,9 +377,14 @@ export function sfxCues(tl: Timeline, g: Game): SfxCue[] {
     else if (s.kind === "interview" || s.kind === "end") at(s.start, "transition", 0.35);
     else if (s.kind === "rewind") at(s.start, "transition", 0.6);
     else if (s.kind === "line") {
-      // An engine line: a scene change, then quieter board sounds for its moves (each lands 0.3 s into its slot).
+      // An engine line: a scene change, then quieter board sounds for its moves (each as it lands), with
+      // the punishment first and a softer change as the board winds back from it.
       at(s.start, "transition", 0.5);
-      s.sans.forEach((san, k) => board(s.start + s.intro + k * s.per + 0.28, san, 0.5));
+      if (s.punish) {
+        s.punish.sans.forEach((san, k) => board(s.start + s.punish!.moveAt[k] + LINE_SLIDE - 0.02, san, 0.5));
+        at(s.start + s.punish.back[0], "transition", 0.35);
+      }
+      s.sans.forEach((san, k) => board(s.start + s.moveAt[k] + LINE_SLIDE - 0.02, san, 0.5));
     } else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
     else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
     else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);

@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
-import type { Classification, Color, Game, PlayerRef, Rivalry, Score } from "../../../shared/types";
+import { looseChess, newRules, START_FEN, variantOf, type RulesMove, type Variant } from "../../../shared/rules";
+import type { Classification, Color, Game, LineReach, LineRef, PlayerRef, Rivalry, Score } from "../../../shared/types";
 import { seriesLine } from "../../../shared/series";
 import type { VoiceManifest } from "../../../shared/voices";
 import { personalityById, RISK_LABEL } from "../../../shared/personalities";
@@ -10,12 +10,13 @@ import { beliefs, judge, selfScore, standing, type Belief } from "../../../share
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
-import { shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
+import { fenAt, resolveLineRefs, shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
+import { boardOf, pointsAt, quoteWords } from "../../../shared/thoughtMarks";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, LINE_SLIDE, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
@@ -190,8 +191,11 @@ interface View {
   kind: Scene["kind"];
   fade: number;
   board?: BoardView;
-  /** `status` is a plain one-line banner ("… is thinking") instead of a move verdict. */
-  callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string; engine?: boolean };
+  /**
+   * `status` is a plain one-line banner ("… is thinking") instead of a move verdict. `whatIf`: an engine line,
+   * saying what it is ("What if 69… Kg4?", the line under it why), blue, or red for a punishment.
+   */
+  callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string; whatIf?: "line" | "punish" };
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
   /**
@@ -211,8 +215,24 @@ interface View {
   clocks?: Record<Color, number>;
   /** The captured pieces on the cards, when the board isn't a position of the game (an engine line). */
   material?: MaterialInfo;
-  /** An engine line playing out: what it is, its moves so far, and its one-liner, faded in (p) once the line has landed. */
-  engine?: { tag: string; moves: string; caption: string; p: number };
+  /**
+   * An engine line playing out (or the punishment before it), as a variation in the move list: the game's
+   * moves up to the one it branches from (`ply` of them, the last highlighted when `current`), its moves
+   * (played, the newest, still to come), and its caption under it as a comment; and on the eval graph,
+   * where it would have led (faded in, o).
+   */
+  engine?: {
+    punish?: boolean;
+    /** How far the variation has opened (0 → 1): it unfolds as it comes and folds away as it goes. */
+    open: number;
+    /** How much of the line under the verdict shows (1 → 0 → 1): it folds away for the whole engine line. */
+    under: number;
+    ply: number;
+    current: boolean;
+    moves: { label: string; state: "done" | "now" | "next" }[];
+    caption?: { text: string; lit: Lit[]; o: number };
+    compare?: LineCompare & { o: number };
+  };
 }
 
 const GAME_SCENES: Scene["kind"][] = ["move", "illegal", "think", "draw", "resign", "rewind", "line"];
@@ -269,14 +289,76 @@ function checkSquare(fen: string): string | undefined {
   return undefined;
 }
 
-/** An engine line ready to play: the board's material, check and the line so far in SAN, after each of its plies (index 0 = none yet). */
+/**
+ * A caption of an engine line, ready to show once `k` of its moves are on the board, all as the director
+ * gave it: the words its refs light up (the ones naming the board, or all of a ref's words when none do),
+ * in the colour of the side they point at (none: an empty square); its circles, each on the piece a ref to
+ * its square names, or else what stands there; and its reaches. Each circle and reach is up while its
+ * piece stays put.
+ */
+interface LineNote {
+  caption: string;
+  k: number;
+  lit: { word: number; color?: Color }[];
+  rings: { sq: string; piece?: Piece }[];
+  draw: { from: string; to: string; color: Color; piece?: Piece }[];
+}
+
+/** Moves as a variation is written, from the ply of the first: "69… Kg4", "70. Ng1", "h4", "71. Kf2". */
+const variation = (sans: string[], ply: number) =>
+  sans.map((san, j) => {
+    const p = ply + j;
+    return p % 2 ? `${Math.ceil(p / 2)}. ${san}` : j ? san : `${p / 2}… ${san}`;
+  });
+
+/**
+ * What the move played cost, on the eval graph, for an "instead" line: at the move (`at`, an index into
+ * the graph), where the game went with it (`real`, the point the graph already shows) and where the line
+ * would have kept it (`line`, White's win% `w`), both labelled. (An "after" line starts from the position
+ * on the graph, so it has nothing to compare.)
+ */
+type LineCompare = { at: number; line: { label: string; eval: string; w: number }; real: { label: string; eval: string } };
+
+/**
+ * An engine line ready to play: the material and check after each of its plies (index 0 = none yet), its
+ * moves as written in a variation, and its caption; and, when the director tells it, the punishment of the
+ * move played the same way (its moves start with the move played, already in the move list, so its
+ * variation leaves that one out).
+ */
 interface LinePrep {
   sl: ShownLine;
   material: MaterialInfo[];
   check: (string | undefined)[];
-  text: string[];
+  labels: string[];
+  note: LineNote;
+  compare?: LineCompare;
+  punish?: { moves: RulesMove[]; material: MaterialInfo[]; labels: string[]; note: LineNote };
 }
 const lineCache = new WeakMap<Prep, Map<string, LinePrep | null>>();
+
+const ANNOTATION: Partial<Record<Classification, string>> = { brilliant: "!!", great: "!", blunder: "??", mistake: "?", miss: "?", inaccuracy: "?!" };
+
+function lineNote(caption: string, note: { refs?: LineRef[]; draw?: LineReach[]; rings?: string[] }, fen: string, moves: RulesMove[], k: number, side: Color): LineNote {
+  const refs = note.refs ?? [];
+  const colors = resolveLineRefs(caption, refs, fen, moves, k, side);
+  const ws = quoteWords(caption);
+  const board = boardOf(fenAt(fen, moves, k));
+  const lit: LineNote["lit"] = [];
+  refs.forEach((r, j) => {
+    const c = colors[j];
+    if ("problem" in c) return;
+    const span = Array.from({ length: r.words[1] - r.words[0] + 1 }, (_, n) => r.words[0] + n);
+    const naming = span.filter((n) => pointsAt(ws[n]).length);
+    for (const word of naming.length ? naming : span) lit.push({ word, ...(c.color && { color: c.color }) });
+  });
+  const rings = (note.rings ?? []).map((sq) => {
+    const j = refs.findIndex((r) => r.sqs?.includes(sq));
+    const c = colors[j];
+    const piece = c && "pieces" in c ? c.pieces[refs[j].sqs!.indexOf(sq)] : board.get(sq);
+    return { sq, ...(piece && { piece }) };
+  });
+  return { caption, k, lit, rings, draw: (note.draw ?? []).map((d) => ({ ...d, ...(board.get(d.from) && { piece: board.get(d.from) }) })) };
+}
 
 function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | null {
   const cache = lineCache.get(prep) ?? new Map<string, LinePrep | null>();
@@ -287,21 +369,54 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
   let out: LinePrep | null = null;
   if (sl) {
     const variant = variantOf(g);
+    const m = g.moves[i];
+    const a = m.analysis!;
+    const ask = g.video?.moments.find((x) => x.ply === m.ply)?.line;
+    const start = g.startFen ?? START_FEN;
     // The real game up to where the line starts, then the line.
-    const played = g.moves.slice(0, kind === "instead" ? i : i + 1).map((m) => m.san);
+    const played = g.moves.slice(0, kind === "instead" ? i : i + 1).map((mv) => mv.san);
     const sans = sl.moves.map((mv) => mv.san);
-    const uci = sl.moves.map((mv) => mv.uci);
     const ks = [...Array(sl.moves.length + 1).keys()];
+    const first = kind === "instead" ? m.ply : m.ply + 1;
+    const lineScore = scoreAt(g, sl.fen);
+    const compare: LineCompare | undefined =
+      kind === "instead"
+        ? {
+            at: i + 1,
+            line: { label: sans[0], eval: formatScore(lineScore), w: lineScore ? winPercentWhite(lineScore) : prep.graph[i] },
+            real: { label: `${m.san}${ANNOTATION[a.classification] ?? ""}`, eval: formatScore(scoreAt(g, m.fenAfter, a.evalAfter)) },
+          }
+        : undefined;
     out = {
       sl,
-      material: ks.map((k) => materialInfo(g.startFen ?? START_FEN, [...played, ...sans.slice(0, k)], variant)),
+      material: ks.map((k) => materialInfo(start, [...played, ...sans.slice(0, k)], variant)),
       check: ks.map((k) => checkSquare(k ? sl.moves[k - 1].after : sl.fen)),
-      text: ks.map((k) => pvText(sl.fen, uci, variant, k)),
+      labels: variation(sans, first),
+      // The line's own fact, when the director wrote no caption, lights and draws nothing.
+      note: lineNote(ask?.caption ?? sl.caption, ask?.caption ? ask : {}, sl.fen, sl.moves, sl.moves.length, sl.for),
+      compare,
     };
+    if (ask?.punish && sl.punish) {
+      const pm = sl.punish.moves;
+      const before = g.moves.slice(0, i).map((mv) => mv.san);
+      out.punish = {
+        moves: pm,
+        // Index k: k of the punishment's moves after the one played on the board.
+        material: pm.map((_, k) => materialInfo(start, [...before, ...pm.slice(0, k + 1).map((mv) => mv.san)], variant)),
+        labels: variation(pm.slice(1).map((mv) => mv.san), m.ply + 1),
+        note: lineNote(ask.punish.caption, ask.punish, m.fenBefore, pm, ask.punish.at, sl.for),
+      };
+    }
   }
   cache.set(key, out);
   return out;
 }
+
+/** How long an engine line's variation takes to unfold into the move list, or fold away. */
+const FOLD = 0.35;
+/** The line under the verdict's height, and the gap between the panel's boxes (video.css .v-line, .v-panel). */
+const LINE_ROW = 34;
+const PANEL_GAP = 18;
 
 /** How far the bubble sits in from the board's edge (video.css .v-bubble). */
 const BUBBLE_INSET = 22;
@@ -530,40 +645,150 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
     if (!L) v.board = settledBoard(g, prep, s.i);
     else {
       const { sl } = L;
-      const n = sl.moves.length;
-      const run = local - s.intro;
-      const SLIDE = 0.3;
-      // Plies on the board, the last of them possibly still sliding in.
-      const k = run < 0 ? 0 : Math.min(n, Math.floor(run / s.per) + 1);
-      const mv = sl.moves[k - 1];
-      const p = k ? clamp01((run - (k - 1) * s.per) / SLIDE) : 1;
-      let anim: BoardView["anim"];
-      if (mv && p < 1) anim = moveAnim(mv.before, mv, variantOf(g), p);
-      else if (!k && s.line === "instead" && local < SLIDE) {
-        // The move played slides back off before the line starts.
-        const a = moveAnim(m.fenBefore, m, variantOf(g), local / SLIDE);
-        anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
-      }
-      const prev = g.moves[real];
-      const score = scoreAt(g, sl.fen);
-      const evalText = formatScore(score);
-      v.board = {
-        i: real,
-        fen: mv ? mv.after : sl.fen,
-        anim,
-        lastMove: mv ? [mv.from, mv.to] : prev && [prev.from, prev.to],
-        check: L.check[k],
-        engine: true,
-        evalW: r3(score ? winPercentWhite(score) : prep.graph[real + 1]),
-        evalText,
-      };
-      v.material = L.material[k];
-      v.clocks = prep.clocks[real + 1];
+      const variant = variantOf(g);
       const label = moveLabel(m.ply, m.san);
-      v.callout = { label: "🔍 Engine line", sub: s.line === "instead" ? `instead of ${label}` : `best play after ${label}`, evalText, status: true, engine: true };
-      const who = sideName(g, sl.for);
-      const tag = s.line === "instead" ? `What ${who} could have played` : sl.for === m.color ? `Why ${m.san} works` : `How ${who} could have punished it`;
-      v.engine = { tag, moves: L.text[k], caption: s.caption, p: r3(clamp01((run - (n - 1) * s.per - SLIDE - 0.15) / 0.35)) };
+      const fade = (at: number, d = 0.35) => r3(clamp01((local - at) / d));
+      // Coloured as everywhere else, from the side the line favours: its pieces green, the other side's red.
+      const litColor = (c: Color | undefined) => (c ? (c === sl.for ? LIT_OWN : LIT_OPP) : LIT_EMPTY);
+      // The newest of a run of moves on the board, while it's still sliding in.
+      const slide = (moves: RulesMove[], moveAt: number[], k: number) => {
+        const mv = moves[k - 1];
+        const p = k ? clamp01((local - moveAt[k - 1]) / LINE_SLIDE) : 1;
+        return mv && p < 1 ? moveAnim(mv.before, mv, variant, p) : undefined;
+      };
+      // A caption's circles and reaches, from when it shows, each while its piece stays on its square.
+      const noted = (note: LineNote, fen: string, from: number, alpha: number) => {
+        if (local < from) return { rings: [], arrows: [] };
+        const board = fenBoard(fen);
+        const stays = (sq: string, pc?: Piece) => (pc ? board.get(sq)?.type === pc.type && board.get(sq)?.color === pc.color : !board.get(sq));
+        const o = r3(alpha * fade(from, 0.2));
+        const pop = fade(from, 0.2);
+        return {
+          rings: note.rings.filter((r) => stays(r.sq, r.piece)).map((r) => ({ sq: r.sq, ...(r.piece && { own: r.piece.color === sl.for }), o, pop })),
+          arrows: note.draw.filter((d) => stays(d.from, d.piece)).map((d) => ({ from: d.from, to: d.to, own: d.color === sl.for, hit: true, o, pop })),
+        };
+      };
+      const caption = (note: LineNote, from: number, alpha: number) => {
+        const o = r3(fade(from) * alpha);
+        return o > 0 ? { text: note.caption, lit: note.lit.map((l) => ({ word: l.word, color: litColor(l.color), o: 1, at: from })), o } : undefined;
+      };
+      // A variation's moves: played, the newest (the position on the board, highlighted as the game's current
+      // move is), and still to come.
+      const track = (labels: string[], k: number) => labels.map((label, j) => ({ label, state: (j < k - 1 ? "done" : j === k - 1 ? "now" : "next") as "done" | "now" | "next" }));
+      // Up top, what's being shown, in words: what the move allows, what if the better move had been played,
+      // how it could have been punished, or why it works. Only the eval follows the board. The line under the
+      // move's verdict folds away as the variation opens, and comes back as it closes.
+      const a = m.analysis;
+      const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification);
+      const marked = `${m.san}${(a && ANNOTATION[a.classification]) ?? ""}`;
+      const firstLabel = moveLabel(s.line === "instead" ? m.ply : m.ply + 1, sl.moves[0].san);
+      const whatIf = (evalText: string, punish: boolean): View["callout"] => {
+        if (punish) return { label: `What ${label} allows`, sub: `The engine's best answer for ${sideName(g, other(m.color))}`, evalText, whatIf: "punish" };
+        if (s.line === "instead") return { label: `What if ${firstLabel}?`, sub: `${sideName(g, m.color)}'s better move, instead of ${marked}`, evalText, whatIf: "line" };
+        if (sl.for !== m.color) return { label: `What if ${firstLabel}?`, sub: `How ${sideName(g, sl.for)} could have punished ${marked}`, evalText, whatIf: "line" };
+        return { label: `Why ${marked} works`, sub: "The engine's line from here", evalText, whatIf: "line" };
+      };
+      v.line = verdictLine(g, prep, s.i, bad, telling(prep.belief[s.i]));
+      // Opening over FOLD at the start, closing over FOLD at the end, and for a punishment, closing as the
+      // board winds back and the line's variation opening in its place. The line under the verdict stays
+      // folded away in between.
+      const unfold = (from: number, to: number) => r3(ease(clamp01((local - from) / FOLD)) * ease(clamp01((to - local) / FOLD)));
+      const under = r3(1 - unfold(0, s.dur));
+      const drawn = (arrows: NonNullable<BoardView["marks"]>["arrows"], rings: NonNullable<BoardView["marks"]>["rings"]) => (arrows.length || rings.length ? { arrows, rings } : undefined);
+
+      const sp = s.punish;
+      const P = L.punish;
+      if (sp && P && local < sp.back[1]) {
+        // What the move played allowed, from the position it left, then wound back a move at a time (the
+        // move played last) to before it, for the line. `on`: how many of its moves are on the board.
+        const pm = P.moves;
+        const n = sp.sans.length;
+        let on: number;
+        let fen: string;
+        let anim: BoardView["anim"];
+        let alpha = 1;
+        if (local < sp.back[0]) {
+          on = sp.moveAt.filter((t) => t <= local).length + 1;
+          fen = pm[on - 1].after;
+          anim = slide(pm.slice(1), sp.moveAt, on - 1);
+        } else {
+          const step = (sp.back[1] - sp.back[0]) / (n + 1);
+          const done = (local - sp.back[0]) / step;
+          const j = Math.min(n, Math.floor(done));
+          const mv = pm[n - j];
+          const a = moveAnim(mv.before, mv, variant, done - j);
+          on = n - j;
+          fen = mv.before;
+          anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
+          alpha = 1 - clamp01((local - sp.back[0]) / (sp.back[1] - sp.back[0]));
+        }
+        const last = pm[on - 1];
+        const score = scoreAt(g, m.fenAfter, m.analysis?.evalAfter);
+        const evalText = formatScore(score);
+        const extra = noted(P.note, fen, sp.captionAt, alpha);
+        v.board = {
+          i: s.i,
+          fen,
+          anim,
+          lastMove: last && [last.from, last.to],
+          check: checkSquare(fen),
+          engine: true,
+          marks: drawn(extra.arrows, extra.rings),
+          evalW: r3(score ? winPercentWhite(score) : prep.graph[s.i + 1]),
+          evalText,
+        };
+        v.material = on ? P.material[on - 1] : prep.material[s.i];
+        v.clocks = prep.clocks[s.i + 1];
+        v.callout = whatIf(evalText, true);
+        v.engine = {
+          punish: true,
+          open: unfold(0, sp.back[1]),
+          under,
+          ply: s.i + 1,
+          // The move played is the position on the board until the punishment's first move lands.
+          current: on <= 1,
+          moves: track(P.labels, on - 1),
+          caption: caption(P.note, sp.captionAt, alpha),
+        };
+      } else {
+        const k = s.moveAt.filter((t) => t <= local).length;
+        const mv = sl.moves[k - 1];
+        let anim = slide(sl.moves, s.moveAt, k);
+        if (!k && s.line === "instead" && !sp && local < LINE_SLIDE) {
+          // The move played slides back off before the line starts.
+          const a = moveAnim(m.fenBefore, m, variant, local / LINE_SLIDE);
+          anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
+        }
+        const prev = g.moves[real];
+        const score = scoreAt(g, sl.fen);
+        const evalText = formatScore(score);
+        const fen = mv ? mv.after : sl.fen;
+        const extra = noted(L.note, fen, s.captionAt, 1);
+        v.board = {
+          i: real,
+          fen,
+          anim,
+          lastMove: mv ? [mv.from, mv.to] : prev && [prev.from, prev.to],
+          check: L.check[k],
+          engine: true,
+          marks: drawn(extra.arrows, extra.rings),
+          evalW: r3(score ? winPercentWhite(score) : prep.graph[real + 1]),
+          evalText,
+        };
+        v.material = L.material[k];
+        v.clocks = prep.clocks[real + 1];
+        v.callout = whatIf(evalText, false);
+        const compareAt = s.captionAt + 0.3;
+        v.engine = {
+          open: unfold(sp && P ? sp.back[1] : 0, s.dur),
+          under,
+          ply: s.i + 1,
+          current: false,
+          moves: track(L.labels, k),
+          caption: caption(L.note, s.captionAt, 1),
+          ...(L.compare && local >= compareAt && { compare: { ...L.compare, o: r3(fade(compareAt) * unfold(0, s.dur)) } }),
+        };
+      }
     }
   }
 
@@ -606,23 +831,28 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
     };
     v.clocks = prep.clocks[s.i + 1];
     // The reveal is the bar: the engine's level slides away from (or back to) the mover's marker as the move lands.
-    const bl = prep.belief[s.i];
-    const callOut = s.key && telling(bl);
+    const callOut = s.key && telling(prep.belief[s.i]);
     v.focus = { i: s.i, label: callOut };
-    v.line = bad
-        ? { label: "Engine preferred", text: prep.bestLine[s.i] }
-        : prep.line[s.i]
-          ? { label: "Engine line", text: prep.line[s.i] }
-          : undefined;
-    // On a misjudged key moment the line under the verdict says, plainly, what the mover thought (the
-    // better move is already in the verdict and on the board as an arrow).
-    if (callOut && settled) {
-      const said = `${formatScore(selfScore(m))}, ${standing(bl!.self)}`;
-      const color = selfEvalColors(g)[m.color];
-      v.line = bl!.state ? { label: `${sideName(g, m.color)} thought`, text: said, color } : { label: `${sideName(g, m.color)} now sees it:`, text: said, color };
-    }
+    v.line = verdictLine(g, prep, s.i, bad, callOut && settled);
   }
   return v;
+}
+
+/**
+ * The line under a move's verdict: the engine's line (the one it preferred, when the move wasn't it), or, on
+ * a misjudged key moment once the move has landed (`callOut`), plainly what the mover thought (the better
+ * move is already in the verdict and on the board as an arrow).
+ */
+function verdictLine(g: Game, prep: Prep, i: number, bad: boolean, callOut: boolean): View["line"] {
+  const m = g.moves[i];
+  const bl = prep.belief[i];
+  if (callOut && bl) {
+    const said = `${formatScore(selfScore(m))}, ${standing(bl.self)}`;
+    const color = selfEvalColors(g)[m.color];
+    return bl.state ? { label: `${sideName(g, m.color)} thought`, text: said, color } : { label: `${sideName(g, m.color)} now sees it:`, text: said, color };
+  }
+  if (bad) return { label: "Engine preferred", text: prep.bestLine[i] };
+  return prep.line[i] ? { label: "Engine line", text: prep.line[i] } : undefined;
 }
 
 /* ------------------------------ pieces of the frame ------------------------------ */
@@ -720,6 +950,10 @@ const OWN_ARROW = "#15781b";
 const OPP_ARROW = "#b0302a";
 const RING = "#e68f00";
 const ENGINE_ARROW = "#2f6fd0";
+/** The same three, lighter, for words lit on the dark engine-line panel. */
+const LIT_OWN = "#8fdc6a";
+const LIT_OPP = "#ff8f86";
+const LIT_EMPTY = "#ffc14d";
 
 type XY = { x: number; y: number };
 
@@ -865,9 +1099,26 @@ function PlayerCard({ g, color, material, rating, toMove, clockMs }: { g: Game; 
 
 function Callout({ c, wide }: { c: NonNullable<View["callout"]>; wide: boolean }) {
   const meta = c.cls && CLASS_META[c.cls];
+  if (c.whatIf)
+    return (
+      <div className={`v-callout what-if ${c.whatIf}`}>
+        <div className="v-callout-icon">
+          <svg className="v-what-if-icon" viewBox="0 0 68 68">
+            <circle cx="34" cy="34" r="34" />
+            <circle cx="30" cy="30" r="13" fill="none" stroke="#fff" strokeWidth="6" />
+            <line x1="40" y1="40" x2="50" y2="50" stroke="#fff" strokeWidth="7" strokeLinecap="round" />
+          </svg>
+        </div>
+        <div className="v-callout-main">
+          <div className="v-callout-move">{c.label}</div>
+          <div className="v-callout-cls">{c.sub}</div>
+        </div>
+        <div className="v-evalchip">{c.evalText}</div>
+      </div>
+    );
   if (c.status)
     return (
-      <div className={`v-callout status ${c.engine ? "engine" : ""}`}>
+      <div className="v-callout status">
         <div className="v-callout-main">
           <div className="v-callout-move">{c.label}</div>
           {c.sub && <div className="v-callout-sub">{c.sub}</div>}
@@ -953,7 +1204,7 @@ function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]
  * The thought with the words that name what's on the board lit up in its colour, fading with it. Only the
  * colour changes, never the size or weight, so the bubble keeps the size it was measured at.
  */
-function LitText({ text, lit }: { text: string; lit: Lit[] }) {
+function LitText({ text, lit, tint = true }: { text: string; lit: Lit[]; tint?: boolean }) {
   // A word lit by more than one drawing takes the latest one's colour, but stays as bright as the
   // brightest: lit again, it changes colour (if it does) without fading in all over again.
   const byWord = new Map<number, Lit>();
@@ -977,7 +1228,7 @@ function LitText({ text, lit }: { text: string; lit: Lit[] }) {
             <span
               key={n}
               className="v-lit"
-              style={{ color: `color-mix(in srgb, ${l.color} ${pct}%, currentColor)`, backgroundColor: `color-mix(in srgb, ${l.color} ${Math.round(pct * 0.16)}%, transparent)` }}
+              style={{ color: `color-mix(in srgb, ${l.color} ${pct}%, currentColor)`, ...(tint && { backgroundColor: `color-mix(in srgb, ${l.color} ${Math.round(pct * 0.16)}%, transparent)` }) }}
             >
               {part}
             </span>
@@ -1023,8 +1274,48 @@ function BubbleSizer({ g, tl, onSized }: { g: Game; tl: Timeline; onSized: (heig
   );
 }
 
-/** The moves played so far (never the ones to come), newest at the bottom, with their verdicts. */
-function MoveList({ g, ply }: { g: Game; ply: number }) {
+/**
+ * An engine line as a variation, the way an annotated game writes one: indented under the move it branches
+ * from, behind a rule (red for what the move allowed, blue for the better line), its moves in the list's
+ * type, the newest highlighted and the ones to come faint, and the director's caption under it as a
+ * comment (its room kept from the start, so nothing moves when it fades in).
+ */
+function Variation({ e, compact = false }: { e: NonNullable<View["engine"]>; compact?: boolean }) {
+  // In the move list it opens to its height as it comes (and closes as it goes), so the rows above rise and
+  // settle smoothly. Its height depends on how the caption wraps, so it's measured. In the short it has its
+  // own box above the board, and just fades in and out.
+  const fold = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (compact || !fold.current || !body.current) return;
+    fold.current.style.height = `${body.current.offsetHeight * e.open}px`;
+  });
+  return (
+    <div ref={fold} className={compact ? "v-var-box" : "v-var-fold"} style={{ opacity: e.open }}>
+      <div ref={body} className="v-var-body">
+        <div className={`v-variation ${e.punish ? "punish" : ""} ${compact ? "compact" : ""}`}>
+          <div className="v-var-moves">
+            {e.moves.map((mv, j) => (
+              <span key={j} className={`v-var-move ${mv.state}`}>
+                {mv.label}
+              </span>
+            ))}
+          </div>
+          <div className="v-var-comment" style={{ opacity: e.caption?.o ?? 0 }}>
+            {/* The lit words' colour alone: a tint behind them would run into the next line of the big caption. */}
+            {e.caption && <LitText text={e.caption.text} lit={e.caption.lit} tint={false} />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The moves played so far (never the ones to come), newest at the bottom, with their verdicts. `branch`: a
+ * variation under the last move; `current`: whether that move is highlighted as the one on the board.
+ */
+function MoveList({ g, ply, branch, current = true }: { g: Game; ply: number; branch?: ReactNode; current?: boolean }) {
   // More than ever fit: the list fills its box from the bottom, the oldest rows going off the top.
   const ROWS = 30;
   const rows: { no: number; w?: number; b?: number }[] = [];
@@ -1038,7 +1329,7 @@ function MoveList({ g, ply }: { g: Game; ply: number }) {
     const m = g.moves[i];
     const c = m.analysis?.classification;
     return (
-      <span className={`v-ml-move ${i === ply - 1 ? "current" : ""}`}>
+      <span className={`v-ml-move ${current && i === ply - 1 ? "current" : ""}`}>
         {c && <ClassIcon c={c} size={26} />}
         {m.san}
       </span>
@@ -1064,6 +1355,7 @@ function MoveList({ g, ply }: { g: Game; ply: number }) {
             {cell(r.b)}
           </div>
         ))}
+        {branch}
       </div>
     </div>
   );
@@ -1086,7 +1378,37 @@ function ChartLegend({ g }: { g: Game }) {
   );
 }
 
-function EvalGraph({ prep, g, ply, width, height }: { prep: Prep; g: Game; ply: number; width: number; height: number }) {
+/**
+ * `compare`: what the move cost, at the move: where the game went (its point on the graph) and where the
+ * engine's line would have kept it (a blue point), joined by a dashed line, each labelled to its left.
+ */
+function EvalGraph({ prep, g, ply, width, height, compare }: { prep: Prep; g: Game; ply: number; width: number; height: number; compare?: LineCompare & { o: number } }) {
+  const graph = <EvalGraphSvg prep={prep} g={g} ply={ply} width={width} height={height} compare={compare} />;
+  if (!compare) return graph;
+  const n = prep.graph.length - 1;
+  const x = n ? (compare.at / n) * width : 0;
+  const y = (w: number) => height - (w / 100) * height;
+  const yLine = y(compare.line.w);
+  const yReal = y(prep.graph[compare.at]);
+  // Each label is centred on its point's height, kept inside the graph; when the points are close, they
+  // move apart, the higher one up.
+  const TAG = 30;
+  const apart = Math.max(0, TAG + 4 - Math.abs(yLine - yReal)) / 2;
+  const top = (yp: number, up: boolean) => Math.max(2, Math.min(height - TAG - 2, yp - TAG / 2 + (up ? -apart : apart)));
+  return (
+    <div className="v-graph-wrap" style={{ width, height }}>
+      {graph}
+      <span className="v-graph-tag line" style={{ right: width - x + 16, top: top(yLine, yLine < yReal), opacity: compare.o }}>
+        {compare.line.label} <b>{compare.line.eval}</b>
+      </span>
+      <span className="v-graph-tag real" style={{ right: width - x + 16, top: top(yReal, yReal <= yLine), opacity: compare.o }}>
+        {compare.real.label} <b>{compare.real.eval}</b>
+      </span>
+    </div>
+  );
+}
+
+function EvalGraphSvg({ prep, g, ply, width, height, compare }: { prep: Prep; g: Game; ply: number; width: number; height: number; compare?: LineCompare & { o: number } }) {
   const n = prep.graph.length - 1;
   const x = (i: number) => (n ? (i / n) * width : 0);
   const y = (w: number) => height - (w / 100) * height;
@@ -1121,6 +1443,12 @@ function EvalGraph({ prep, g, ply, width, height }: { prep: Prep; g: Game; ply: 
         return <circle key={i} cx={x(i + 1)} cy={y(prep.graph[i + 1])} r={6} fill={CLASS_META[c].color} stroke="#1e1d1a" strokeWidth={2} />;
       })}
       <line x1={x(ply)} x2={x(ply)} y1={0} y2={height} stroke="#81b64c" strokeWidth={3} />
+      {compare && (
+        <g opacity={compare.o}>
+          <line x1={x(compare.at)} x2={x(compare.at)} y1={y(prep.graph[compare.at])} y2={y(compare.line.w)} stroke="#5d9bd5" strokeWidth={3} strokeDasharray="6 5" />
+          <circle cx={x(compare.at)} cy={y(compare.line.w)} r={7} fill="#5d9bd5" stroke="#1e1d1a" strokeWidth={2} />
+        </g>
+      )}
     </svg>
   );
 }
@@ -1158,16 +1486,10 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
         <div className="v-hook-text">{v.hook}</div>
       </div>
     ) : null;
-  // An engine line: what it is, then (once it has landed) why it's better.
-  const engine = v.engine && (
-    <div className="v-hook engine">
-      <div className="v-engine-tag">{v.engine.tag}</div>
-      <div className="v-engine-moves">{v.engine.moves || " "}</div>
-      <div className="v-hook-text" style={{ opacity: v.engine.p }}>
-        {v.engine.caption}
-      </div>
-    </div>
-  );
+  // An engine line is a variation in the move list (and a branch on the graph), with the game's moves only
+  // up to the one it branches from.
+  const engine = v.engine;
+  const listPly = engine?.ply ?? b.i + 1;
 
   if (wide)
     return (
@@ -1188,9 +1510,15 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
           </div>
           {/* With the thought in the panel, its label already says who's thinking. */}
           {!offBoard && callout}
-          {/* Only moves have an engine line; while a player thinks the broadcaster box moves up instead of leaving a gap. */}
+          {/* Only moves have an engine line; while a player thinks the box below moves up instead of leaving a
+              gap, and while an engine line plays the line folds away (and back), the box rising with it. */}
           {!t && (
-          <div className="v-line">{line}</div>
+            <div
+              className="v-line"
+              style={engine ? { height: r3(LINE_ROW * engine.under), minHeight: 0, marginBottom: r3(-PANEL_GAP * (1 - engine.under)), opacity: engine.under, overflow: "hidden" } : undefined}
+            >
+              {line}
+            </div>
           )}
           {/* The cold open and its rewind hold the big caption where the move list and chart go. */}
           {/* Off the board in the cold open, the thought goes under a smaller hook caption. */}
@@ -1199,11 +1527,15 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
               <div className="v-hook-compact">{hook}</div>
               <ThoughtBubble g={g} t={t!} size={40} />
             </>
-          ) : hook ?? engine ?? (
+          ) : hook ?? (
             <>
-              {offBoard ? <ThoughtBubble g={g} t={t!} size={44} /> : <MoveList g={g} ply={b.i + 1} />}
+              {offBoard ? (
+                <ThoughtBubble g={g} t={t!} size={44} />
+              ) : (
+                <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} />
+              )}
               <ChartLegend g={g} />
-              <EvalGraph prep={prep} g={g} ply={b.i + 1} width={840} height={130} />
+              <EvalGraph prep={prep} g={g} ply={listPly} width={840} height={130} compare={engine?.compare} />
             </>
           )}
         </div>
@@ -1224,13 +1556,22 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
       ) : (
         <>
           <div className="v-p-callout">{callout}</div>
-          {!hook && !engine && <div className="v-p-line v-line">{line}</div>}
-          {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead (and an engine line's box during one). */}
-          <div className={`v-p-caption ${hook || engine ? "hooked" : ""}`}>
+          {/* The line under the verdict and the chart fade out for an engine line, its variation fading in over
+              them in place (there's no move list here to hang it from), and back at its end. */}
+          {!hook && (
+            <div className="v-p-line v-line" style={engine ? { opacity: engine.under } : undefined}>
+              {line}
+            </div>
+          )}
+          {engine && !hook && (
+            <div className="v-p-caption hooked">
+              <Variation e={engine} compact />
+            </div>
+          )}
+          {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead. */}
+          <div className={`v-p-caption ${hook ? "hooked" : ""}`} style={engine && !hook ? { opacity: engine.under } : undefined}>
             {hook ? (
               hook
-            ) : engine ? (
-              engine
             ) : (
               <div className="v-p-chart">
                 <ChartLegend g={g} />

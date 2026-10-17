@@ -276,7 +276,7 @@ export type RefLight = { words: [number, number]; color?: Color; sqs?: string[];
  * Whose piece each piece word means, when the words before it say: "my king" is the speaker's, "White's
  * king" White's, "his rook" the opponent's; "the king" could be either (undefined).
  */
-function owners(ws: string[], mover: Color): (Color | undefined)[] {
+export function owners(ws: string[], mover: Color): (Color | undefined)[] {
   const other: Color = mover === "w" ? "b" : "w";
   return ws.map((_, k) => {
     for (const w of [ws[k - 1], ws[k - 2]].map((x) => (x ? bare(x) : ""))) {

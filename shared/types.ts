@@ -214,9 +214,13 @@ export interface VideoMoment {
   /**
    * An engine line played out on the board right after the move (see shared/engineLine.ts): what the
    * engine wanted instead of it, or its best play after it. `caption` is the director's one-liner on
-   * why the side it favours is better at its end (absent: the line's own plain fact).
+   * why the side it favours is better at its end (absent: the line's own plain fact). `refs`: what the
+   * caption's words point at, as the director said (see LineRef); `draw`: reaches drawn with it; `rings`:
+   * squares it circles.
+   * `punish` (an `instead` line only): first, what the move played allowed, played out from it (see
+   * ShownLine.punish) and explained in the director's words, before the board winds back for the line.
    */
-  line?: { kind: "instead" | "after"; caption?: string };
+  line?: { kind: "instead" | "after"; caption?: string; refs?: LineRef[]; draw?: LineReach[]; rings?: string[]; punish?: LinePunish };
   /** The moves and squares the quote names, drawn on the board as it's said. */
   marks?: ThoughtMark[];
 }
@@ -253,6 +257,36 @@ export interface ThoughtRef {
   words: [number, number];
   sqs?: string[];
   move?: number;
+}
+/**
+ * What words of an engine line's caption point at, on the board as it stands when the caption shows:
+ * squares (circled, or at the end of a reach, as the director drew them), or one of the moves on the board
+ * (an index). The words light up in the colour of what they point at.
+ */
+export interface LineRef {
+  words: [number, number];
+  sqs?: string[];
+  move?: number;
+}
+
+/** A piece's attack or defence drawn with a caption ("d4>f3"), up while the piece stays on `from`. */
+export interface LineReach {
+  from: string;
+  to: string;
+  color: Color;
+}
+
+/**
+ * What the move played allowed, as the director tells it: its caption shows once `at` moves of the
+ * punishment (the move played included) are on the board, with its reaches and circles (each up while its
+ * piece stays on its square).
+ */
+export interface LinePunish {
+  at: number;
+  caption: string;
+  refs?: LineRef[];
+  draw?: LineReach[];
+  rings?: string[];
 }
 // `say` on an arrow or ring: the words the director gave for it (first and last word), which it appears on
 // and lights up in the bubble; without them, the words are found for it (see markColors).

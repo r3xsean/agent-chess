@@ -1,4 +1,4 @@
-import type { Classification, Color, Game, MoveRecord, ThoughtMark, ThoughtRef, VideoHook, VideoMoment, VideoPackaging, VideoPlan } from "../shared/types";
+import type { Classification, Color, Game, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoHook, VideoMoment, VideoPackaging, VideoPlan } from "../shared/types";
 import { humanSide, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { beliefs } from "../shared/belief";
@@ -6,11 +6,11 @@ import { rivalry, seriesLine } from "./rivalry";
 import { spokenText, VOICE_BUDGET } from "./voice";
 import { LATE_INTERVIEW_CHARS, videoLines, voiceOf } from "../shared/videoLines";
 import { describePlayer, pvSan } from "./briefing";
-import { variantOf } from "../shared/rules";
+import { variantOf, type RulesMove } from "../shared/rules";
 import { ActionError } from "./game";
-import { lineOptions, shownLine } from "../shared/engineLine";
+import { fenAt, lineOptions, lineRefProblems, resolveLineRefs, shownLine } from "../shared/engineLine";
 import { leftEnPrise } from "./wintr";
-import { describe, drawnLine, imagined, markColors, moverKind, moveWordAt, phraseAt, phraseEnd, quoteWords, refProblems, resolveRefs, sanKey, squareWordAt } from "../shared/thoughtMarks";
+import { boardOf, describe, drawnLine, imagined, isHit, markColors, moverKind, moveWordAt, phraseAt, phraseEnd, quoteWords, refProblems, resolveRefs, sanKey, squareWordAt } from "../shared/thoughtMarks";
 
 /*
  * After the game the broadcaster turns video director: it reads the whole game and picks the
@@ -117,7 +117,10 @@ export function directorBrief(g: Game): string {
       if (prev && cls && SWING.includes(cls))
         out.push(`  ${back === 1 ? "answers" : "reacts to"} ${moveNo(prev.ply)} ${prev.san} (${cls}, ply ${prev.ply}): ${back === 1 ? "the punishment, or the miss" : `${name(m.color)}'s first words after it`}`);
     }
-    for (const l of lineOptions(g, i)) out.push(`  line option "${l.kind}": ${l.moves.map((mv) => mv.san).join(" ")} → ${l.fact}`);
+    for (const l of lineOptions(g, i))
+      out.push(
+        `  line option "${l.kind}": ${l.moves.map((mv) => mv.san).join(" ")} → ${l.fact}${l.punish ? `; allows: ${m.san} ${l.punish.moves.slice(1).map((mv) => mv.san).join(" ")} → ${l.punish.fact}` : ""}`,
+      );
     if (m.illegalAttempts.length) out.push(`  tried illegal moves first: ${m.illegalAttempts.join(", ")}`);
     if (m.offeredDraw) out.push(`  offered a draw with this move`);
     if (m.commentary.trim()) out.push(`  commentary: ${m.commentary.trim()}`);
@@ -139,7 +142,14 @@ export function directorBrief(g: Game): string {
             quote: "The rook on c2 is safe: if Bd1, I just play Rc5. And g6 takes f5 away from the knight.",
             delivery: "calm, quietly pleased with itself",
             chapter: "The rook that couldn't escape",
-            line: { kind: "after", caption: "Bd1 shuts the rook in, and it falls two moves later" },
+            line: {
+              kind: "after",
+              caption: "Bd1 shuts the rook in, and it falls two moves later",
+              refs: [
+                { words: "Bd1", to: "Bd1" },
+                { words: "rook", to: "c2" },
+              ],
+            },
             marks: [
               { at: "The rook on c2 is safe", squares: ["c2"], refs: [{ words: "rook on c2", to: "c2" }] },
               {
@@ -200,6 +210,8 @@ export function directorBrief(g: Game): string {
     "    - but never an arrow for what the quote says can't or won't happen (\"the rook cannot capture the knight\", \"Kxe2 isn't possible\"): an arrow always reads as \"this goes there\" or \"this hits that\", so it would show the opposite. Circle the pieces instead.",
     "  - Usually 2–6 marks per quote; a long quote can take 8. Start each mark on words that draw something straight away, so the board isn't empty while the idea is being said. A hook that quotes words of one of your moments draws that moment's marks for them, unless you give it its own.",
     "- line.caption (optional, one line, at most 14 words): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
+    "  - line.squares, line.draw, line.refs: what the board shows with the caption, at the end of the line, as in marks. The line's moves are played out on the board, but nothing else is drawn unless you say: `squares` circles pieces or squares (\"e6\"), each up while its piece stays there; `draw` adds a piece's attack or defence as \"from>to\" (\"e6>e2\": the rook guarding the pawn), checked against the board. `refs`: every word of the caption that names a square, a move or a piece goes in a ref saying what it points at: { \"words\": \"the rook\", \"to\": \"e6\" }, or one of the line's moves: { \"words\": \"Kg4\", \"to\": \"Kg4\" }. A square a ref points at must be drawn: circled, at an end of a reach, or where one of the line's moves went from or to (a piece the line takes can be pointed at where it was taken). Those words light up in the colour of what they point at: green for the side the line favours, red for the other, amber for an empty square. A caption without refs lights nothing.",
+    "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff, and fit it to the kind of game: for a built attack, the shot with the attacker's calculation (not the defender's mistake); for a swindle, the winning side's most confident line just before it turns; for a thrown-away win, the leader's line on the move that throws it; otherwise usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
     "- packaging (required): `title` for YouTube (at most 80 characters, the story not the notation, names the models); `caption` for TikTok (at most 150 characters, may end with a few hashtags); `thumbnail`: the move whose position makes the thumbnail and at most 4 words of big text.",
@@ -473,16 +485,101 @@ function text(raw: unknown, where: string, maxChars: number, required = false): 
   return s;
 }
 
-/** The engine line a moment plays after its move: one the brief offered for that move, with an optional caption. */
+/**
+ * The engine line a moment plays after its move: one the brief offered for that move, with an optional
+ * caption (its refs and reaches checked against the board at the line's end), and for an `instead` line,
+ * optionally what the move played allowed first, in the director's words.
+ */
 function lineChoice(g: Game, i: number, raw: unknown, where: string): VideoMoment["line"] {
   if (raw === undefined || raw === null || raw === "") return undefined;
   const r = raw as any;
   const kind = typeof raw === "string" ? raw : r?.kind;
   if (kind !== "instead" && kind !== "after") throw new ActionError(`${where}.line.kind must be "instead" or "after".`);
-  if (!shownLine(g, i, kind)) throw new ActionError(`${where}.line: ply ${g.moves[i].ply} has no "${kind}" line to show. Only the \`line option\`s listed under a move exist.`);
-  const caption = typeof raw === "string" ? undefined : text(r.caption, `${where}.line.caption`, 120);
+  const sl = shownLine(g, i, kind);
+  if (!sl) throw new ActionError(`${where}.line: ply ${g.moves[i].ply} has no "${kind}" line to show. Only the \`line option\`s listed under a move exist.`);
+  if (typeof raw === "string") return { kind };
+  const caption = text(r.caption, `${where}.line.caption`, 120);
   if (caption && words(caption) > 16) throw new ActionError(`${where}.line.caption is ${words(caption)} words; keep it to at most 14.`);
-  return caption ? { kind, caption } : { kind };
+  if (!caption && (r.refs?.length || r.draw?.length || r.squares?.length)) throw new ActionError(`${where}.line: refs, draw and squares go with a caption; give one, or leave them out.`);
+  const out: NonNullable<VideoMoment["line"]> = { kind, ...(caption && { caption, ...lineNote(g, sl.fen, sl.moves, sl.moves.length, sl.for, caption, r, `${where}.line`) }) };
+  const p = r.punish;
+  if (p !== undefined && p !== null && p !== "") {
+    const m = g.moves[i];
+    if (!sl.punish) throw new ActionError(`${where}.line.punish: ${m.san} has nothing to punish it with that the video can show. Only lines listed with \`allows:\` have one.`);
+    const moves = sl.punish.moves;
+    const pc = text(p.caption, `${where}.line.punish.caption`, 120, true)!;
+    if (words(pc) > 16) throw new ActionError(`${where}.line.punish.caption is ${words(pc)} words; keep it to at most 14.`);
+    // The caption shows once the move named in `at` is played (by default, at the end).
+    let at = moves.length;
+    if (p.at !== undefined && p.at !== null && p.at !== "") {
+      const key = sanKey(str(p.at));
+      const j = moves.findIndex((mv, n) => n > 0 && sanKey(mv.san) === key);
+      if (j < 0) throw new ActionError(`${where}.line.punish.at must be one of the punishment's moves (${moves.slice(1).map((mv) => mv.san).join(", ")}).`);
+      at = j + 1;
+    }
+    out.punish = { at, caption: pc, ...lineNote(g, m.fenBefore, moves, at, sl.for, pc, p, `${where}.line.punish`) };
+  }
+  return out;
+}
+
+/**
+ * A line's caption, on the board as it stands when it shows (k of `moves` played from `fen`): what the
+ * director draws with it, reaches ("d4>f3") and circles (`squares`), and its refs, every word naming a
+ * square, a move or a piece pointing at what's there and drawn (see lineRefProblems; a square a move on the board
+ * went from or to counts as drawn, the way a move's arrow does in marks). The director is sent back with
+ * every problem at once.
+ */
+function lineNote(g: Game, fen: string, moves: RulesMove[], k: number, side: Color, caption: string, raw: any, where: string): { refs?: LineRef[]; draw?: LineReach[]; rings?: string[] } {
+  const played = moves.slice(0, k).map((mv) => mv.san);
+  const rawDraw = raw?.draw;
+  const rawRefs = raw?.refs;
+  const rawSquares = raw?.squares;
+  const ringList = rawSquares === undefined || rawSquares === null ? [] : Array.isArray(rawSquares) ? rawSquares.map((x) => str(x).trim().toLowerCase()).filter(Boolean) : null;
+  if (!ringList) throw new ActionError(`${where}.squares must be a list.`);
+  if (ringList.length > MAX_MARK_RINGS) throw new ActionError(`${where}.squares: ${ringList.length} squares; keep it to at most ${MAX_MARK_RINGS}.`);
+  const badSq = ringList.find((s) => !/^[a-h][1-8]$/.test(s));
+  if (badSq) throw new ActionError(`${where}.squares: "${badSq}" isn't a square.`);
+  const rings = [...new Set(ringList)];
+  const drawList = rawDraw === undefined || rawDraw === null ? [] : Array.isArray(rawDraw) ? rawDraw.map((x) => str(x).trim()).filter(Boolean) : null;
+  if (!drawList) throw new ActionError(`${where}.draw must be a list.`);
+  if (drawList.length > MAX_MARK_ARROWS) throw new ActionError(`${where}.draw: ${drawList.length} reaches; keep it to at most ${MAX_MARK_ARROWS}.`);
+  const notReach = drawList.find((s) => !isHit(s));
+  if (notReach) throw new ActionError(`${where}.draw: "${notReach}" isn't a reach. Give a piece's attack or defence as "from>to" ("d4>f3"); the line's own moves are played out on the board already.`);
+  const drawn = drawList.length ? drawnLine([fenAt(fen, moves, k)], drawList, variantOf(g)) : { drawn: [] };
+  if ("stuck" in drawn) throw new ActionError(`${where}.draw: ${drawList[drawn.stuck]} can't be drawn when the caption shows (after ${played.join(" ")}): ${drawn.why}.`);
+  const draw = drawn.drawn.map((d) => ({ from: d.from, to: d.to, color: d.color }));
+
+  const refList = rawRefs === undefined || rawRefs === null ? [] : Array.isArray(rawRefs) ? rawRefs : null;
+  if (!refList) throw new ActionError(`${where}.refs must be a list.`);
+  if (refList.length > MAX_MARK_REFS) throw new ActionError(`${where}.refs: ${refList.length} refs; keep it to at most ${MAX_MARK_REFS}.`);
+  const taken: [number, number][] = [];
+  const refs: LineRef[] = refList.map((r: any, j: number) => {
+    const wr = `${where}.refs[${j}]`;
+    const phrase = text(r?.words, `${wr}.words`, 160, true)!;
+    // A repeat of the same words points at the next place they appear.
+    let k0 = phraseAt(caption, phrase);
+    while (k0 >= 0 && taken.some(([a, b]) => k0 >= a && k0 <= b)) k0 = phraseAt(caption, phrase, k0 + 1);
+    if (k0 < 0) throw new ActionError(`${wr}.words must be words of the caption, exactly as they appear ("${phrase}" isn't${taken.length ? ", or every place it appears is taken by an earlier ref" : ""}).`);
+    const span: [number, number] = [k0, phraseEnd(caption, phrase, k0)];
+    taken.push(span);
+    const to = r?.to;
+    const list = (Array.isArray(to) ? to : [to]).map((s: unknown) => str(s).trim());
+    if (list.length && list.every((s: string) => /^[a-h][1-8]$/i.test(s))) return { words: span, sqs: [...new Set(list.map((s: string) => s.toLowerCase()))] };
+    const key = sanKey(list[0] ?? "");
+    const move = played.findIndex((san) => key && sanKey(san) === key);
+    if (Array.isArray(to) || move < 0) throw new ActionError(`${wr}.to: "${list.join(", ")}" must be a square ("e6"), a list of squares, or one of the moves on the board when the caption shows (${played.join(", ")}).`);
+    return { words: span, move };
+  });
+  // Drawn: what the director circles or reaches to, and the squares the moves played by then go from and to.
+  const drawnSqs = [...rings, ...draw.flatMap((d) => [d.from, d.to]), ...moves.slice(0, k).flatMap((mv) => [mv.from, mv.to])];
+  const problems = lineRefProblems(caption, refs, fen, moves, k, side, drawnSqs);
+  if (problems.length) {
+    const shown = problems.slice(0, 10);
+    throw new ActionError(
+      `${where}: ${problems.length === 1 ? "one thing" : `${problems.length} things`} to fix in what the caption points at:\n${shown.map((x) => `  - ${x}`).join("\n")}\nEvery word of the caption that names a square, a move or a piece goes in a ref, pointing at what it means on the board when the caption shows (after ${played.join(" ")}), and each square a ref points at is drawn: circled in \`squares\`, at an end of a reach in \`draw\`, or where one of those moves went from or to.`,
+    );
+  }
+  return { ...(refs.length && { refs }), ...(draw.length && { draw }), ...(rings.length && { rings }) };
 }
 
 /** How much one quote may draw: marks, the arrows in one mark, and its rings. */
@@ -541,6 +638,11 @@ function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: un
 /** One quote's marks, as the director would submit them for move `ply`, checked as a plan's are (scripts/test-marks.ts). */
 export function checkedMarks(g: Game, ply: number, quote: string, raw: unknown): ThoughtMark[] | undefined {
   return thoughtMarks(g, moveAt(g, ply, "test"), quote, raw, "marks");
+}
+
+/** One moment's engine line, as the director would submit it for move `ply`, checked as a plan's is. */
+export function checkedLine(g: Game, ply: number, raw: unknown): VideoMoment["line"] {
+  return lineChoice(g, g.moves.indexOf(moveAt(g, ply, "test")), raw, "line");
 }
 
 function markList(g: Game, m: MoveRecord, quote: string, raw: unknown[], where: string): ThoughtMark[] {
@@ -749,6 +851,44 @@ export function planReadback(g: Game, plan: VideoPlan): string {
       });
       out.push(`  Idea ${n + 1}, from "${mk.at}" (the board wipes for it):`, ...draws.map((d) => `    draws ${d}`), ...words.map((w) => `    lights ${w}`));
     });
+    out.push("");
+  }
+  // The engine lines' captions, the same way: lit words and what they point at when the caption shows.
+  for (const x of plan.moments) {
+    const ln = x.line;
+    const i = g.moves.findIndex((m) => m.ply === x.ply);
+    const sl = ln && shownLine(g, i, ln.kind);
+    if (!ln || !sl || (!ln.caption && !ln.punish)) continue;
+    const m = g.moves[i];
+    const tone = (c?: Color) => (!c ? "amber" : c === sl.for ? "green" : "red");
+    const note = (label: string, caption: string, refs: LineRef[] = [], draw: LineReach[] = [], rings: string[] = [], fen: string, moves: RulesMove[], k: number) => {
+      const ws = quoteWords(caption);
+      const colors = resolveLineRefs(caption, refs, fen, moves, k, sl.for);
+      const shown = [...ws];
+      refs.forEach((r, j) => {
+        shown[r.words[0]] = `[${shown[r.words[0]]}`;
+        shown[r.words[1]] = `${shown[r.words[1]]}](${tone("color" in colors[j] ? colors[j].color : undefined)})`;
+      });
+      out.push(`  ${label}, after ${moves.slice(0, k).map((mv) => mv.san).join(" ")}:`, `    ${shown.join(" ")}`);
+      for (const d of draw) out.push(`    draws reach ${d.from}→${d.to}: ${tone(d.color)}`);
+      const board = boardOf(fenAt(fen, moves, k));
+      for (const sq of rings) {
+        // A circle takes the piece a ref to its square names (one a capture took there, say), else what's there.
+        const j = refs.findIndex((r) => r.sqs?.includes(sq));
+        const c = colors[j];
+        const pc = c && "pieces" in c ? c.pieces[refs[j].sqs!.indexOf(sq)] : board.get(sq);
+        out.push(`    circles ${sq}: ${describe(pc)}, ${tone(pc?.color)}${pc && !(board.get(sq)?.type === pc.type && board.get(sq)?.color === pc.color) ? " (gone from there by then, so not shown)" : ""}`);
+      }
+      refs.forEach((r, j) => {
+        const said = `"${ws.slice(r.words[0], r.words[1] + 1).join(" ")}"`;
+        const c = colors[j];
+        const what = r.move !== undefined ? `the move ${moves[r.move].san}` : (r.sqs ?? []).map((sq, n) => `${sq}: ${"pieces" in c ? describe(c.pieces[n]) : "?"}`).join("; ");
+        out.push(`    lights ${said} → ${what}, ${tone("color" in c ? c.color : undefined)}`);
+      });
+    };
+    out.push(`Ply ${x.ply}, the "${ln.kind}" line (green: ${sideName(g, sl.for)}):`);
+    if (ln.punish && sl.punish) note("What it allowed", ln.punish.caption, ln.punish.refs, ln.punish.draw, ln.punish.rings, m.fenBefore, sl.punish.moves, ln.punish.at);
+    if (ln.caption) note("The line", ln.caption, ln.refs, ln.draw, ln.rings, sl.fen, sl.moves, sl.moves.length);
     out.push("");
   }
   return out.join("\n");

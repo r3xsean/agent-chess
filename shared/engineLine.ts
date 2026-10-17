@@ -1,7 +1,10 @@
-import type { Classification, Color, Game } from "./types";
+import type { Classification, Color, Game, LineRef } from "./types";
 import { variantOf, type RulesMove } from "./rules";
 import { sideName } from "./naming";
 import { tally, trade, walk, type Tally } from "./why";
+import { boardOf, describe, owners, plainWord, pointsAt, quoteWords, type Piece, type RefColor } from "./thoughtMarks";
+
+const PIECE_NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 
 /*
  * An engine line the replay plays out on the board right after a key move, when the director asks for
@@ -39,6 +42,12 @@ export interface ShownLine {
   fact: string;
   /** The one-liner shown under it when the director writes none. */
   caption: string;
+  /**
+   * For an "instead" line, what the move played allowed, when that shows something concrete (a mate, or at
+   * least MIN_GAIN pawns lost): the move played, then the engine's line after it, cut where its captures
+   * settle. `fact` says it in plain words for the brief. What it means is the director's to say.
+   */
+  punish?: { moves: RulesMove[]; fact: string };
 }
 
 /** A quiet line is cut after this many plies (an exchange in progress may run a few more). */
@@ -127,7 +136,13 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
     const tA = tally(actual, mover, true);
     const who = name(mover);
     const first = moves[0].san;
-    const line = (fact: string, caption: string, net: number, mate?: number): ShownLine => ({ kind, i, fen, moves, for: mover, mate, net, fact, caption });
+    // What the move played allowed, counted to the end (settle already stops where the captures do).
+    const tP = tally(actual, mover, true);
+    const punish =
+      actual.length > 1 && (actualMated || tP.net <= -MIN_GAIN)
+        ? { moves: actual, fact: actualMated ? `${name(opp)} mates` : `${name(opp)} wins ${trade(tP.lost, tP.won) || "material"}` }
+        : undefined;
+    const line = (fact: string, caption: string, net: number, mate?: number): ShownLine => ({ kind, i, fen, moves, for: mover, mate, net, fact, caption, ...(punish && { punish }) });
     if (mated) {
       if (actualMates && actual.length <= moves.length) return null;
       const mate = mateIn(mover);
@@ -180,4 +195,81 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
 /** The lines on offer for move i. */
 export function lineOptions(g: Game, i: number): ShownLine[] {
   return LINE_KINDS.map((k) => shownLine(g, i, k)).filter((l): l is ShownLine => !!l);
+}
+
+/*
+ * A caption's refs (see LineRef), on the board as it stands when the caption shows: `k` of `moves` played
+ * from `fen` (the line's moves, or the punishment's, the move played first). Colours are by side; the
+ * video shows the side the line favours green.
+ */
+
+/** The position once k of the moves are played. */
+export const fenAt = (fen: string, moves: RulesMove[], k: number) => (k ? moves[k - 1].after : fen);
+
+/**
+ * What each ref points at: a move is its side's; squares are what stands on them, or, when its words name
+ * a kind of piece ("the rook", "White's knight", "Nd4"), the piece of that kind there or there earlier in
+ * the line (the rook a capture took). A ref naming a piece that isn't there is a problem. Nothing is
+ * guessed: a caption without refs lights nothing.
+ */
+export function resolveLineRefs(caption: string, refs: LineRef[], fen: string, moves: RulesMove[], k: number, side: Color): RefColor[] {
+  const ws = quoteWords(caption);
+  const owner = owners(ws, side);
+  const now = boardOf(fenAt(fen, moves, k));
+  const boards = Array.from({ length: k }, (_, j) => boardOf(fenAt(fen, moves, j)));
+  const before = (sq: string) => boards.map((b) => b.get(sq)).filter((p): p is Piece => !!p);
+  return refs.map((ref) => {
+    if (ref.move !== undefined) return { color: moves[ref.move].color, pieces: [] };
+    const [k0, k1] = ref.words;
+    const said = ws.slice(k0, k1 + 1).join(" ");
+    const wanted: { kind: string; owner?: Color; sq?: string }[] = [];
+    for (let w = k0; w <= k1; w++) {
+      for (const p of pointsAt(ws[w])) if ("kind" in p) wanted.push({ kind: p.kind, owner: owner[w] });
+      const san = ws[w].replace(/^[^A-Za-z]+/, "").match(/^([KQRBN])x?[a-h]?[1-8]?x?([a-h][1-8])/);
+      if (san) wanted.push({ kind: san[1].toLowerCase(), sq: san[2] });
+    }
+    const pieces: (Piece | undefined)[] = [];
+    for (const sq of ref.sqs ?? []) {
+      const here = now.get(sq);
+      const forSq = wanted.filter((w) => !w.sq || w.sq === sq);
+      if (!forSq.length) {
+        pieces.push(here);
+        continue;
+      }
+      const fits = (pc: Piece) => forSq.some((w) => w.kind === pc.type && (!w.owner || w.owner === pc.color));
+      const pc = [here, ...before(sq)].find((p): p is Piece => !!p && fits(p));
+      if (!pc) return { problem: `"${said}" names ${forSq.map((w) => `${w.owner ? (w.owner === "w" ? "White's " : "Black's ") : ""}${PIECE_NAME[w.kind]}`).join(" or ")}, but ${sq} holds ${describe(here)} then` };
+      pieces.push(pc);
+    }
+    const sides = [...new Set(pieces.filter((p): p is Piece => !!p).map((p) => p.color))];
+    if (sides.length > 1) return { problem: `"${said}" points at both sides' pieces (${(ref.sqs ?? []).join(", ")}); give each side its own ref` };
+    return { ...(sides[0] && { color: sides[0] }), pieces };
+  });
+}
+
+/**
+ * Everything wrong with a caption's refs, for the director to fix: every word naming a square, a move or a
+ * piece is in a ref; refs don't overlap; a ref's own square words are among its squares; each square it
+ * points at is among the `drawn` ones (as the caller counts them); a move it points at is on the board by then;
+ * and what it names is really there (resolveLineRefs).
+ */
+export function lineRefProblems(caption: string, refs: LineRef[], fen: string, moves: RulesMove[], k: number, side: Color, drawn: string[]): string[] {
+  const ws = quoteWords(caption);
+  const out: string[] = [];
+  ws.forEach((w, n) => {
+    if (pointsAt(w).length && !refs.some((r) => n >= r.words[0] && n <= r.words[1])) out.push(`"${plainWord(w)}" isn't in any ref: add one saying what it points at`);
+  });
+  refs.forEach((r, j) => {
+    const said = ws.slice(r.words[0], r.words[1] + 1).join(" ");
+    if (refs.some((o, i) => i < j && o.words[0] <= r.words[1] && r.words[0] <= o.words[1])) out.push(`refs "${said}" and another overlap: give each its own words`);
+    if (r.move !== undefined) {
+      if (r.move >= k) out.push(`"${said}" points at ${moves[r.move].san}, which isn't played yet when the caption shows`);
+      return;
+    }
+    for (let n = r.words[0]; n <= r.words[1]; n++)
+      for (const p of pointsAt(ws[n])) if ("sq" in p && !(r.sqs ?? []).includes(p.sq)) out.push(`"${said}" names ${p.sq} but points at ${(r.sqs ?? []).join(", ")}`);
+    for (const sq of r.sqs ?? []) if (!drawn.includes(sq)) out.push(`"${said}" points at ${sq}, but nothing is drawn on ${sq}: circle it in \`squares\`, or draw a reach that starts or ends there`);
+  });
+  resolveLineRefs(caption, refs, fen, moves, k, side).forEach((c) => "problem" in c && out.push(c.problem));
+  return [...new Set(out)];
 }
