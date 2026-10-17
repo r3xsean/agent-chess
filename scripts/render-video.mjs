@@ -3,13 +3,15 @@
 //   node scripts/render-video.mjs <gameId> [--format landscape|portrait|both] [--fps 30]
 //        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only] [--package]
 //
+// Files ("<id>-youtube.mp4" and so on) go in the game's own folder (data/videos/<date> <White> vs <Black> (<id>)/,
+// see server/videoFiles.ts) unless --out names another.
 // The server must be running with a fresh build (dist/). The video page at #/video/<id> lays out
 // every frame as a pure function of time; this script seeks it frame by frame in headless Chrome and
 // pipes the screenshots into ffmpeg. Then it builds the sound: effects from vendor/sfx/ timed to the
 // timeline (sfxCues in web/src/video/timeline.ts, read from the page), over a music bed that dips under them. With no --music it uses the first
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
-// --package redoes just the YouTube upload text and thumbnail (after a change to the plan's packaging or chapters).
+// --package redoes just the YouTube upload text and thumbnail, each cut's subtitles and the TikTok cover (after a change to the plan's packaging or chapters).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -33,13 +35,28 @@ if (!gameId) {
 }
 const fps = Number(opt("fps", 30));
 const formats = opt("format", "both") === "both" ? ["landscape", "portrait"] : [opt("format")];
-const outDir = resolve(opt("out", "data/videos"));
 const stills = opt("stills", "")
   .split(",")
   .filter(Boolean)
   .map(Number);
 const audioOnly = flag("audio-only");
 const packageOnly = flag("package");
+
+/** What each file in a game's video folder is called, after "<id>-" (server/videoFiles.ts FILES: keep the two in step). */
+const FILES = Object.fromEntries(
+  Object.entries({
+    youtube: "youtube.mp4",
+    tiktok: "tiktok.mp4",
+    youtubeSubtitles: "youtube.srt",
+    tiktokSubtitles: "tiktok.srt",
+    uploadText: "youtube.txt",
+    thumbnail: "thumb.png",
+    tiktokCover: "tiktok-cover.png",
+  }).map(([k, f]) => [k, `${gameId}-${f}`]),
+);
+const cut = (format) => (format === "landscape" ? "youtube" : "tiktok");
+// The game's own folder: given by the server when it starts a render, or asked of it when run by hand.
+const outDir = resolve(opt("out") ?? join("data/videos", (await (await fetch(`${SERVER}/api/games/${gameId}/render`)).json()).folder));
 mkdirSync(outDir, { recursive: true });
 
 function findMusic() {
@@ -191,8 +208,19 @@ function chapters(scenes, g, duration) {
   return kept.length >= 3 ? kept : [];
 }
 
+/** YouTube tags: the matchup and what kind of video it is (YouTube allows 500 characters in all). */
+function tags(g) {
+  const names = [g.white, g.black].filter((p) => p.provider !== "human").map((p) => p.modelLabel);
+  const list = [...names, ...(names.length === 2 ? [`${names[0]} vs ${names[1]}`] : []), "AI chess", "AI vs AI", "LLM chess", "chess", "Agent Chess"];
+  const opening = g.opening?.name?.split(":")[0].trim();
+  if (opening) list.push(opening);
+  const out = [];
+  for (const t of [...new Set(list)]) if ([...out, t].join(",").length <= 450) out.push(t);
+  return out;
+}
+
 /**
- * The YouTube upload text: title, the TikTok caption, a line about the game, and the chapters. No
+ * The YouTube upload text: title, the TikTok caption, tags, a line about the game, and the chapters. No
  * result: the description shows before anyone presses play, and the ending is what they're watching for.
  */
 function description(g, scenes, duration) {
@@ -202,6 +230,8 @@ function description(g, scenes, duration) {
     `TITLE: ${pk?.title ?? `${name(g.white)} vs ${name(g.black)}`}`,
     "",
     `TIKTOK CAPTION: ${pk?.caption ?? ""}`,
+    "",
+    `TAGS: ${tags(g).join(", ")}`,
     "",
     "DESCRIPTION:",
     g.white.provider === "human" || g.black.provider === "human"
@@ -217,7 +247,7 @@ function description(g, scenes, duration) {
 /** With the YouTube cut come its upload text (chapters need its timeline) and the thumbnail. */
 async function writePackaging(scenes, duration) {
   if (!game.video) return;
-  const txt = join(outDir, `${gameId}-youtube.txt`);
+  const txt = join(outDir, FILES.uploadText);
   writeFileSync(txt, description(game, scenes, duration));
   if (packageOnly) console.log(txt);
   if (!game.video.packaging) return;
@@ -228,10 +258,83 @@ async function writePackaging(scenes, duration) {
   await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
   if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${game.video.packaging.thumbnail.text}" doesn't fit, so part of it may be cut off.`);
   await tp.evaluate(() => document.fonts.ready);
-  const thumb = join(outDir, `${gameId}-thumb.png`);
+  const thumb = join(outDir, FILES.thumbnail);
   await tp.screenshot({ path: thumb });
   await tp.close();
   if (packageOnly) console.log(thumb);
+}
+
+/* ------------------------------ subtitles ------------------------------ */
+
+/** The breath left after a voiced line (web/src/video/timeline.ts VOICE_TAIL). */
+const VOICE_TAIL = 0.5;
+/** About two subtitle lines' worth of text on screen at once. */
+const CUE_CHARS = 84;
+
+const srtTime = (t) => {
+  const ms = Math.max(0, Math.round(t * 1000));
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(Math.floor(ms / 3_600_000))}:${p(Math.floor(ms / 60_000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
+};
+
+/** A line cut into subtitle-sized pieces, between words. */
+function pieces(text) {
+  const out = [];
+  let cur = "";
+  for (const w of text.trim().split(/\s+/)) {
+    if (cur && cur.length + 1 + w.length > CUE_CHARS) {
+      out.push(cur);
+      cur = w;
+    } else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * What's spoken in a cut, as SRT: each voiced line from when it starts to the breath after it, its
+ * pieces sharing that time by length. Lines are shown as written (moves in notation), not as spoken.
+ */
+function subtitles(scenes) {
+  const cues = [];
+  for (const s of scenes) {
+    const text = s.voice && (s.kind === "think" ? s.thought : s.text);
+    if (!text) continue;
+    const from = s.start + VOICE_AT;
+    const span = Math.max(0.5, s.start + s.dur - VOICE_TAIL - from);
+    const parts = pieces(text);
+    const total = parts.reduce((n, p) => n + p.length, 0);
+    let t = from;
+    for (const p of parts) {
+      const d = (span * p.length) / total;
+      cues.push(`${cues.length + 1}\n${srtTime(t)} --> ${srtTime(t + d)}\n${p}\n`);
+      t += d;
+    }
+  }
+  return cues.join("\n");
+}
+
+/** The cut's subtitles beside it (none when nothing is spoken, e.g. a render without voices). */
+function writeSubtitles(format, scenes) {
+  const file = join(outDir, FILES[`${cut(format)}Subtitles`]);
+  const srt = subtitles(scenes);
+  if (srt) writeFileSync(file, srt);
+  else rmSync(file, { force: true });
+  if (srt && packageOnly) console.log(file);
+}
+
+/**
+ * The TikTok cover: the short's versus card, halfway through (once it has animated in), as the
+ * account's other posts have it.
+ */
+async function writeCover(page, scenes) {
+  const versus = scenes.find((s) => s.kind === "versus");
+  const file = join(outDir, FILES.tiktokCover);
+  if (!versus) return rmSync(file, { force: true });
+  await page.evaluate((x) => window.__video.seek(x), versus.start + versus.dur / 2);
+  await page.evaluate(() => window.__video.settle());
+  await page.screenshot({ path: file });
+  if (packageOnly) console.log(file);
 }
 
 /* ------------------------------ render ------------------------------ */
@@ -255,7 +358,17 @@ try {
     const duration = await page.evaluate(() => window.__video.duration);
     const scenes = await page.evaluate(() => window.__video.scenes);
     const effects = await page.evaluate(() => window.__video.cues);
+    // What the frames were timed to. --audio-only reuses the frames, so it must find the same timing:
+    // new voice lines, a re-plan or the short's voice speed all move scenes about.
+    const timing = createHash("sha1").update(JSON.stringify(scenes.map((s) => [s.kind, s.start, s.dur]))).digest("hex");
+    const out = join(outDir, FILES[cut(format)]);
+    const timingFile = `${out}.timing`;
     if (packageOnly) {
+      // Subtitles for frames timed differently would drift, so they're only made to match a render.
+      if (existsSync(timingFile) && readFileSync(timingFile, "utf8").trim() === timing) {
+        writeSubtitles(format, scenes);
+        if (format === "portrait") await writeCover(page, scenes);
+      } else if (existsSync(out)) console.error(`${format}: the timing changed since ${out} was rendered, so its subtitles and cover weren't redone: render it again.`);
       await page.close();
       if (format === "landscape") await writePackaging(scenes, duration);
       continue;
@@ -276,14 +389,9 @@ try {
       continue;
     }
 
-    const out = join(outDir, `${gameId}-${format === "landscape" ? "youtube" : "tiktok"}.mp4`);
     const silent = `${out}.video.mp4`;
     const started = Date.now();
     let note = "";
-    // What the frames were timed to. --audio-only reuses the frames, so it must find the same timing:
-    // new voice lines, a re-plan or the short's voice speed all move scenes about.
-    const timing = createHash("sha1").update(JSON.stringify(scenes.map((s) => [s.kind, s.start, s.dur]))).digest("hex");
-    const timingFile = `${out}.timing`;
 
     if (audioOnly) {
       if (!existsSync(out)) throw new Error(`--audio-only needs an existing render: ${out}`);
@@ -323,6 +431,7 @@ try {
       await done;
       note = `${frames} frames, ${captured} captured, `;
     }
+    if (format === "portrait") await writeCover(page, scenes);
     await page.close();
 
     // Effects and voices share one track (so the music ducks under both); --sfx off drops only the effects.
@@ -340,6 +449,7 @@ try {
     for (const f of [silent, `${out}.sfx.wav`]) rmSync(f, { force: true });
     writeFileSync(timingFile, timing);
     console.log(`\r${format}: ${out}  (${duration.toFixed(1)}s, ${note}${((Date.now() - started) / 1000).toFixed(0)}s)${music ? "" : "  [no music]"}`);
+    writeSubtitles(format, scenes);
 
     if (format === "landscape") await writePackaging(scenes, duration);
   }

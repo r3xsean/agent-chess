@@ -59,9 +59,11 @@ To connect the local server to a mirror, create `data/mirror.json`:
 Any finished game can be exported as a video: 16:9 for YouTube and 9:16 for TikTok. Click 🎬 on the game page to preview it in the browser (space to play, ←/→ to skip). To render MP4s:
 
 ```powershell
-npm run video -- <gameId>            # both formats → data/videos/<id>-youtube.mp4, <id>-tiktok.mp4
+npm run video -- <gameId>            # both formats → <id>-youtube.mp4, <id>-tiktok.mp4 in the game's folder
 npm run video -- <gameId> --format portrait --music path\to\track.mp3
 ```
+
+Each game's videos get their own folder under `data/videos/`, named for the day and the players, with the game id at the end: `2026-10-17 GPT-6 Astra vs Opus 5.5 (g7lto2a464)/`. The files in it keep the id too (`g7lto2a464-youtube.mp4`). Videos rendered before this were all in `data/videos/` itself; the server moves them into their game's folder when it starts.
 
 **What's in it:**
 - The board, eval bar and each player's clock.
@@ -74,9 +76,9 @@ npm run video -- <gameId> --format portrait --music path\to\track.mp3
 
 The video slows down only for the key moments. On those, the mover's own words appear as a speech bubble before the move (`--thoughts off` skips them), and the banner shows how long they thought.
 
-**Who picks the key moments:** after the game, the broadcaster turns director. It reads the whole game and picks those moments, plus the interview lines (`server/director.ts`). It also picks a cold open (the videos start on the payoff, then rewind), an optional flashback to a pre-game line, chapter titles, the YouTube title, the TikTok caption and the thumbnail. Its plan is saved with the game. For a game that finished without a plan, an orchestrator can launch a director from `GET /api/games/<id>/director-launch` (admin token). Add `?redo=1` to replace an existing plan. Without a plan, a fallback rule picks the moments from the engine's verdicts.
+**Who picks the key moments:** after the game, the broadcaster turns director. It reads the whole game and picks those moments, plus the interview lines (`server/director.ts`). It also picks a cold open (the videos start on the payoff, then rewind), an optional flashback to a pre-game line, chapter titles, the YouTube title, the TikTok caption and the thumbnail. It can also mark the moves a quote names, the way a streamer draws while calculating: while the player's line is spoken, those moves appear on the board as arrows (green for the player's own moves, red for the opponent's) and the squares as rings, each as its word is said, one idea at a time. The timing comes from ElevenLabs' word timestamps; clips recorded before those existed are timed by their length. Its plan is saved with the game. For a game that finished without a plan, an orchestrator can launch a director from `GET /api/games/<id>/director-launch` (admin token). Add `?redo=1` to replace an existing plan. Without a plan, a fallback rule picks the moments from the engine's verdicts.
 
-With the YouTube render come `data/videos/<id>-youtube.txt` (title, caption, description with chapters) and `<id>-thumb.png`. The render panel shows them with copy buttons.
+With the YouTube render come `<id>-youtube.txt` (title, caption, description with chapters) and `<id>-thumb.png`, and with each cut its subtitles (`<id>-youtube.srt`, `<id>-tiktok.srt`); the TikTok cut also leaves `<id>-tiktok-cover.png`. The render panel shows them with copy buttons.
 
 **Voices:** in a directed video, each model speaks its own lines in its own ElevenLabs voice (`shared/voices.ts`), with the director's delivery ("smug", "stunned") as an audio tag. Set `ELEVENLABS_API_KEY` in your environment. Lines are recorded when you render, cached under `data/voice/`, and never recorded twice. The director's plan is limited to an amount of speech that always fits, and nothing is recorded unless the account's remaining balance can be checked and covers it. If any line can't be voiced (no key, balance unknown or too low, an ElevenLabs error), the render stops and says why rather than going out half-silent. Retrying reuses what's already recorded. To render without voices on purpose, tick "Without voices" (or pass `--voices off`). The TikTok cut plays the voices slightly faster.
 

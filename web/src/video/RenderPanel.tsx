@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { VideoPackaging } from "../../../shared/types";
+import type { PublishPlatform, PublishState, PublishVisibility, VideoPackaging } from "../../../shared/types";
+
+const PLATFORMS: PublishPlatform[] = ["youtube", "tiktok"];
 
 /** A labelled block of text with a copy button. */
 function Copyable({ label, text, multiline }: { label: string; text: string; multiline?: boolean }) {
@@ -23,7 +25,7 @@ function Copyable({ label, text, multiline }: { label: string; text: string; mul
   );
 }
 
-/** The upload text minus its TITLE/CAPTION lines: just what goes in YouTube's description box. */
+/** The upload text minus its TITLE/CAPTION/TAGS lines: just what goes in YouTube's description box. */
 const descriptionBody = (d: string) => d.split("DESCRIPTION:\n")[1]?.trim() ?? d.trim();
 
 type Format = "landscape" | "portrait";
@@ -49,6 +51,103 @@ interface RenderState {
   music: string[];
   directed: boolean;
   summonAvailable: boolean;
+  /** The last request to post the videos, and what each platform still needs before it can be posted. */
+  publish: PublishState | null;
+  ready: Record<PublishPlatform, string[]>;
+}
+
+const PLATFORM_LABEL: Record<PublishPlatform, string> = { youtube: "YouTube", tiktok: "TikTok" };
+
+/**
+ * Post the videos from the user's own browser: the click summons a publisher agent (through the T3
+ * webhook), which uploads in YouTube Studio and TikTok Studio and reports each post's link.
+ */
+function PublishPanel({ gameId, state, onState }: { gameId: string; state: RenderState; onState: (s: RenderState) => void }) {
+  const s = state.publish;
+  const posts = s?.posts ?? {};
+  const open = (p: PublishPlatform) => posts[p]?.visibility !== "public";
+  const [platforms, setPlatforms] = useState<PublishPlatform[]>(["youtube", "tiktok"]);
+  const [visibility, setVisibility] = useState<PublishVisibility>("test");
+  const [error, setError] = useState("");
+  const working = s?.status === "requested";
+  // A platform posted as a test can only go public (by changing that post), and a public one is done.
+  const can = (p: PublishPlatform) => open(p) && !state.ready[p].length && !(posts[p] && visibility === "test");
+  const chosen = platforms.filter(can);
+
+  const publish = async () => {
+    setError("");
+    const where = chosen.map((p) => PLATFORM_LABEL[p]).join(" and ");
+    const how = visibility === "public" ? "publicly" : "as a test (YouTube unlisted, TikTok only you)";
+    if (!confirm(`Post this video to ${where} ${how}? A publisher agent uploads it in your Brave browser.`)) return;
+    try {
+      onState(await api<RenderState>(`/api/games/${gameId}/publish`, { platforms: chosen, visibility }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="rp-publish">
+      <h3>📤 Publish</h3>
+      {PLATFORMS.map((p) => {
+        const post = posts[p];
+        return (
+          <div key={p} className="rp-row rp-formats">
+            <label>
+              <input
+                type="checkbox"
+                checked={platforms.includes(p) && can(p)}
+                disabled={working || !can(p)}
+                onChange={() => setPlatforms((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]))}
+              />{" "}
+              {PLATFORM_LABEL[p]}
+            </label>
+            {post ? (
+              <span className="rp-ok">
+                ✓ {post.visibility === "public" ? "Public" : "Test post"}
+                {post.url && (
+                  <>
+                    {" · "}
+                    <a href={post.url} target="_blank" rel="noreferrer">
+                      open
+                    </a>
+                  </>
+                )}
+              </span>
+            ) : state.ready[p].length ? (
+              <span className="rp-muted">Needs {state.ready[p].join(", ")}</span>
+            ) : null}
+          </div>
+        );
+      })}
+      <div className="rp-row">
+        <label className="rp-label">Visibility</label>
+        <select value={visibility} onChange={(e) => setVisibility(e.target.value as PublishVisibility)} disabled={working}>
+          <option value="test">Test: YouTube unlisted, TikTok only you</option>
+          <option value="public">Public</option>
+        </select>
+      </div>
+      <button className="rp-go" onClick={publish} disabled={working || !chosen.length || !state.summonAvailable}>
+        {working ? "Publishing…" : visibility === "public" && chosen.some((p) => posts[p]) ? "Make public" : "Publish"}
+      </button>
+      {!state.summonAvailable && <div className="rp-muted">Publishing needs the T3 webhook (data/webhook.json).</div>}
+      {working && <div className="rp-muted">A publisher is uploading in your Brave browser. This takes a few minutes.</div>}
+      {s?.errors &&
+        Object.entries(s.errors).map(([p, e]) => (
+          <div key={p} className="rp-error">
+            {PLATFORM_LABEL[p as PublishPlatform]}: {e}
+          </div>
+        ))}
+      {Object.entries(posts).map(([p, post]) =>
+        post?.note ? (
+          <div key={p} className="rp-muted">
+            {PLATFORM_LABEL[p as PublishPlatform]}: {post.note}
+          </div>
+        ) : null,
+      )}
+      {error && <div className="rp-error">{error}</div>}
+    </div>
+  );
 }
 
 const FORMAT_LABEL: Record<Format, string> = { landscape: "YouTube 16:9", portrait: "TikTok 9:16" };
@@ -242,6 +341,8 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
           )}
         </div>
       )}
+
+      {state?.packaging && !!state.videos.length && <PublishPanel gameId={gameId} state={state} onState={take} />}
     </div>
   );
 }

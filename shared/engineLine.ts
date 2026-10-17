@@ -11,8 +11,9 @@ import { tally, trade, walk, type Tally } from "./why";
  *   went another way: the punishment of a bad move that the reply didn't find, or the point of a
  *   brilliant or great move that never got played out. When the game follows the engine, the real moves
  *   already show it.
- * A line is only on offer when it shows something concrete: a mate, a promotion, or at least MIN_GAIN
- * pawns of material.
+ * A line is only on offer when it shows something concrete: a mate, a promotion, at least MIN_GAIN pawns
+ * of material, or (when no material changes hands) a winning chance of BIG_SWING points kept or thrown
+ * away: the pawn ending a king step loses, the won position a quiet push gives back.
  */
 
 export type LineKind = "instead" | "after";
@@ -72,18 +73,33 @@ function prize(t: Tally, side: Color, form: "bare" | "past" | "present", mate?: 
   return `${win} ${won || "material"}`;
 }
 
-/** Moves that went wrong: what the engine wanted instead, or how they could have been punished. */
-const WRONG: Classification[] = ["mistake", "miss", "blunder"];
+/**
+ * Moves that went wrong: what the engine wanted instead, or how they could have been punished. An
+ * inaccuracy counts too (an unsound sacrifice often rates only that), but like any line it still has to
+ * show something concrete.
+ */
+const WRONG: Classification[] = ["inaccuracy", "mistake", "miss", "blunder"];
 /** Moves whose point a line can show, when the game didn't play it out. */
 const STRONG: Classification[] = ["brilliant", "great"];
 /** Material a line has to win to be worth playing, in pawns (a mate or a promotion always is). */
 const MIN_GAIN = 2;
+/** Without material, the winning chance (in points of win%) a line has to keep or give for it to be worth playing. */
+const BIG_SWING = 25;
+
+/** What a winning chance amounts to, in words: "a winning position", "the balance". */
+function standing(win: number): string {
+  if (win >= 80) return "a winning position";
+  if (win >= 65) return "a clear advantage";
+  if (win >= 55) return "the better game";
+  if (win >= 40) return "the balance";
+  return "drawing chances";
+}
 
 /** The line of a kind for move i, or null when there's none worth showing. */
 export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null {
   const m = g.moves[i];
   const cls = m?.analysis?.classification;
-  if (!m || !cls) return null;
+  if (!m || !cls || m.analysis!.unavailable) return null;
   const variant = variantOf(g);
   const mover = m.color;
   const opp: Color = mover === "w" ? "b" : "w";
@@ -120,7 +136,13 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
     if (actualMates) return null;
     if (actualMated) return line(`${who} avoids the mate ${m.san} allows`, `${first} would have avoided mate.`, 0);
     const swing = t.net - tA.net;
-    if (swing < MIN_GAIN) return null;
+    if (swing < MIN_GAIN) {
+      // No material in it: worth showing only when the move threw away a big share of the winning chances.
+      const kept = m.analysis!.winBefore;
+      const got = m.analysis!.winAfter;
+      if (kept - got < BIG_SWING) return null;
+      return line(`${who} keeps ${standing(kept)} (${Math.round(kept)}% instead of ${Math.round(got)}%)`, `${first} would have kept ${standing(kept)}.`, 0);
+    }
     if (t.net >= MIN_GAIN || t.promoted.includes(mover)) return line(`${who} ${prize(t, mover, "present")} (+${t.net})`, `${first} would have ${prize(t, mover, "past")}.`, swing);
     const lost = trade(tA.lost, tA.won) || "material";
     return line(`${who} doesn't lose ${lost}, as ${m.san} does (${swing} pawns better)`, `${first} would have avoided losing ${lost}.`, swing);
@@ -139,7 +161,15 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
   if (mated && winner !== side) return null;
   // Counted from before the move, so taking back what the move just took isn't a gain.
   const t = tally([...played, ...moves], side, true);
-  if (!mated && t.net < MIN_GAIN && !t.promoted.includes(side)) return null;
+  if (!mated && t.net < MIN_GAIN && !t.promoted.includes(side)) {
+    // No material in it: a punishment is still worth showing when the reply let a big winning chance go.
+    const reply = g.moves[i + 1]?.analysis;
+    if (side !== opp || !reply) return null;
+    const could = 100 - m.analysis!.winAfter;
+    if (could - reply.winAfter < BIG_SWING) return null;
+    const fact = `${name(opp)} reaches ${standing(could)} (${Math.round(could)}% instead of ${Math.round(reply.winAfter)}%)`;
+    return { kind, i, fen, moves, for: side, net: 0, fact, caption: `${name(opp)} could have reached ${standing(could)}.` };
+  }
   const mate = mated ? mateIn(side) : undefined;
 
   const fact = `${name(side)} ${prize(t, side, "present", mate)}${mate ? "" : ` (+${t.net})`}`;

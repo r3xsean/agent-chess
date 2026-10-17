@@ -181,6 +181,8 @@ export interface Game {
   video?: VideoPlan;
   /** How many plans were thrown away for a new director (each new director is a new task). */
   videoRedos?: number;
+  /** Posting the rendered videos to YouTube and TikTok (server/publish.ts). */
+  publish?: PublishState;
   interviewsCompleteAt: number | null;
   /** On the public mirror: when each ply (and "end", the result) happened by the mirror's clock — prediction cut-offs. */
   mirrorCutoffs?: Record<string, number>;
@@ -215,6 +217,23 @@ export interface VideoMoment {
    * why the side it favours is better at its end (absent: the line's own plain fact).
    */
   line?: { kind: "instead" | "after"; caption?: string };
+  /** The moves and squares the quote names, drawn on the board as it's said. */
+  marks?: ThoughtMark[];
+}
+
+/**
+ * One beat of a player's calculation, drawn on the board while their quote is spoken, the way a streamer
+ * draws arrows: it appears as the voice reaches its words and clears when the next mark (or the move)
+ * comes. `word` is an index into the quote's words (split on whitespace), so it can be timed to the voice.
+ */
+export interface ThoughtMark {
+  /** The words of the quote it goes with, as the director wrote them. */
+  at: string;
+  word: number;
+  /** The moves named, in the colour of the side making each, each drawn as its own words are said. */
+  arrows: { san: string; from: string; to: string; color: Color; word: number }[];
+  /** Squares named, as rings. */
+  rings: { sq: string; word: number }[];
 }
 
 /** The cold open: the payoff moment, played first, before "how did we get here?". */
@@ -224,6 +243,7 @@ export interface VideoHook {
   /** Verbatim excerpt of that move's commentary (omitted for a human's move). */
   quote?: string;
   delivery?: string;
+  marks?: ThoughtMark[];
   /** The on-screen hook, a dozen words at most ("Sonnet thinks it's winning. It's mate in one."). */
   caption: string;
 }
@@ -243,6 +263,32 @@ export interface VideoPackaging {
   caption: string;
   /** The thumbnail: the position after this move, with a few words of big text. */
   thumbnail: { ply: number; text: string };
+}
+
+export type PublishPlatform = "youtube" | "tiktok";
+/** "test": YouTube unlisted and TikTok only-me, to check a post before anyone sees it. */
+export type PublishVisibility = "public" | "test";
+
+export interface PublishedPost {
+  /** The post's link (null when the publisher couldn't find it, e.g. TikTok still processing). */
+  url: string | null;
+  visibility: PublishVisibility;
+  at: number;
+  note?: string;
+}
+
+/** One request to post a game's videos, carried out by a publisher agent in the user's browser. */
+export interface PublishState {
+  platforms: PublishPlatform[];
+  visibility: PublishVisibility;
+  status: "requested" | "done" | "failed";
+  requestedAt: number;
+  /** Counts the requests, so each one's publisher is a new task. */
+  attempt: number;
+  /** Every post made so far, kept across requests: a platform posted once is never posted again. */
+  posts: Partial<Record<PublishPlatform, PublishedPost>>;
+  /** What went wrong, per platform, in the last request. */
+  errors?: Partial<Record<PublishPlatform, string>>;
 }
 
 export interface VideoPlan {

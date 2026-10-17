@@ -48,19 +48,57 @@ export const voiceAvailable = () => !!apiKey();
 /** What gets sent for a line: its delivery as an audio tag, then the words with chess notation spoken out. */
 export const spokenText = (text: string, delivery?: string) => `${delivery ? `[${delivery}] ` : ""}${speakable(text)}`;
 
-export async function synthesize(voiceId: string, text: string): Promise<Buffer> {
-  const r = await fetch(`${API}/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
-    method: "POST",
-    headers: { "xi-api-key": apiKey(), "Content-Type": "application/json" },
-    body: JSON.stringify({ text, model_id: TTS_MODEL }),
-    // A line takes a few seconds; a hung connection mustn't hold the render queue forever.
-    signal: AbortSignal.timeout(90_000),
-  });
-  if (!r.ok) {
-    const detail = await r.text().catch(() => "");
-    throw new Error(`ElevenLabs ${r.status}: ${detail.slice(0, 300)}`);
+/**
+ * One line recorded, with when each of its spoken words starts (the delivery tag left out), so the
+ * board can draw what a player names as they say it. Asked of the timestamped endpoint; should that be
+ * refused, the line is recorded without timings (the arrows are then spread over the clip instead).
+ */
+export async function synthesize(voiceId: string, text: string): Promise<{ audio: Buffer; words?: number[] }> {
+  const call = (timed: boolean) =>
+    fetch(`${API}/text-to-speech/${voiceId}${timed ? "/with-timestamps" : ""}?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: { "xi-api-key": apiKey(), "Content-Type": "application/json" },
+      body: JSON.stringify({ text, model_id: TTS_MODEL }),
+      // A line takes a few seconds; a hung connection mustn't hold the render queue forever.
+      signal: AbortSignal.timeout(90_000),
+    });
+  const fail = async (r: Response) => new Error(`ElevenLabs ${r.status}: ${(await r.text().catch(() => "")).slice(0, 300)}`);
+  const r = await call(true);
+  if (r.ok) {
+    const body = (await r.json()) as { audio_base64?: unknown; alignment?: { characters?: unknown; character_start_times_seconds?: unknown } };
+    if (typeof body.audio_base64 !== "string" || !body.audio_base64) throw new Error("ElevenLabs sent no audio.");
+    return { audio: Buffer.from(body.audio_base64, "base64"), words: wordStarts(body.alignment?.characters, body.alignment?.character_start_times_seconds) };
   }
-  return Buffer.from(await r.arrayBuffer());
+  // Refused requests aren't charged: only a request the timestamped endpoint can't take is tried plain.
+  if (![400, 404, 422].includes(r.status)) throw await fail(r);
+  console.warn(`ElevenLabs refused a timestamped recording (${r.status}); recording without word timings.`);
+  const plain = await call(false);
+  if (!plain.ok) throw await fail(plain);
+  return { audio: Buffer.from(await plain.arrayBuffer()) };
+}
+
+/** When each word of the recorded text starts, from the per-character alignment, without a leading "[delivery]" tag. */
+function wordStarts(chars: unknown, starts: unknown): number[] | undefined {
+  if (!Array.isArray(chars) || !Array.isArray(starts) || chars.length !== starts.length || !chars.length) return undefined;
+  const ch = chars.map((c) => (typeof c === "string" ? c : " "));
+  let i = 0;
+  while (i < ch.length && !ch[i].trim()) i++;
+  if (ch[i] === "[") {
+    const close = ch.indexOf("]", i);
+    if (close >= 0) i = close + 1;
+  }
+  const out: number[] = [];
+  let inWord = false;
+  for (; i < ch.length; i++) {
+    if (!ch[i].trim()) inWord = false;
+    else if (!inWord) {
+      const t = Number(starts[i]);
+      if (!Number.isFinite(t)) return undefined;
+      out.push(Math.round(t * 1000) / 1000);
+      inWord = true;
+    }
+  }
+  return out.length ? out : undefined;
 }
 
 /** Whether ffprobe runs (checked before anything is paid for: every clip's length comes from it). */
@@ -84,6 +122,18 @@ async function creditsLeft(): Promise<number | null> {
     return typeof s.character_limit === "number" && typeof s.character_count === "number" && Number.isFinite(left) ? left : null;
   } catch {
     return null;
+  }
+}
+
+/** Where a clip's word timings are kept, next to it (clips recorded before timings have none). */
+const wordsFile = (clip: string) => clip.replace(/\.mp3$/, ".words.json");
+
+function readWords(clip: string): number[] | undefined {
+  try {
+    const w = JSON.parse(readFileSync(wordsFile(clip), "utf8"));
+    return Array.isArray(w) && w.length && w.every((t) => typeof t === "number" && Number.isFinite(t)) ? w : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -147,21 +197,23 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
     if (!probeAvailable()) return { ...result, silent: jobs.length, reason: "ffprobe isn't available (it measures each recorded line)." };
 
     // One entry per distinct clip: a hook that's also a moment is one recording.
-    const clips = new Map<string, { voiceId: string; spoken: string; file: string; url: string; dur?: number }>();
+    const clips = new Map<string, { voiceId: string; spoken: string; file: string; url: string; dur?: number; words?: number[] }>();
     for (const j of jobs) clips.set(j.hash, { voiceId: j.voiceId, spoken: j.spoken, file: j.file, url: j.url });
     for (const clip of clips.values()) {
       if (!existsSync(clip.file)) continue;
       try {
         clip.dur = audioSeconds(clip.file);
+        clip.words = readWords(clip.file);
       } catch {
         // An unreadable clip (a cut-off download): drop it, and count it as missing.
         rmSync(clip.file, { force: true });
+        rmSync(wordsFile(clip.file), { force: true });
       }
     }
     const publish = () => {
       for (const j of jobs) {
         const clip = clips.get(j.hash)!;
-        if (clip.dur !== undefined) manifest.clips[j.id] = { url: j.url, dur: Math.round(clip.dur * 1000) / 1000, sig: j.sig };
+        if (clip.dur !== undefined) manifest.clips[j.id] = { url: j.url, dur: Math.round(clip.dur * 1000) / 1000, sig: j.sig, ...(clip.words && { words: clip.words }) };
       }
     };
     publish();
@@ -189,13 +241,18 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
         break;
       }
       result.chars += clip.spoken.length;
-      writeFileSync(clip.file, await synthesize(clip.voiceId, clip.spoken));
+      const { audio, words } = await synthesize(clip.voiceId, clip.spoken);
+      // The timings first: an mp3 on disk is taken as finished, timings and all.
+      if (words) writeFileSync(wordsFile(clip.file), JSON.stringify(words));
+      writeFileSync(clip.file, audio);
       try {
         clip.dur = audioSeconds(clip.file);
+        clip.words = words;
         result.recorded++;
       } catch {
         // Paid for but unreadable: not retried in this run (no second charge); the next render records it.
         rmSync(clip.file, { force: true });
+        rmSync(wordsFile(clip.file), { force: true });
         result.reason ??= "A recording came back unreadable; render again to re-record it.";
       }
       publish();

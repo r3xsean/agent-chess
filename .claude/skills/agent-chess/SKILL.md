@@ -54,9 +54,17 @@ After a game, its broadcaster plans the replay video (which moments to slow down
 2. Delegate that task exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). No `/launched` record is needed. A redo's task has its own `clientRequestId` (`<id>-director-redo<n>`), so it's a new task, not the earlier director again.
 3. When it finishes, check `GET /api/games/<id>` has a `video` field. If not, re-delegate once with the task's `clientRequestId` plus `-r2` (a model's safety filter occasionally refuses a long brief; a second try usually works). The website renders on its own once the plan is saved.
 
-## 6. When you're done
+## 6. Publishing
 
-Once the work is complete — every seat of the game done, the tournament finished, or the director's plan saved — tidy up so the threads leave the inbox:
+The video page's **Publish** button (webhook action `publish`) posts a finished game's videos to YouTube and/or TikTok. A publisher agent uploads them in the user's own Brave browser, where YouTube Studio and TikTok Studio are logged in. The click is the user's go-ahead, so don't ask again.
+
+1. `GET /api/games/<id>/publish-launch` with the admin token → `{ tasks: [one task] }`. Delegate it exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). Each request has its own `clientRequestId` (`<id>-publish<n>`), so a retry is a new task. If this returns an error ("Nothing is waiting to be published"), another run already handled it: settle and stop.
+2. When the publisher finishes, find the line starting `PUBLISH_RESULT ` at the end of its result and record the JSON after it: `POST /api/games/<id>/published` with body `{"results": <that JSON>}` and the admin token. If the line is missing, continue the publisher (`t3_thread_send` to its `childThreadId`) asking for its PUBLISH_RESULT line. **Never** re-delegate a publisher that may have posted: a second upload would be a duplicate post. If it can't answer, record `{"results":{"youtube":{"error":"…"},…}}` saying what you know, for each platform asked.
+3. Tell the user what was posted, with the links.
+
+## 7. When you're done
+
+Once the work is complete — every seat of the game done, the tournament finished, the director's plan saved or the publisher's posts recorded — tidy up so the threads leave the inbox:
 - Settle each finished child task's thread: `t3_thread_organize` with `action:"settle"` and its `childThreadId`.
 - Then settle your own thread as the very last step: `t3_thread_organize` with `action:"settle"` and no `threadId` (it takes effect when your turn ends).
 Don't settle while anything still needs you (a seat running, failed or stalled), and leave threads the user is reading alone if they were not started by a webhook.

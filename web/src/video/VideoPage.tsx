@@ -15,7 +15,7 @@ import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SfxCue, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
@@ -170,6 +170,8 @@ interface BoardView {
   check?: string;
   badge?: { sq: string; c: Classification; s: number };
   arrow?: [string, string];
+  /** What a thinking player names, drawn as it's said: arrows (the mover's own moves, or the opponent's) and rings, each p of the way drawn. */
+  marks?: { arrows: { from: string; to: string; own: boolean; p: number }[]; rings: { sq: string; p: number }[] };
   illegal?: { attempt: string; sq?: string; color: Color; p: number };
   /** A marker on a king: the draw offer or the white flag. */
   mark?: { sq: string; emoji: string; s: number };
@@ -188,7 +190,8 @@ interface View {
   callout?: { label: string; cls?: Classification; evalText: string; bestWas?: string; status?: boolean; sub?: string; took?: string; engine?: boolean };
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
-  thought?: { text: string; color: Color; selfEval: string; fade: number };
+  /** `side`: the edge of the board the bubble covers; `away`: not its speaker's edge (so no tail to their card). */
+  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom"; away?: boolean };
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -293,6 +296,18 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
   return out;
 }
 
+/** How many of a thought's arrows and rings reach the three ranks a bubble at that edge covers (White at the bottom). */
+function underBubble(marks: SceneMark[], side: "top" | "bottom"): number {
+  const covered = (lo: number, hi: number) => (side === "bottom" ? lo <= 3 : hi >= 6);
+  const rank = (sq: string) => Number(sq[1]);
+  let n = 0;
+  for (const mk of marks) {
+    for (const a of mk.arrows) if (covered(Math.min(rank(a.from), rank(a.to)), Math.max(rank(a.from), rank(a.to)))) n++;
+    for (const r of mk.rings) if (covered(rank(r.sq), rank(r.sq))) n++;
+  }
+  return n;
+}
+
 /** Worth calling out: the mover is far from the truth, or has just come back to it. */
 const telling = (b: Belief | null) => !!b && (!!b.state || b.change === "realizes");
 
@@ -343,8 +358,22 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
       evalW: r3(score ? winPercentWhite(score) : 50),
       evalText: formatScore(score),
     };
+    // Only the mark being said is up: the board clears for each new one.
+    const mk = s.marks?.find((x) => x.start <= local && local < x.end);
+    if (mk) {
+      const drawn = (at: number) => r3(ease(clamp01((local - at) / 0.25)));
+      v.board.marks = {
+        arrows: mk.arrows.filter((a) => a.at <= local).map((a) => ({ from: a.from, to: a.to, own: a.color === m.color, p: drawn(a.at) })),
+        rings: mk.rings.filter((r) => r.at <= local).map((r) => ({ sq: r.sq, p: drawn(r.at) })),
+      };
+    }
     v.callout = { label: `${name} is thinking…`, evalText: formatScore(score), status: true };
-    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)) };
+    // The bubble covers the edge of the board by its speaker's card. When the thought's marks are drawn
+    // there and the far edge is clearer, it sits at the far edge for the whole thought.
+    const home = m.color === "b" ? "top" : "bottom";
+    const away = home === "top" ? "bottom" : "top";
+    const side = s.marks && underBubble(s.marks, home) > underBubble(s.marks, away) ? away : home;
+    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side, away: side !== home };
     // While they think, the bar already shows where they believe their move leaves them; the engine's
     // level only moves once it lands.
     v.focus = { i: s.i, label: telling(prep.belief[s.i]) };
@@ -570,7 +599,13 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
           />
         );
       })}
-      {b.arrow && <Arrow from={at(b.arrow[0])} to={at(b.arrow[1])} />}
+      {(b.arrow || b.marks) && (
+        <svg className="v-arrows" viewBox="0 0 8 8">
+          {b.marks?.rings.map((r) => <Ring key={r.sq} at={at(r.sq)} p={r.p} />)}
+          {b.marks?.arrows.map((a, k) => <Arrow key={k} from={at(a.from)} to={at(a.to)} color={a.own ? OWN_ARROW : OPP_ARROW} p={a.p} />)}
+          {b.arrow && <Arrow from={at(b.arrow[0])} to={at(b.arrow[1])} color={OWN_ARROW} />}
+        </svg>
+      )}
       {b.mark && (
         <div
           className="v-mark"
@@ -597,26 +632,40 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
   );
 }
 
-function Arrow({ from, to }: { from: { x: number; y: number }; to: { x: number; y: number } }) {
+/** Arrow colours, as on lichess: green for the player's own moves (and the engine's pick), red for the opponent's; rings in amber. */
+const OWN_ARROW = "#15781b";
+const OPP_ARROW = "#b0302a";
+const RING = "#e68f00";
+
+type XY = { x: number; y: number };
+
+/** An arrow between two squares (in board units), drawn from its start p of the way (0 → 1). */
+function Arrow({ from, to, color, p = 1 }: { from: XY; to: XY; color: string; p?: number }) {
   const x1 = from.x + 0.5;
   const y1 = from.y + 0.5;
-  const x2 = to.x + 0.5;
-  const y2 = to.y + 0.5;
-  const len = Math.hypot(x2 - x1, y2 - y1);
-  const ux = (x2 - x1) / len;
-  const uy = (y2 - y1) / len;
-  const head = 0.42;
+  const full = Math.hypot(to.x - from.x, to.y - from.y);
+  const len = full * p;
+  if (!full || len < 0.05) return null;
+  const ux = (to.x - from.x) / full;
+  const uy = (to.y - from.y) / full;
+  const x2 = x1 + ux * len;
+  const y2 = y1 + uy * len;
+  // A short arrow, still growing, gets a smaller head.
+  const head = Math.min(0.42, len * 0.6);
   const bx = x2 - ux * head;
   const by = y2 - uy * head;
-  const w = 0.25;
+  const w = (0.25 * head) / 0.42;
   return (
-    <svg className="v-arrows" viewBox="0 0 8 8">
-      <g opacity="0.85">
-        <line x1={x1} y1={y1} x2={bx} y2={by} stroke="#15781b" strokeWidth={0.17} />
-        <polygon points={`${x2},${y2} ${bx - uy * w},${by + ux * w} ${bx + uy * w},${by - ux * w}`} fill="#15781b" />
-      </g>
-    </svg>
+    <g opacity="0.85">
+      <line x1={x1} y1={y1} x2={bx} y2={by} stroke={color} strokeWidth={0.17} />
+      <polygon points={`${x2},${y2} ${bx - uy * w},${by + ux * w} ${bx + uy * w},${by - ux * w}`} fill={color} />
+    </g>
   );
+}
+
+/** A ring around a square, settling in from slightly smaller as it's drawn (p: 0 → 1). */
+function Ring({ at, p }: { at: XY; p: number }) {
+  return <circle cx={at.x + 0.5} cy={at.y + 0.5} r={0.44 * (0.75 + 0.25 * p)} fill="none" stroke={RING} strokeWidth={0.07} opacity={0.9 * p} />;
 }
 
 /** A player's own evaluation on the bar: White's win% as they see it, in their colour. */
@@ -787,7 +836,7 @@ function ThoughtLabel({ g, t }: { g: Game; t: NonNullable<View["thought"]> }) {
 /** The mover's thinking as a speech bubble over the board, coming out of their player card. */
 function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]>; size: number }) {
   return (
-    <div className={`v-bubble ${t.color === "b" ? "from-top" : "from-bottom"}`} style={{ opacity: t.fade }}>
+    <div className={`v-bubble ${(t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"} ${t.away ? "away" : ""}`} style={{ opacity: t.fade }}>
       <ThoughtLabel g={g} t={t} />
       <div className="v-bubble-text" style={{ fontSize: fitFont(size, t.text.length) }}>
         {t.text}

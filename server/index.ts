@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, Tournament } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, Tournament } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
@@ -36,9 +36,11 @@ import { directorLaunch, launchSpec } from "./prompts";
 import { directorBrief, needsDirection, validatePlan } from "./director";
 import { directorDone, jobsFor, MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
 import { rivalry } from "./rivalry";
+import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
 import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
+import { publishLaunch, publishState, recordPublished, requestPublish } from "./publish";
 import { gameToPgn } from "./pgn";
 import { loadOpenings } from "./openings";
 import { Engine, SupersededError } from "./engine";
@@ -48,6 +50,9 @@ import { createViewer, crowd, flushPredictions, leaderboard, predict, Prediction
 import { acceptSeq, ingest, mirrorPublicStatus, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
+// Videos rendered before games had their own folders move into them.
+const movedVideos = migrateFlatVideos();
+if (movedVideos) console.log(`[videos] moved ${movedVideos} file${movedVideos === 1 ? "" : "s"} into per-game folders`);
 setGameSource(() => games.values());
 // The public mirror only shows what the local server sends it: no engine, no agents, no clock.
 if (!PUBLIC_MODE) startLocal();
@@ -94,7 +99,7 @@ if (PUBLIC_MODE) {
 // Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
-const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/publish-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
@@ -947,11 +952,14 @@ const renderState = (id: string) => {
   return {
     jobs: jobsFor(id),
     videos: videosFor(id),
+    // The game's folder under data/videos (its name only), where a render by hand puts its files.
+    folder: gameFolder(id),
     ...packagingFor(id),
     packaging: g.video?.packaging ?? null,
     music: musicTracks(),
     directed: !!g.video,
     summonAvailable: summonAvailable(),
+    ...publishState(g),
   };
 };
 app.get("/api/games/:id/render", handle((req) => renderState(String(req.params.id))));
@@ -973,13 +981,57 @@ app.post(
     return renderState(id);
   }),
 );
+// "Publish" on the video page: summons a publisher (through the T3 webhook) to post the videos from the user's browser.
+app.post(
+  "/api/games/:id/publish",
+  localOnly,
+  handle(async (req) => {
+    const g = getGame(String(req.params.id));
+    const want = req.body?.platforms;
+    const platforms = (Array.isArray(want) ? want : []).filter((p: string): p is PublishPlatform => p === "youtube" || p === "tiktok");
+    const visibility = req.body?.visibility;
+    if (visibility !== "public" && visibility !== "test") throw new ActionError('visibility must be "public" or "test".');
+    await requestPublish(g, platforms, visibility).catch((e) => {
+      throw new ActionError(e.message);
+    });
+    return renderState(g.id);
+  }),
+);
+// The publisher task for the orchestrator to delegate.
+app.get(
+  "/api/games/:id/publish-launch",
+  handle((req) => {
+    requireAdmin(req);
+    try {
+      return publishLaunch(getGame(String(req.params.id)));
+    } catch (e) {
+      throw new ActionError((e as Error).message);
+    }
+  }),
+);
+// The orchestrator records what the publisher reported: { results: { youtube: { url } , tiktok: { error } } }.
+app.post(
+  "/api/games/:id/published",
+  localOnly,
+  handle((req) => {
+    requireAdmin(req);
+    const results = req.body?.results;
+    if (!results || typeof results !== "object") throw new ActionError("Send { results: { youtube?: { url, note? } | { error }, tiktok?: … } }.");
+    try {
+      return recordPublished(getGame(String(req.params.id)), results);
+    } catch (e) {
+      throw new ActionError((e as Error).message);
+    }
+  }),
+);
 // Show a finished video in Explorer / Finder.
 app.post(
   "/api/games/:id/videos/open",
   localOnly,
   handle((req) => {
-    const v = videosFor(String(req.params.id))[0];
-    const target = v ? path.join(VIDEO_DIR, v.file) : VIDEO_DIR;
+    const id = String(req.params.id);
+    const v = videosFor(id)[0];
+    const target = v ? videoPath(id, v.kind) : existsSync(gameVideoDir(id)) ? gameVideoDir(id) : VIDEO_DIR;
     const [cmd, args] =
       process.platform === "win32" ? ["explorer.exe", [`/select,${target}`]] : process.platform === "darwin" ? ["open", ["-R", target]] : ["xdg-open", [path.dirname(target)]];
     spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();

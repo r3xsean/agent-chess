@@ -307,3 +307,28 @@ export function isBrilliantMove(ctx: MoveContext): boolean {
 
   return unsafe.length > 0;
 }
+
+/* ------------------------------ Agent Chess additions ------------------------------ */
+
+/**
+ * The pieces (knight or bigger) a move leaves en prise that weren't before: a sacrifice when the engine
+ * still likes the move, a hung piece when it doesn't. Empty when the move can't be replayed here.
+ */
+export function leftEnPrise(fenBefore: string, uci: string): BoardPiece[] {
+  const before = tryBoard(fenBefore);
+  const after = tryBoard(fenBefore);
+  if (!before || !after) return [];
+  let played: Move;
+  try {
+    played = after.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+  } catch {
+    return [];
+  }
+  const mover = played.color;
+  const wasUnsafe = unsafePieces(before, mover);
+  // A piece that was already hanging and just moved to another unsafe square wasn't given now.
+  const movedWasUnsafe = wasUnsafe.some((p) => p.square === played.from);
+  return unsafePieces(after, mover, played).filter((p) =>
+    p.square === played.to ? !movedWasUnsafe : !wasUnsafe.some((w) => w.square === p.square && w.type === p.type),
+  );
+}

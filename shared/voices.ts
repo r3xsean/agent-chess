@@ -33,7 +33,11 @@ export function voiceFamily(model: string): VoiceFamily | null {
   return gpt ? (gpt[1] as VoiceFamily) : null;
 }
 
-/** The recorded lines of a game, by line id (see shared/videoLines.ts): where each clip is, how long it runs, and what it was made from. */
+/**
+ * The recorded lines of a game, by line id (see shared/videoLines.ts): where each clip is, how long it
+ * runs, and what it was made from. `words`: when each spoken word starts, in seconds (the words of
+ * `speakable(text)`, without the delivery tag), for clips recorded with timestamps.
+ */
 export interface VoiceManifest {
-  clips: Record<string, { url: string; dur: number; sig: string }>;
+  clips: Record<string, { url: string; dur: number; sig: string; words?: number[] }>;
 }

@@ -986,6 +986,10 @@
   bottom: -34px;
   border-top-color: rgba(250, 249, 245, 0.96);
 }
+/* Moved off its speaker's edge (to keep the marks in view): no tail pointing at the wrong card. */
+.v-bubble.away::after {
+  display: none;
+}
 .v-bubble .v-thought-label {
   filter: brightness(0.75);
   margin-bottom: 6px;
@@ -1288,7 +1292,8 @@
   color: #81b64c;
   font-weight: 700;
 }
-.rp-packaging {
+.rp-packaging,
+.rp-publish {
   display: flex;
   flex-direction: column;
   gap: 10px;

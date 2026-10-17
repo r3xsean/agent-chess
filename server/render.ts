@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { DATA, ROOT } from "./paths";
+import { ROOT } from "./paths";
 import { games, saveGameNow } from "./store";
 import { touch } from "./game";
 import type { VideoPlan } from "../shared/types";
 import { needsDirection } from "./director";
 import { summonAvailable, triggerOrchestrator } from "./summon";
 import { voiceGame } from "./voice";
+import { gameVideoDir, videoPath, videoUrl, VIDEO_DIR } from "./videoFiles";
+
+export { VIDEO_DIR };
 
 /*
  * Video renders started from the website. One render runs at a time; the rest queue. A game with no
@@ -36,7 +39,6 @@ export interface RenderJob {
   finishedAt?: number;
 }
 
-export const VIDEO_DIR = path.join(DATA, "videos");
 export const MUSIC_DIR = path.join(ROOT, "vendor", "music");
 const SCRIPT = path.join(ROOT, "scripts", "render-video.mjs");
 /** How long to wait for a summoned director before rendering with the automatic picks. */
@@ -56,23 +58,22 @@ export function musicTracks(): string[] {
 
 /** What came with the YouTube render: the upload text (title, caption, chapters) and the thumbnail. */
 export function packagingFor(gameId: string) {
-  const txt = path.join(VIDEO_DIR, `${gameId}-youtube.txt`);
-  const thumb = path.join(VIDEO_DIR, `${gameId}-thumb.png`);
+  const txt = videoPath(gameId, "uploadText");
+  const thumb = videoPath(gameId, "thumbnail");
   return {
     description: existsSync(txt) ? readFileSync(txt, "utf8") : null,
-    thumbUrl: existsSync(thumb) ? `/videos/${gameId}-thumb.png?t=${Math.round(statSync(thumb).mtimeMs)}` : null,
+    thumbUrl: existsSync(thumb) ? `${videoUrl(gameId, "thumbnail")}?t=${Math.round(statSync(thumb).mtimeMs)}` : null,
   };
 }
 
 /** The finished videos of a game, newest first. */
 export function videosFor(gameId: string) {
-  if (!existsSync(VIDEO_DIR)) return [];
   return (["youtube", "tiktok"] as const)
-    .map((kind) => ({ kind, file: `${gameId}-${kind}.mp4` }))
-    .filter((v) => existsSync(path.join(VIDEO_DIR, v.file)))
+    .map((kind) => ({ kind, path: videoPath(gameId, kind) }))
+    .filter((v) => existsSync(v.path))
     .map((v) => {
-      const st = statSync(path.join(VIDEO_DIR, v.file));
-      return { ...v, url: `/videos/${v.file}`, bytes: st.size, at: st.mtimeMs };
+      const st = statSync(v.path);
+      return { kind: v.kind, file: path.basename(v.path), url: videoUrl(gameId, v.kind), bytes: st.size, at: st.mtimeMs };
     });
 }
 
@@ -184,8 +185,8 @@ async function run(job: RenderJob): Promise<void> {
 function renderFrames(job: RenderJob): Promise<void> {
   return new Promise((resolve) => {
     const format = job.formats.length === 2 ? "both" : job.formats[0];
-    // Into the folder the site serves and lists videos from (the data folder can live anywhere).
-    const args = [SCRIPT, job.gameId, "--format", format, "--out", VIDEO_DIR];
+    // Into the game's own folder, under the one the site serves and lists videos from (the data folder can live anywhere).
+    const args = [SCRIPT, job.gameId, "--format", format, "--out", gameVideoDir(job.gameId, true)];
     if (job.music) args.push("--music", path.join(MUSIC_DIR, job.music));
     if (!job.voices) args.push("--voices", "off");
     update(job, { status: "rendering", stage: "Starting the renderer…", progress: 0 });

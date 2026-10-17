@@ -1,5 +1,6 @@
-import type { Classification, Color, Game } from "../../../shared/types";
+import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
+import { spokenWord } from "../../../shared/thoughtMarks";
 import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
 import { shownLine, type LineKind } from "../../../shared/engineLine";
 
@@ -13,8 +14,8 @@ export const FRAME: Record<Format, { w: number; h: number }> = {
 export type Scene = { start: number; dur: number; voice?: { url: string; rate: number } } & (
   | { kind: "versus" }
   | { kind: "interview"; when: "pre" | "post"; color: Color; text: string }
-  /** `hook`: this is the cold open, with its on-screen caption. */
-  | { kind: "think"; i: number; thought: string; hook?: string }
+  /** `hook`: this is the cold open, with its on-screen caption. `marks`: what the thought names, drawn as it's said. */
+  | { kind: "think"; i: number; thought: string; hook?: string; marks?: SceneMark[] }
   /** Attempt n of move i, made before it. */
   | { kind: "illegal"; i: number; n: number; attempt: string }
   | { kind: "move"; i: number; anim: number; key: boolean; hook?: string }
@@ -30,6 +31,17 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "result" }
   | { kind: "end" }
 );
+
+/**
+ * One of the director's marks during a thought (see ThoughtMark), in seconds into the scene: up from
+ * `start` until `end` (the next mark, or the move), each arrow and ring from when its words are said.
+ */
+export interface SceneMark {
+  start: number;
+  end: number;
+  arrows: { from: string; to: string; color: Color; at: number }[];
+  rings: { sq: string; at: number }[];
+}
 
 export interface Timeline {
   format: Format;
@@ -81,12 +93,38 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   // recording (at this cut's speed, plus a breath); otherwise, as long as it takes to read.
   const lines = new Map(videoLines(g).map((l) => [l.id, l]));
   const rate = VOICE_RATE[format];
-  const voiced = (id: string, dur: number) => {
+  const clipOf = (id: string) => {
     const line = lines.get(id);
     const clip = opts.voice?.clips[id];
     const voiceId = line && voiceOf(g, line.color);
-    if (!line || !clip || !voiceId || clip.sig !== lineSig(voiceId, line)) return { dur };
+    return line && clip && voiceId && clip.sig === lineSig(voiceId, line) ? clip : undefined;
+  };
+  const voiced = (id: string, dur: number) => {
+    const clip = clipOf(id);
+    if (!clip) return { dur };
     return { voice: { url: clip.url, rate }, dur: Math.max(dur, VOICE_AT + clip.dur / rate + VOICE_TAIL) };
+  };
+  // A thought's marks, timed to the voice: to the word where the clip has word timings, else spread over
+  // the clip by word, else (no voice) at reading speed.
+  const timedMarks = (id: string, quote: string, marks: ThoughtMark[] | undefined, dur: number): { marks?: SceneMark[] } => {
+    if (!marks?.length) return {};
+    const clip = clipOf(id);
+    const total = Math.max(1, spokenWord(quote, Infinity));
+    const at = (k: number) => {
+      if (!clip) return 0.3 + k / (WORDS_PER_SECOND * pace);
+      const w = spokenWord(quote, k);
+      const t = clip.words?.length ? clip.words[Math.min(w, clip.words.length - 1)] : (w / total) * clip.dur;
+      return VOICE_AT + t / rate;
+    };
+    const starts = marks.map((mk) => Math.min(at(mk.word), dur));
+    return {
+      marks: marks.map((mk, n) => ({
+        start: starts[n],
+        end: starts[n + 1] ?? dur,
+        arrows: mk.arrows.map((a) => ({ from: a.from, to: a.to, color: a.color, at: Math.max(starts[n], at(a.word)) })),
+        rings: mk.rings.map((r) => ({ sq: r.sq, at: Math.max(starts[n], at(r.word)) })),
+      })),
+    };
   };
   const interview = (when: "pre" | "post", c: Color) => interviewText(g, when, c);
 
@@ -94,7 +132,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   const hookAt = plan?.hook ? g.moves.findIndex((m) => m.ply === plan.hook!.ply) : -1;
   if (plan?.hook && hookAt >= 0) {
     const { quote, caption } = plan.hook;
-    if (quote && opts.thoughts !== false) push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...voiced("hook", Math.max(2, 0.6 + read(quote))) });
+    if (quote && opts.thoughts !== false) {
+      const v = voiced("hook", Math.max(2, 0.6 + read(quote)));
+      push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...v, ...timedMarks("hook", quote, plan.hook.marks, v.dur) });
+    }
     const anim = wide ? 0.3 : 0.25;
     push({ kind: "move", i: hookAt, anim, key: true, hook: caption, dur: anim + Math.max(2.4, read(caption)) });
     push({ kind: "rewind", i: hookAt, dur: 1.6 });
@@ -129,7 +170,11 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     // move that was finally played, which often owns up to the attempt, then the move.
     m.illegalAttempts.forEach((attempt, n) => push({ kind: "illegal", i, n, attempt, dur: 1.5 }));
     const thought = opts.thoughts === false ? undefined : plan ? picked?.thought : key ? m.commentary.trim() : undefined;
-    if (thought) push({ kind: "think", i, thought, ...voiced(`moment:${m.ply}`, 0.3 + read(thought)) });
+    if (thought) {
+      const v = voiced(`moment:${m.ply}`, 0.3 + read(thought));
+      // The marks go with the director's quote (the fallback's thinking has none).
+      push({ kind: "think", i, thought, ...v, ...(picked ? timedMarks(`moment:${m.ply}`, thought, picked.marks, v.dur) : {}) });
+    }
 
     const anim = wide ? 0.3 : 0.25;
     // Key moments hold long enough to take in the verdict, the arrow and the engine's line.
