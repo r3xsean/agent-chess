@@ -191,11 +191,10 @@ interface View {
   /** `color`: the line is about a player (what they thought), in their colour. */
   line?: { label: string; text: string; color?: string };
   /**
-   * `side`: the edge of the board the bubble covers, or "off" the board (beside it in the YouTube cut, above
-   * it in the short) when the thought's marks leave neither edge clear; `away`: not its speaker's edge (so
-   * no tail to their card).
+   * `side`: the edge of the board the bubble covers (its speaker's), or "off" the board (beside it in the
+   * YouTube cut, above it in the short) when the thought's marks are under it there.
    */
-  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off"; away?: boolean };
+  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off" };
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -377,15 +376,13 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
     }
     v.callout = { label: `${name} is thinking…`, evalText: formatScore(score), status: true };
     // The bubble covers the edge of the board by its speaker's card, as many ranks as its measured height
-    // reaches. When the thought's marks are drawn there, it sits at the far edge for the whole thought if
-    // that's clear of them, or else off the board.
+    // reaches. When the thought's marks are drawn there, it moves off the board for the whole thought
+    // (never to the other edge, where it would look like the opponent's).
     const home = m.color === "b" ? "top" : "bottom";
-    const away = home === "top" ? "bottom" : "top";
     const h = bubbles.get(idx);
     const ranks = h === undefined ? 3 : Math.ceil((BUBBLE_INSET + h) / ((tl.format === "landscape" ? 860 : 900) / 8));
-    const clear = (edge: "top" | "bottom") => !s.marks || underBubble(s.marks, edge, ranks) === 0;
-    const side = clear(home) ? home : clear(away) ? away : "off";
-    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side, away: side === away };
+    const side = !s.marks || underBubble(s.marks, home, ranks) === 0 ? home : "off";
+    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side };
     // While they think, the bar already shows where they believe their move leaves them; the engine's
     // level only moves once it lands.
     v.focus = { i: s.i, label: telling(prep.belief[s.i]) };
@@ -845,14 +842,27 @@ function ThoughtLabel({ g, t }: { g: Game; t: NonNullable<View["thought"]> }) {
   );
 }
 
-/** The mover's thinking as a speech bubble over the board, coming out of their player card. */
+/**
+ * The mover's thinking as a speech bubble over the board, coming out of their player card. Off the board,
+ * with no card to come out of (and next to the opponent's in the short), it carries the speaker's avatar
+ * and a border in their colour instead.
+ */
 function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]>; size: number }) {
+  const ref = t.color === "w" ? g.white : g.black;
+  const off = t.side === "off";
   return (
     <div
-      className={`v-bubble ${t.side === "off" ? "off" : (t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"} ${t.away ? "away" : ""}`}
-      style={{ opacity: t.fade }}
+      className={`v-bubble ${off ? "off" : (t.side ?? (t.color === "b" ? "top" : "bottom")) === "top" ? "from-top" : "from-bottom"}`}
+      style={{ opacity: t.fade, ...(off && { borderColor: makerOf(ref.provider).color }) }}
     >
-      <ThoughtLabel g={g} t={t} />
+      {off ? (
+        <div className="v-bubble-who">
+          <Avatar player={ref} size={Math.round(size * 1.5)} />
+          <ThoughtLabel g={g} t={t} />
+        </div>
+      ) : (
+        <ThoughtLabel g={g} t={t} />
+      )}
       <div className="v-bubble-text" style={{ fontSize: fitFont(size, t.text.length) }}>
         {t.text}
       </div>

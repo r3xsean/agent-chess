@@ -986,10 +986,6 @@
   bottom: -34px;
   border-top-color: rgba(250, 249, 245, 0.96);
 }
-/* Moved off its speaker's edge (to keep the marks in view): no tail pointing at the wrong card. */
-.v-bubble.away::after {
-  display: none;
-}
 /* Where the bubbles are measured, unseen (see BubbleSizer). */
 .v-sizer {
   position: fixed;
@@ -1008,9 +1004,20 @@
   flex-direction: column;
   justify-content: center;
   padding: 26px 34px 30px;
+  border: 6px solid;
 }
 .v-bubble.off::after {
   display: none;
+}
+/* Who's speaking, off the board: their avatar beside the label. */
+.v-bubble-who {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.v-bubble-who .v-thought-label {
+  margin-bottom: 0;
 }
 .v-panel > .v-bubble.off {
   flex: 1;
