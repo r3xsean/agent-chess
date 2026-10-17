@@ -350,6 +350,8 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
       rings.push({ sq: r.sq, ...(r.side && { own: r.side === mover }), o: r3(o), pop: pop(r.at) });
       for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)), at: l.at });
     }
+    // The director's refs: exactly the words it said point at the board.
+    for (const l of mk.lit ?? []) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(a0 * shown(l.at)), at: l.at });
   }
   return { marks: arrows.length || rings.length ? { arrows, rings } : undefined, lit };
 }
@@ -933,8 +935,14 @@ function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]
  * colour changes, never the size or weight, so the bubble keeps the size it was measured at.
  */
 function LitText({ text, lit }: { text: string; lit: Lit[] }) {
+  // A word lit by more than one drawing takes the latest one's colour, but stays as bright as the
+  // brightest: lit again, it changes colour (if it does) without fading in all over again.
   const byWord = new Map<number, Lit>();
-  for (const l of lit) if (!byWord.has(l.word) || l.at >= byWord.get(l.word)!.at) byWord.set(l.word, l);
+  for (const l of lit) {
+    const had = byWord.get(l.word);
+    if (!had) byWord.set(l.word, l);
+    else byWord.set(l.word, { ...(l.at >= had.at ? l : had), o: Math.max(l.o, had.o) });
+  }
   let k = -1;
   return (
     <>

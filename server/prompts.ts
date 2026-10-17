@@ -150,7 +150,7 @@ You see everything: the engine's verdict on each move (brilliant, great, best, e
 Run every command as:  ${cli} <command> --key ${key}
 - \`bc-wait\` — blocks until there are new events (up to ~50 s) and prints them. WAITING means run it again; DONE means you're finished. Give your shell tool a timeout of at least 90 seconds.
 - \`say <file.txt>\` — put one segment on air (write the text to a file in ${dir} first).
-- \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for.
+- \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for. It's read back to you; check it, then \`confirm\` (or fix it and \`direct\` again).
 
 ## How to commentate
 - One segment = 1–3 sentences, under 400 characters. Lively, conversational English, like a streamer typing to chat.
@@ -175,7 +175,7 @@ export function directorPrompt(g: Game): string {
 
 Run every command as:  ${cli} <command> --key ${key}
 1. Run \`bc-wait\` (give your shell tool a timeout of at least 90 seconds). It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews.
-2. Write your plan as JSON in ${agentDir(g.id, "x")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit.
+2. Write your plan as JSON in ${agentDir(g.id, "x")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
 3. Run \`bc-wait\` again until it prints DONE.`;
 }
 

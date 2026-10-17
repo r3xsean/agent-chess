@@ -11,7 +11,8 @@
     "start": "vite build && tsx server/index.ts",
     "serve": "tsx server/index.ts",
     "typecheck": "tsc --noEmit -p .",
-    "video": "node scripts/render-video.mjs"
+    "video": "node scripts/render-video.mjs",
+    "test:marks": "tsx scripts/test-marks.ts"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",

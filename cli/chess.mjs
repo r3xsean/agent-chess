@@ -34,7 +34,8 @@ const HELP = `Agent Chess CLI
   lessons <file.txt>       rewrite your lessons playbook after the game (or --text "...")
   bc-wait                  (broadcaster) wait for new events
   say <file.txt>           (broadcaster) speak a segment (or --text "...")
-  direct <plan.json>       (broadcaster) submit the video director's plan after the game
+  direct <plan.json>       (broadcaster) submit the video director's plan after the game; it's read back to you
+  confirm                  (broadcaster) save the plan once its readback is right
 All commands need --key <your seat key>.`;
 
 if (!cmd || cmd === "help" || flags.help) {

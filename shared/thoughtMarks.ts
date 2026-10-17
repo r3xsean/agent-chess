@@ -23,7 +23,7 @@ const bare = (w: string) =>
 const MOVE_NUMBER = /^\d*\s*(?:\.+|…)\s*/;
 
 /** A move as compared: no move number, capture, check or annotation marks ("27...Rxc2+!" → "rc2"). */
-const sanKey = (w: string) =>
+export const sanKey = (w: string) =>
   bare(w)
     .replace(MOVE_NUMBER, "")
     .replace(/0/g, "o")
@@ -146,7 +146,7 @@ export type WordLight = { word: number; color?: Color };
 export type ItemColors = { side?: Color; lit: WordLight[] };
 
 /** The kind of piece a move moves ("Rxe8+" a rook, "exd5" a pawn, castling the king). */
-const moverKind = (san: string) => (/^[KQRBN]/.test(san) ? san[0].toLowerCase() : /^O-O/.test(san) ? "k" : "p");
+export const moverKind = (san: string) => (/^[KQRBN]/.test(san) ? san[0].toLowerCase() : /^O-O/.test(san) ? "k" : "p");
 
 /**
  * What each drawn item points at, by mark, which sets its colour on the board and in the bubble alike
@@ -159,22 +159,11 @@ const moverKind = (san: string) => (/^[KQRBN]/.test(san) ? san[0].toLowerCase() 
  * played on from there; a circle is on the piece a move drawn before it brought there, or else on what
  * stands there before the move.
  */
-export function markColors(quote: string, marks: ThoughtMark[], fens: string[], mover: Color): { arrows: ItemColors[]; rings: ItemColors[] }[] {
+export function markColors(quote: string, marks: ThoughtMark[], fens: string[], mover: Color): { arrows: ItemColors[]; rings: ItemColors[]; refs: RefLight[] }[] {
   const ws = quoteWords(quote);
   const named = ws.map(pointsAt);
   const shown = boardOf(fens[0]);
-  // Whose piece a piece word means, when the words before it say: "my king" is the speaker's, "White's
-  // king" White's, "his rook" the opponent's; "the king" could be either.
-  const other: Color = mover === "w" ? "b" : "w";
-  const owner = ws.map((_, k): Color | undefined => {
-    for (const w of [ws[k - 1], ws[k - 2]].map((x) => (x ? bare(x) : ""))) {
-      if (/^(?:my|our|mine)$/.test(w)) return mover;
-      if (/^white(?:'s)?$/.test(w)) return "w";
-      if (/^black(?:'s)?$/.test(w)) return "b";
-      if (/^(?:his|her|their|its|opponent's|enemy|your)$/.test(w)) return other;
-    }
-    return undefined;
-  });
+  const owner = owners(ws, mover);
   return marks.map((mk, n) => {
     const lo = mk.word;
     const hi = (marks[n + 1]?.word ?? ws.length) - 1;
@@ -257,14 +246,180 @@ export function markColors(quote: string, marks: ThoughtMark[], fens: string[], 
       const pc = here && says(here) ? here : (before.find(says) ?? here);
       return { ...(pc && { side: pc.color }), lit: lights(r.word, [[r.sq, pc]], [pc], undefined, r.say) };
     });
-    return { arrows, rings };
+    if (!mk.refs) return { arrows, rings, refs: [] };
+    // With the director's refs, nothing is guessed: the refs' words are the ones lit, each in the colour of
+    // what it points at, and a circle takes the colour of the first ref to its square.
+    const resolved = resolveRefs(quote, mk, fens, mover);
+    const refs = mk.refs.map((r, j) => {
+      const c = resolved[j];
+      return { words: r.words, ...(r.sqs && { sqs: r.sqs }), ...(r.move !== undefined && { move: r.move }), ...("color" in c && c.color && { color: c.color }) };
+    });
+    const ringSide = (sq: string, fallback: ItemColors) => {
+      const j = mk.refs!.findIndex((r) => r.sqs?.includes(sq));
+      const c = resolved[j];
+      if (j < 0 || !c || "problem" in c) return fallback.side ? { side: fallback.side } : {};
+      const pc = c.pieces[mk.refs![j].sqs!.indexOf(sq)];
+      return pc ? { side: pc.color } : {};
+    };
+    return {
+      arrows: arrows.map((a) => ({ side: a.side, lit: [] })),
+      rings: rings.map((r, j) => ({ ...ringSide(mk.rings[j].sq, r), lit: [] })),
+      refs,
+    };
   });
+}
+
+/** A ref's words, lit in its colour (none: an empty square), and what it points at, to time them by. */
+export type RefLight = { words: [number, number]; color?: Color; sqs?: string[]; move?: number };
+
+/**
+ * Whose piece each piece word means, when the words before it say: "my king" is the speaker's, "White's
+ * king" White's, "his rook" the opponent's; "the king" could be either (undefined).
+ */
+function owners(ws: string[], mover: Color): (Color | undefined)[] {
+  const other: Color = mover === "w" ? "b" : "w";
+  return ws.map((_, k) => {
+    for (const w of [ws[k - 1], ws[k - 2]].map((x) => (x ? bare(x) : ""))) {
+      if (/^(?:my|our|mine)$/.test(w)) return mover;
+      if (/^white(?:'s)?$/.test(w)) return "w";
+      if (/^black(?:'s)?$/.test(w)) return "b";
+      if (/^(?:his|her|their|its|opponent's|enemy|your)$/.test(w)) return other;
+    }
+    return undefined;
+  });
+}
+
+/**
+ * The board a mark imagines, at any of its words: from the first of `fens` (before the move, after it,
+ * then further back) where its first arrow starts on a piece, with each move it draws played on as it's
+ * drawn. `now` is the board at word k; `before(sq)` the pieces that stood on sq earlier in the mark (the
+ * one a move took there, the one that left it).
+ */
+export function imagined(mk: ThoughtMark, fens: string[]) {
+  const first = mk.arrows[0];
+  const start = (first && fens.map(boardOf).find((b) => b.get(first.from) && (first.hit || b.get(first.from)!.type === moverKind(first.san)))) || boardOf(fens[0]);
+  const played: { word: number; from: string; to: string; pc: Piece }[] = [];
+  const b = new Map(start);
+  for (const a of mk.arrows) {
+    if (a.hit) continue;
+    const pc = b.get(a.from) ?? { type: moverKind(a.san), color: a.color };
+    b.delete(a.from);
+    b.set(a.to, pc);
+    played.push({ word: a.word, from: a.from, to: a.to, pc });
+  }
+  return (k: number) => {
+    const now = new Map(start);
+    const was = new Map<string, Piece[]>();
+    const add = (sq: string, pc: Piece | undefined) => pc && was.set(sq, [...(was.get(sq) ?? []), pc]);
+    for (const sq of start.keys()) add(sq, start.get(sq));
+    for (const mv of played) {
+      if (mv.word > k) break;
+      add(mv.to, now.get(mv.to));
+      now.delete(mv.from);
+      now.set(mv.to, mv.pc);
+    }
+    return { now, before: (sq: string) => (was.get(sq) ?? []).filter((p) => p !== now.get(sq)) };
+  };
+}
+
+export const describe = (pc: Piece | undefined) => (pc ? `${pc.color === "w" ? "White" : "Black"}'s ${PIECE_NAME[pc.type]}` : "nothing (an empty square)");
+
+/** A ref, resolved: the colour its words are lit in (the side whose piece it names; none, an empty square). */
+export type RefColor = { color?: Color; pieces: (Piece | undefined)[] } | { problem: string };
+
+/**
+ * What each of a mark's refs points at, on the board as the mark imagines it when its words are said. A
+ * ref to a move is that move's side. A ref to squares is what stands on them then, or, when its words name
+ * a kind of piece ("the pinned knight", "my king", "Nd7"), the piece of that kind (and owner) on it then or
+ * earlier in the mark (the knight Rxe8+ takes); a ref naming a piece that isn't there is a problem.
+ */
+export function resolveRefs(quote: string, mk: ThoughtMark, fens: string[], mover: Color): RefColor[] {
+  const ws = quoteWords(quote);
+  const owner = owners(ws, mover);
+  const at = imagined(mk, fens);
+  return (mk.refs ?? []).map((ref) => {
+    if (ref.move !== undefined) {
+      const a = mk.arrows[ref.move];
+      return { color: a.color, pieces: [] };
+    }
+    const [k0, k1] = ref.words;
+    const said = ws.slice(k0, k1 + 1).join(" ");
+    // The kinds of piece the words name, with the owner they give, and any square a move-like word puts
+    // one on ("Nd7": a knight on d7).
+    const wanted: { kind: string; owner?: Color; sq?: string }[] = [];
+    for (let k = k0; k <= k1; k++) {
+      for (const p of pointsAt(ws[k])) if ("kind" in p) wanted.push({ kind: p.kind, owner: owner[k] });
+      // A piece letter is a capital, so "Nd7" is a knight but "bxc5" a pawn's move ("27...Nd7" too).
+      const san = ws[k].replace(/^[^A-Za-z]+/, "").match(/^([KQRBN])x?[a-h]?[1-8]?x?([a-h][1-8])/);
+      if (san) wanted.push({ kind: san[1].toLowerCase(), sq: san[2] });
+    }
+    const { now, before } = at(k0);
+    const pieces: (Piece | undefined)[] = [];
+    for (const sq of ref.sqs ?? []) {
+      const here = now.get(sq);
+      const fits = (pc: Piece) => wanted.some((w) => w.kind === pc.type && (!w.owner || w.owner === pc.color) && (!w.sq || w.sq === sq));
+      const forSq = wanted.filter((w) => !w.sq || w.sq === sq);
+      if (!forSq.length) {
+        pieces.push(here);
+        continue;
+      }
+      const pc = [here, ...before(sq)].find((p): p is Piece => !!p && fits(p));
+      if (!pc) {
+        const name = forSq.map((w) => `${w.owner ? (w.owner === mover ? "the speaker's " : "the opponent's ") : ""}${PIECE_NAME[w.kind]}`).join(" or ");
+        return { problem: `"${said}" names ${name}, but ${sq} holds ${describe(here)} at that point in the idea${before(sq).length ? ` (earlier: ${before(sq).map(describe).join(", ")})` : ""}` };
+      }
+      pieces.push(pc);
+    }
+    const sides = [...new Set(pieces.filter((p): p is Piece => !!p).map((p) => p.color))];
+    if (sides.length > 1) return { problem: `"${said}" points at both sides' pieces (${(ref.sqs ?? []).join(", ")}); give each side its own ref` };
+    return { ...(sides[0] && { color: sides[0] }), pieces };
+  });
+}
+
+/** The squares a mark draws on: its arrows' ends and its circles. */
+const drawnSquares = (mk: ThoughtMark) => new Set([...mk.arrows.flatMap((a) => [a.from, a.to]), ...mk.rings.map((r) => r.sq)]);
+
+/**
+ * Everything wrong with how a quote's marks point at the board, for the director to fix: every word naming
+ * a square, a move or a piece is in a ref of the mark that's up while it's said; every ref points at
+ * something that mark draws, at the squares its own words name, and at pieces that are really there.
+ */
+export function refProblems(quote: string, marks: ThoughtMark[], fens: string[], mover: Color): string[] {
+  const ws = quoteWords(quote);
+  const out: string[] = [];
+  const markOf = (k: number) => marks.reduce((at, mk, n) => (mk.word <= k ? n : at), -1);
+  const context = (k: number) => {
+    const [a, b] = sentences(quote).find(([s, e]) => k >= s && k <= e) ?? [k, k];
+    return ws.slice(a, b + 1).join(" ");
+  };
+  ws.forEach((w, k) => {
+    if (!pointsAt(w).length) return;
+    const n = markOf(k);
+    if (n < 0) return void out.push(`"${plainWord(w)}" (in "${context(k)}") is said before anything is drawn: start a mark at or before it`);
+    if (!(marks[n].refs ?? []).some((r) => k >= r.words[0] && k <= r.words[1]))
+      out.push(`"${plainWord(w)}" (in "${context(k)}") isn't in any of its mark's refs: add one saying what it points at`);
+  });
+  marks.forEach((mk) => {
+    const drawn = drawnSquares(mk);
+    const refs = mk.refs ?? [];
+    refs.forEach((r, j) => {
+      const said = ws.slice(r.words[0], r.words[1] + 1).join(" ");
+      if (refs.some((o, i) => i < j && o.words[0] <= r.words[1] && r.words[0] <= o.words[1])) out.push(`refs "${said}" and another overlap: give each its own words`);
+      if (r.move !== undefined) return;
+      for (const sq of r.sqs ?? []) if (!drawn.has(sq)) out.push(`"${said}" points at ${sq}, but nothing in its mark is drawn on ${sq}: circle it, or draw the arrow that starts or ends there`);
+      // Squares the words themselves name are among the ones it points at.
+      for (let k = r.words[0]; k <= r.words[1]; k++)
+        for (const p of pointsAt(ws[k])) if ("sq" in p && !(r.sqs ?? []).includes(p.sq)) out.push(`"${said}" names ${p.sq} but points at ${(r.sqs ?? []).join(", ")}`);
+    });
+    resolveRefs(quote, mk, fens, mover).forEach((c) => "problem" in c && out.push(c.problem));
+  });
+  return [...new Set(out)];
 }
 
 /** A word as shown in a message: no surrounding punctuation. */
 export const plainWord = (w: string) => w.replace(/^[^\p{L}\p{N}.]+|[^\p{L}\p{N}+#]+$/gu, "");
 
-type Piece = { type: string; color: Color };
+export type Piece = { type: string; color: Color };
 
 export function boardOf(fen: string): Map<string, Piece> {
   const out = new Map<string, Piece>();

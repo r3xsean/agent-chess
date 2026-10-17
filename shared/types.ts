@@ -241,6 +241,18 @@ export interface ThoughtMark {
   arrows: { san: string; from: string; to: string; color: Color; word: number; hit?: boolean; say?: [number, number] }[];
   /** Squares named, as rings. */
   rings: { sq: string; word: number; say?: [number, number] }[];
+  /**
+   * What the words of this mark's part of the quote point at, as the director said (first and last word):
+   * squares, or one of the mark's move arrows (its index). These are the words lit up in the bubble, each
+   * in the colour of what it points at. Plans from before refs had them found instead (see markColors).
+   */
+  refs?: ThoughtRef[];
+}
+
+export interface ThoughtRef {
+  words: [number, number];
+  sqs?: string[];
+  move?: number;
 }
 // `say` on an arrow or ring: the words the director gave for it (first and last word), which it appears on
 // and lights up in the bubble; without them, the words are found for it (see markColors).

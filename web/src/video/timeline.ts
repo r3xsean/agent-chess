@@ -1,6 +1,6 @@
 import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
-import { markColors, quoteWords, sentenceEnd, spokenWord } from "../../../shared/thoughtMarks";
+import { markColors, pointsAt, quoteWords, sentenceEnd, spokenWord } from "../../../shared/thoughtMarks";
 import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
 import { shownLine, type LineKind } from "../../../shared/engineLine";
 
@@ -45,6 +45,8 @@ export interface SceneMark {
   arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; lit: SceneLit[] }[];
   /** `side`: whose piece is in the circle (none: an empty square), which sets its colour. */
   rings: { sq: string; at: number; side?: Color; lit: SceneLit[] }[];
+  /** The words of the director's refs (see ThoughtRef), lit as they're said, once what they point at is drawn. */
+  lit?: SceneLit[];
 }
 
 /**
@@ -159,14 +161,28 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
         const c = colors[n].rings[j];
         return { sq: r.sq, at: drawAt(r.word), ...(c.side && { side: c.side }), lit: c.lit.map((w) => ({ ...w, at: Math.max(drawAt(r.word), drawAt(w.word)) })) };
       });
+      // A ref's words light up as each is said, but never before what it points at is drawn.
+      const drawnAt = (r: (typeof colors)[number]["refs"][number]) => {
+        if (r.move !== undefined) return arrows[r.move]?.at ?? 0;
+        const times = (r.sqs ?? []).map((sq) => Math.min(...arrows.filter((a) => a.from === sq || a.to === sq).map((a) => a.at), ...rings.filter((x) => x.sq === sq).map((x) => x.at)));
+        return Math.max(0, ...times.filter(Number.isFinite));
+      };
+      // Of a ref's words, the ones naming the board light up ("the rook behind": "rook"); all of them if
+      // none do ("it", "both pieces").
+      const lit = colors[n].refs.flatMap((r) => {
+        const from = drawnAt(r);
+        const span = Array.from({ length: r.words[1] - r.words[0] + 1 }, (_, j) => r.words[0] + j);
+        const naming = span.filter((k) => pointsAt(qw[k]).length);
+        return (naming.length ? naming : span).map((k) => ({ word: k, at: Math.max(from, drawAt(k)), ...(r.color && { color: r.color }) }));
+      });
       const start = Math.min(...arrows.map((a) => a.at), ...rings.map((r) => r.at));
-      const last = Math.max(mk.word, ...mk.arrows.map((a) => a.word), ...mk.rings.map((r) => r.word));
-      return { start, natural: after(mk.until ?? sentenceEnd(quote, last)) + MARK_HOLD, arrows, rings };
+      const last = Math.max(mk.word, ...mk.arrows.map((a) => a.word), ...mk.rings.map((r) => r.word), ...(mk.refs ?? []).map((r) => r.words[1]));
+      return { start, natural: after(mk.until ?? sentenceEnd(quote, last)) + MARK_HOLD, arrows, rings, lit };
     });
     return {
-      marks: timed.map(({ start, natural, arrows, rings }, n) => {
+      marks: timed.map(({ start, natural, arrows, rings, lit }, n) => {
         const keep = n === timed.length - 1 && arrows.some((a) => !a.hit && a.from === m.from && a.to === m.to);
-        return { start, end: keep ? dur : Math.min(natural, timed[n + 1]?.start ?? dur, dur), ...(keep && { keep }), arrows, rings };
+        return { start, end: keep ? dur : Math.min(natural, timed[n + 1]?.start ?? dur, dur), ...(keep && { keep }), arrows, rings, ...(lit.length && { lit }) };
       }),
     };
   };

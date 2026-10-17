@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, Tournament } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, Tournament, VideoPlan } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
@@ -33,7 +33,7 @@ import {
 import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec } from "./prompts";
-import { directorBrief, needsDirection, validatePlan } from "./director";
+import { directorBrief, needsDirection, planReadback, validatePlan } from "./director";
 import { directorDone, jobsFor, MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
 import { rivalry } from "./rivalry";
 import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
@@ -842,6 +842,9 @@ function readText(body: any) {
   return String(body?.text ?? "");
 }
 
+/** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
+const planDrafts = new Map<string, VideoPlan>();
+
 app.post(
   "/api/agent/:cmd",
   localOnly,
@@ -888,13 +891,27 @@ app.post(
       }
       if (cmd === "direct") {
         if (g.phase !== "finished") throw new ActionError("The video plan comes after the game — keep commentating.");
-        g.video = validatePlan(g, req.body?.plan);
+        // A plan that passes the checks is read back before it's final: what each quote will draw and light
+        // up, and in which colour, for the director to confirm or fix.
+        const plan = validatePlan(g, req.body?.plan);
+        planDrafts.set(g.id, plan);
+        return text(
+          `The plan passes the checks (${plan.moments.length} moments). Before it's saved, check what the video will draw and light up:\n\n${planReadback(g, plan)}\n` +
+            `Colours: green is the speaking player's pieces and moves, red the opponent's, amber an empty square. Go through every line: is each lit word lit for the piece or square the player meant, at the right moment in the idea, in the right colour? Does every drawing show what the words say (never an arrow for something they say can't happen)? Is anything they point at left undrawn?\n` +
+            `If all of it is right, run \`confirm\`. If anything is off, fix the plan and submit it again with \`direct\`.`,
+        );
+      }
+      if (cmd === "confirm") {
+        const plan = planDrafts.get(g.id);
+        if (!plan) throw new ActionError("There's no plan waiting to be confirmed: submit it with `direct <plan.json>` first.");
+        planDrafts.delete(g.id);
+        g.video = { ...plan, createdAt: Date.now() };
         saveGameNow(g);
         touch(g);
         directorDone(g.id);
-        return text(`OK — video plan saved (${g.video.moments.length} moments). Run \`bc-wait\`.`);
+        return text(`OK — video plan saved (${plan.moments.length} moments). Run \`bc-wait\`.`);
       }
-      throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait, say or direct.`);
+      throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait, say, direct or confirm.`);
     }
 
     const c = role as Color;
