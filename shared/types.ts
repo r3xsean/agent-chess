@@ -340,7 +340,8 @@ export interface PublishState {
 
 /**
  * A line said in passing while the game plays on (all of them in the YouTube cut, the ones marked `short` in
- * the TikTok cut too): no drawings, and the board doesn't stop for it. It's said over its move (or a few plies before it, to be done before the next moment), and the
+ * the TikTok cut too): no drawings, and the board doesn't stop for it, so it's a line that holds for a stretch
+ * of moves (a plan, a verdict, a worry), not one about a single move. It's said as its move lands, and the
  * board waits for it only where the next line or moment would otherwise cut it off.
  */
 export interface VideoAside {
@@ -356,6 +357,8 @@ export interface VideoPlan {
   moments: VideoMoment[];
   /** Lines said in passing between the moments: the opening's conversation, and what keeps the quiet stretches talking. */
   asides?: VideoAside[];
+  /** Plies in stretches the director left quiet on purpose (nothing said there holds beyond its own move). */
+  quiet?: number[];
   /** The best verbatim line from each interview, for the short cut. */
   interviewLines: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
   /** How each interview line is spoken (see VideoMoment.delivery). */

@@ -2098,10 +2098,22 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   // Preview playback speaks the recorded lines as their scenes come up (a render mixes them into the
   // soundtrack instead).
   const sceneIdx = v?.idx ?? -1;
+  // Every recorded line is loaded as soon as the timeline is known, so each starts on its cue rather than a
+  // fetch later (most noticeable on the short asides).
+  const clips = useRef(new Map<string, HTMLAudioElement>());
+  useEffect(() => {
+    if (render || !tl) return;
+    for (const s of [...tl.scenes, ...tl.asides])
+      if (s.voice && !clips.current.has(s.voice.url)) {
+        const a = new Audio(s.voice.url);
+        a.preload = "auto";
+        clips.current.set(s.voice.url, a);
+      }
+  }, [tl, render]);
   // A line recorded for something starting at `from` (a scene, an aside): it picks up from wherever the preview
   // is in it, its start or mid-line after a seek or a pause.
   const speak = (voice: { url: string; rate: number }, from: number) => {
-    const audio = new Audio(voice.url);
+    const audio = clips.current.get(voice.url) ?? new Audio(voice.url);
     audio.playbackRate = voice.rate;
     const into = (t - from - VOICE_AT) * voice.rate;
     const start = () => {

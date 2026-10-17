@@ -95,7 +95,8 @@ const MARK_SETTLE = 0.25;
 
 /**
  * An aside (see VideoAside): a line said while the game plays on, over the scenes from `start` for `dur` (its
- * line from VOICE_AT in, and a breath after). `i`: the move it's quoted from, played at or after `start`.
+ * line from VOICE_AT in, and a breath after). `i`: the move it's quoted from, played at `start` (or, after a
+ * rejected attempt, just after its line).
  */
 export interface AsideCue {
   start: number;
@@ -105,8 +106,6 @@ export interface AsideCue {
   voice?: { url: string; rate: number };
 }
 
-/** How many plies before its own move an aside may start, to be said before the next moment comes. */
-const ASIDE_LEAD = 4;
 /**
  * Asides play this much quicker than the cut's other lines, time-stretched with the pitch kept (the render
  * uses rubberband, the preview the browser's own), and never past ASIDE_RATE_MAX, where speech starts to smear.
@@ -316,42 +315,27 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     return paced(i) && meanWeight > 0 ? usual * Math.min(HOLD_MAX, Math.max(HOLD_MIN, weight(i) / meanWeight)) : usual;
   };
 
-  // Asides (all of them in the YouTube cut, the director's few picks in the short, whose quiet moves fly by):
-  // each is said over its move, a little quicker than the other lines, and the board plays on under it.
+  // Asides (all of them in the YouTube cut, the director's picks in the short, whose quiet moves fly by): each
+  // is said as its move lands (never before: it's about that move's thinking), a little quicker than the other
+  // lines, and the board plays on under it, since an aside is a line that holds for a stretch of moves.
   // Thinking, a moment, an engine line or the next aside waits for it to be said (the board holding on the
-  // last quiet move), so where they come thick the voices set the pace. One that wouldn't be over before the
-  // next of those starts up to ASIDE_LEAD plies early, over quiet moves only.
+  // last quiet move), so where they come thick the voices set the pace.
   const asideOf = new Map(opts.thoughts !== false ? (plan?.asides ?? []).filter((a) => wide || a.short).map((a) => [a.ply, a] as const) : []);
   const asideRate = Math.min(ASIDE_RATE_MAX, rate * ASIDE_SPEED);
   const asides: AsideCue[] = [];
   let talkEnd = 0;
-  let quietFrom = t;
-  const moveStart: number[] = [];
   const waitTalk = () => {
     if (talkEnd <= t) return;
     scenes[scenes.length - 1].dur += talkEnd - t;
     t = talkEnd;
   };
-  // The quiet moves from move i up to the next thing an aside can't run under.
-  const room = (i: number) => {
-    let n = 0;
-    for (let j = i; j < g.moves.length; j++) {
-      const mv = g.moves[j];
-      if (j > i && (keys[j] || asideOf.has(mv.ply) || mv.illegalAttempts.length)) break;
-      n += anim + hold(j);
-      if (mv.offeredDraw) break;
-    }
-    return n;
-  };
-  // Says move i's aside from now (or, `early`, from as early as it needs and may); how long it lasts.
-  const sayAside = (i: number, early: boolean) => {
+  // Says move i's aside from now; how long it lasts.
+  const sayAside = (i: number) => {
     const a = asideOf.get(g.moves[i].ply)!;
     waitTalk();
     const v = voiced(`aside:${a.ply}`, 0.3 + read(a.quote), asideRate);
-    const short = v.dur - room(i);
-    const start = early && short > 0 ? Math.max(talkEnd, quietFrom, moveStart[i - ASIDE_LEAD] ?? quietFrom, t - short) : t;
-    asides.push({ start, dur: v.dur, i, text: a.quote, ...(v.voice && { voice: v.voice }) });
-    talkEnd = start + v.dur;
+    asides.push({ start: t, dur: v.dur, i, text: a.quote, ...(v.voice && { voice: v.voice }) });
+    talkEnd = t + v.dur;
     return v.dur;
   };
 
@@ -366,9 +350,8 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     // is said over its first attempt, which stays on the board until it's said.
     m.illegalAttempts.forEach((attempt, n) => {
       waitTalk();
-      const dur = aside && n === 0 ? Math.max(1.5, sayAside(i, false)) : 1.5;
+      const dur = aside && n === 0 ? Math.max(1.5, sayAside(i)) : 1.5;
       push({ kind: "illegal", i, n, attempt, dur });
-      quietFrom = t;
     });
     const thought = opts.thoughts === false ? undefined : plan ? picked?.thought : key ? m.commentary.trim() : undefined;
     let carry: SceneMark | undefined;
@@ -382,12 +365,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     }
 
     if (key) waitTalk();
-    if (aside && !m.illegalAttempts.length) sayAside(i, true);
-    moveStart[i] = t;
+    if (aside && !m.illegalAttempts.length) sayAside(i);
     const next = g.moves[i + 1];
     const clock = !!next && !keys[i + 1] && !next.illegalAttempts.length;
     push({ kind: "move", i, anim, key, dur: anim + hold(i) + (last ? 1 : 0), ...(carry && { carry }), ...(clock && { clock }) });
-    if (key) quietFrom = t;
 
     // The engine line the director asked for: what didn't happen, played out, then why it's better.
     const ask = picked?.line;
@@ -421,7 +402,6 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       const moveAt = ln.moves.map((_, j) => at + j * per);
       const captionAt = moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE;
       push({ kind: "line", i, line: ln.kind, caption, sans: ln.moves.map((mv) => mv.san), moveAt, captionAt, ...(punish && { punish }), dur: captionAt + Math.max(2.6, 0.8 + read(caption)) });
-      quietFrom = t;
     }
 
     // Draw offers get their own beat, with the answer: declined if the game went on.
@@ -429,7 +409,6 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       waitTalk();
       const answer = !last ? "declined" : g.termination === "draw agreed" ? "accepted" : "open";
       push({ kind: "draw", i, answer, dur: 3 });
-      quietFrom = t;
     }
   });
   waitTalk();
