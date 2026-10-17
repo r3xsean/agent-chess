@@ -306,8 +306,11 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
 /** How far the bubble sits in from the board's edge (video.css .v-bubble). */
 const BUBBLE_INSET = 22;
 
-/** A word of the thought lit up in the colour of what it names while that's on the board, at opacity o. */
-type Lit = { word: number; color: string; o: number };
+/**
+ * A word of the thought lit up in the colour of what it names while that's on the board, at opacity o, from
+ * `at`. Where two drawings light the same word, the later one (what's being said now) colours it.
+ */
+type Lit = { word: number; color: string; o: number; at: number };
 
 /**
  * The marks on the board at `local` seconds into a scene, and the words they light up. Each mark builds
@@ -339,13 +342,13 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
       arrows.push({ from: a.from, to: a.to, own, ...(a.hit && { hit: true }), o: r3(o), pop: pop(a.at) });
       // Each word lights up as it's said (an arrow can name a piece a few words later: "Rxe8+ … the rook"),
       // in the colour of the side whose piece it names: an arrow to the opponent's knight lights "Nd7" red.
-      for (const l of a.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)) });
+      for (const l of a.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)), at: l.at });
     }
     for (const r of mk.rings) {
       if (r.at > local) continue;
       const o = a0 * shown(r.at);
       rings.push({ sq: r.sq, ...(r.side && { own: r.side === mover }), o: r3(o), pop: pop(r.at) });
-      for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)) });
+      for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)), at: l.at });
     }
   }
   return { marks: arrows.length || rings.length ? { arrows, rings } : undefined, lit };
@@ -931,7 +934,7 @@ function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]
  */
 function LitText({ text, lit }: { text: string; lit: Lit[] }) {
   const byWord = new Map<number, Lit>();
-  for (const l of lit) if (!byWord.has(l.word)) byWord.set(l.word, l);
+  for (const l of lit) if (!byWord.has(l.word) || l.at >= byWord.get(l.word)!.at) byWord.set(l.word, l);
   let k = -1;
   return (
     <>

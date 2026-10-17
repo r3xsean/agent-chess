@@ -218,30 +218,43 @@ export function markColors(quote: string, marks: ThoughtMark[], fens: string[], 
     };
     const first = mk.arrows[0];
     const start = first ? fens.map(boardOf).find((b) => b.get(first.from) && (first.hit || b.get(first.from)!.type === moverKind(first.san))) : undefined;
-    const board = new Map(start ?? shown);
-    const arrived = new Map<string, { pc: Piece; word: number }>();
+    const first0 = new Map(start ?? shown);
+    const board = new Map(first0);
+    // The moves drawn, in order, with the word each is drawn on: the board as imagined at any word.
+    const played: { word: number; from: string; to: string; pc: Piece }[] = [];
     const arrows = mk.arrows.map((a) => {
       const from = board.get(a.from) ?? (a.hit ? undefined : { type: moverKind(a.san), color: a.color });
       const to = board.get(a.to);
       if (!a.hit && from) {
         board.delete(a.from);
         board.set(a.to, from);
-        arrived.set(a.to, { pc: from, word: a.word });
+        played.push({ word: a.word, from: a.from, to: a.to, pc: from });
       }
       // A move's landing square, empty until it lands, is the moving piece's ("d4 attacks both…").
       const landing = to ?? (a.hit ? undefined : from);
       return { side: from?.color ?? a.color, lit: lights(a.word, [[a.from, from], [a.to, landing]], [from, to], a.hit ? undefined : a.color, a.say) };
     });
     const rings = mk.rings.map((r) => {
-      // A square a move lands on has two pieces to circle: the one arriving and the one standing there
-      // (the knight Rxe8+ takes). The circle's own words say which ("the pinned knight"); otherwise it's
-      // the one arriving.
-      const came = arrived.get(r.sq);
-      const there = shown.get(r.sq);
-      const options = [came && came.word <= r.word ? came.pc : undefined, there].filter((p): p is Piece => !!p);
+      // A circle is on what stands there on the board as imagined when it's drawn, after the moves drawn
+      // before it: the piece a move brought there, or nothing where one has just left ("Kg1 … f1 covered by
+      // the rook" circles an empty f1). Its own words can point at a piece that was there before instead
+      // (the knight Rxe8+ takes, "the pinned knight").
+      const now = new Map(first0);
+      const before: Piece[] = [];
+      const had = first0.get(r.sq);
+      if (had) before.push(had);
+      for (const mv of played) {
+        if (mv.word > r.word) break;
+        const took = now.get(mv.to);
+        if (mv.to === r.sq && took) before.push(took);
+        if (mv.from === r.sq) before.push(mv.pc);
+        now.delete(mv.from);
+        now.set(mv.to, mv.pc);
+      }
       const [s0, s1] = r.say ?? [r.word, Math.min(r.word + 3, hi)];
       const says = (pc: Piece) => ws.slice(s0, s1 + 1).some((_, j) => named[s0 + j].some((p) => "kind" in p && p.kind === pc.type) && (!owner[s0 + j] || owner[s0 + j] === pc.color));
-      const pc = options.find(says) ?? options[0];
+      const here = now.get(r.sq);
+      const pc = here && says(here) ? here : (before.find(says) ?? here);
       return { ...(pc && { side: pc.color }), lit: lights(r.word, [[r.sq, pc]], [pc], undefined, r.say) };
     });
     return { arrows, rings };
