@@ -9,7 +9,7 @@ import { speakable } from "./speech";
  */
 
 export interface VideoLine {
-  /** "moment:<ply>", "hook", "interview:<pre|post>:<w|b>" or "callback". */
+  /** "moment:<ply>", "hook" or "interview:<pre|post>:<w|b>". */
   id: string;
   color: Color;
   text: string;
@@ -70,8 +70,6 @@ export function videoLines(g: Game): VideoLine[] {
       const text = interviewText(g, when, c);
       if (text) out.push({ id: `interview:${when}:${c}`, color: c, text, delivery: plan.interviewDelivery?.[when][c] });
     }
-  // The flashback is the pre-game line said again, so it's said the way the interview was.
-  if (plan.callback) out.push({ id: "callback", color: plan.callback.color, text: plan.callback.line, delivery: plan.interviewDelivery?.pre[plan.callback.color] });
   return out;
 }
 

@@ -10,7 +10,7 @@ import { DATA } from "./paths";
 
 /*
  * Recording the replay's spoken lines with ElevenLabs before a render: every quote the director put
- * on screen, its hook, the interview lines and the flashback, each in the speaker's model's voice and
+ * on screen, its hook and the interview lines, each in the speaker's model's voice and
  * with the director's delivery as an audio tag. Clips are cached by their exact input, so re-rendering
  * (or re-planning with the same lines) costs nothing. Nothing is spent without a verified balance.
  */

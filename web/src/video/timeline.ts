@@ -1,6 +1,6 @@
 import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
-import { spokenWord } from "../../../shared/thoughtMarks";
+import { quoteWords, sentenceEnd, spokenWord, wordNames } from "../../../shared/thoughtMarks";
 import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
 import { shownLine, type LineKind } from "../../../shared/engineLine";
 
@@ -18,13 +18,12 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "think"; i: number; thought: string; hook?: string; marks?: SceneMark[] }
   /** Attempt n of move i, made before it. */
   | { kind: "illegal"; i: number; n: number; attempt: string }
-  | { kind: "move"; i: number; anim: number; key: boolean; hook?: string }
+  /** `carry`: the thought's last mark, ending on this very move, fading as the piece goes. */
+  | { kind: "move"; i: number; anim: number; key: boolean; hook?: string; carry?: SceneMark }
   /** An engine line played out after move i (see shared/engineLine.ts): `intro`, then `per` seconds for each of its moves (`sans`), then a hold on its caption. */
   | { kind: "line"; i: number; line: LineKind; caption: string; intro: number; per: number; sans: string[] }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
-  /** A pre-game line replayed right after move i, the one that proves it wrong (or right). */
-  | { kind: "flashback"; i: number; color: Color; text: string }
   /** A draw offer made with move i, and what the opponent did about it. */
   | { kind: "draw"; i: number; answer: "declined" | "accepted" | "open" }
   | { kind: "resign"; color: Color }
@@ -33,15 +32,24 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
 );
 
 /**
- * One of the director's marks during a thought (see ThoughtMark), in seconds into the scene: up from
- * `start` until `end` (the next mark, or the move), each arrow and ring from when its words are said.
+ * One of the director's marks during a thought (see ThoughtMark), in seconds into the scene: it builds up
+ * from `start` (its first arrow or ring), each arrow and ring from just before its words are said, and
+ * comes off at `end` (the end of its sentence, or `until`, or the next mark starting), fading over
+ * MARK_FADE. `keep`: it ends on the move about to be played, so it stays up into the move. `word` is each
+ * item's word in the quote, and `said` whether that word names it (so the bubble can light it up).
  */
 export interface SceneMark {
   start: number;
   end: number;
-  arrows: { from: string; to: string; color: Color; at: number }[];
-  rings: { sq: string; at: number }[];
+  keep?: boolean;
+  arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; word: number; said: boolean }[];
+  rings: { sq: string; at: number; word: number; said: boolean }[];
 }
+
+/** How long a mark takes to come off; how early each item is drawn before its word; how long a mark stays after its sentence. */
+export const MARK_FADE = 0.2;
+const MARK_LEAD = 0.1;
+const MARK_HOLD = 0.5;
 
 export interface Timeline {
   format: Format;
@@ -106,43 +114,64 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   };
   // A thought's marks, timed to the voice: to the word where the clip has word timings, else spread over
   // the clip by word, else (no voice) at reading speed.
-  const timedMarks = (id: string, quote: string, marks: ThoughtMark[] | undefined, dur: number): { marks?: SceneMark[] } => {
+  // A mark that ends on the move about to be played (`m`) is kept up into it.
+  const timedMarks = (id: string, quote: string, marks: ThoughtMark[] | undefined, dur: number, m: { from: string; to: string }): { marks?: SceneMark[] } => {
     if (!marks?.length) return {};
     const clip = clipOf(id);
     const total = Math.max(1, spokenWord(quote, Infinity));
+    const qw = quoteWords(quote);
     const at = (k: number) => {
       if (!clip) return 0.3 + k / (WORDS_PER_SECOND * pace);
       const w = spokenWord(quote, k);
       const t = clip.words?.length ? clip.words[Math.min(w, clip.words.length - 1)] : (w / total) * clip.dur;
       return VOICE_AT + t / rate;
     };
-    const starts = marks.map((mk) => Math.min(at(mk.word), dur));
+    // When word k has been said: the next word starts, or the line ends.
+    const after = (k: number) => (k + 1 < qw.length ? at(k + 1) : clip ? VOICE_AT + clip.dur / rate : at(qw.length));
+    const drawAt = (k: number) => Math.min(Math.max(0, at(k) - MARK_LEAD), dur);
+    const timed = marks.map((mk) => {
+      const arrows = mk.arrows.map((a) => ({
+        from: a.from,
+        to: a.to,
+        color: a.color,
+        at: drawAt(a.word),
+        ...(a.hit && { hit: true }),
+        word: a.word,
+        // A move is said by its SAN or just its square ("d4 attacks both…"); a reach by either of its squares.
+        said: wordNames(qw[a.word], { sans: a.hit ? [] : [a.san], sq: a.to }) || (!!a.hit && wordNames(qw[a.word], { sq: a.from })),
+      }));
+      const rings = mk.rings.map((r) => ({ sq: r.sq, at: drawAt(r.word), word: r.word, said: wordNames(qw[r.word], { sq: r.sq }) }));
+      const start = Math.min(...arrows.map((a) => a.at), ...rings.map((r) => r.at));
+      const last = Math.max(mk.word, ...mk.arrows.map((a) => a.word), ...mk.rings.map((r) => r.word));
+      return { start, natural: after(mk.until ?? sentenceEnd(quote, last)) + MARK_HOLD, arrows, rings };
+    });
     return {
-      marks: marks.map((mk, n) => ({
-        start: starts[n],
-        end: starts[n + 1] ?? dur,
-        arrows: mk.arrows.map((a) => ({ from: a.from, to: a.to, color: a.color, at: Math.max(starts[n], at(a.word)) })),
-        rings: mk.rings.map((r) => ({ sq: r.sq, at: Math.max(starts[n], at(r.word)) })),
-      })),
+      marks: timed.map(({ start, natural, arrows, rings }, n) => {
+        const keep = n === timed.length - 1 && arrows.some((a) => !a.hit && a.from === m.from && a.to === m.to);
+        return { start, end: keep ? dur : Math.min(natural, timed[n + 1]?.start ?? dur, dur), ...(keep && { keep }), arrows, rings };
+      }),
     };
   };
+  const kept = (marks: SceneMark[] | undefined) => marks?.find((mk) => mk.keep);
   const interview = (when: "pre" | "post", c: Color) => interviewText(g, when, c);
 
   // Cold open: the director's payoff moment first (the mover's line, the move, its verdict), then rewind.
   const hookAt = plan?.hook ? g.moves.findIndex((m) => m.ply === plan.hook!.ply) : -1;
   if (plan?.hook && hookAt >= 0) {
     const { quote, caption } = plan.hook;
+    let carry: SceneMark | undefined;
     if (quote && opts.thoughts !== false) {
       const v = voiced("hook", Math.max(2, 0.6 + read(quote)));
-      push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...v, ...timedMarks("hook", quote, plan.hook.marks, v.dur) });
+      const tm = timedMarks("hook", quote, plan.hook.marks, v.dur, g.moves[hookAt]);
+      carry = kept(tm.marks);
+      push({ kind: "think", i: hookAt, thought: quote, hook: caption, ...v, ...tm });
     }
     const anim = wide ? 0.3 : 0.25;
-    push({ kind: "move", i: hookAt, anim, key: true, hook: caption, dur: anim + Math.max(2.4, read(caption)) });
+    push({ kind: "move", i: hookAt, anim, key: true, hook: caption, dur: anim + Math.max(2.4, read(caption)), ...(carry && { carry }) });
     push({ kind: "rewind", i: hookAt, dur: 1.6 });
   }
 
-  // Intro: the matchup, then the pre-game interviews. After a cold open the short gets straight to the
-  // game: its pre-game line, if any, comes back as a flashback when it pays off.
+  // Intro: the matchup, then the pre-game interviews. After a cold open the short gets straight to the game.
   push({ kind: "versus", dur: wide || hookAt < 0 ? 3 : 1.8 });
   if (wide || hookAt < 0)
     for (const c of ["w", "b"] as Color[]) {
@@ -170,16 +199,19 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     // move that was finally played, which often owns up to the attempt, then the move.
     m.illegalAttempts.forEach((attempt, n) => push({ kind: "illegal", i, n, attempt, dur: 1.5 }));
     const thought = opts.thoughts === false ? undefined : plan ? picked?.thought : key ? m.commentary.trim() : undefined;
+    let carry: SceneMark | undefined;
     if (thought) {
       const v = voiced(`moment:${m.ply}`, 0.3 + read(thought));
       // The marks go with the director's quote (the fallback's thinking has none).
-      push({ kind: "think", i, thought, ...v, ...(picked ? timedMarks(`moment:${m.ply}`, thought, picked.marks, v.dur) : {}) });
+      const tm = picked ? timedMarks(`moment:${m.ply}`, thought, picked.marks, v.dur, m) : {};
+      carry = kept(tm.marks);
+      push({ kind: "think", i, thought, ...v, ...tm });
     }
 
     const anim = wide ? 0.3 : 0.25;
     // Key moments hold long enough to take in the verdict, the arrow and the engine's line.
     const hold = key ? 2.5 : cls === "book" ? (wide ? 0.6 : 0.35) : wide ? 1.2 : 0.6;
-    push({ kind: "move", i, anim, key, dur: anim + hold + (last ? 1 : 0) });
+    push({ kind: "move", i, anim, key, dur: anim + hold + (last ? 1 : 0), ...(carry && { carry }) });
 
     // The engine line the director asked for: what didn't happen, played out, then why it's better.
     const ask = picked?.line;
@@ -196,10 +228,6 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       const answer = !last ? "declined" : g.termination === "draw agreed" ? "accepted" : "open";
       push({ kind: "draw", i, answer, dur: 3 });
     }
-
-    // The flashback lands right after the move that settles it.
-    const cb = plan?.callback;
-    if (cb && cb.ply === m.ply && picked) push({ kind: "flashback", i, color: cb.color, text: cb.line, ...voiced("callback", Math.max(2.8, 0.8 + read(cb.line))) });
   });
   const resigned = /^(White|Black) resigned/.exec(g.termination ?? "");
   if (resigned) push({ kind: "resign", color: resigned[1] === "White" ? "w" : "b", dur: 2.8 });
@@ -249,7 +277,7 @@ export function sfxCues(tl: Timeline, g: Game): SfxCue[] {
   };
   for (const s of tl.scenes) {
     if (s.kind === "versus") at(s.start + 0.25, "versus", 0.8);
-    else if (s.kind === "interview" || s.kind === "end" || s.kind === "flashback") at(s.start, "transition", 0.35);
+    else if (s.kind === "interview" || s.kind === "end") at(s.start, "transition", 0.35);
     else if (s.kind === "rewind") at(s.start, "transition", 0.6);
     else if (s.kind === "line") {
       // An engine line: a scene change, then quieter board sounds for its moves (each lands 0.3 s into its slot).

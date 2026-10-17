@@ -99,7 +99,7 @@ const SFX_DIR = resolve("vendor/sfx");
 /** Seconds into a voiced scene that its line starts (web/src/video/timeline.ts VOICE_AT). */
 const VOICE_AT = 0.3;
 /**
- * What the soundtrack plays: each speaker's recorded line (thinking, interviews, flashbacks) at the offset
+ * What the soundtrack plays: each speaker's recorded line (thinking, interviews) at the offset
  * the timeline allows for, and the sound effects, which the page cues itself (sfxCues in
  * web/src/video/timeline.ts, which the site's preview plays too).
  */

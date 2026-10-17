@@ -1,6 +1,6 @@
 /*
  * Each model speaks in its own ElevenLabs voice in the replay videos: the quotes from its thinking,
- * its interview lines and flashbacks. Voices go by model family, so a newer Opus keeps Opus's voice.
+ * and its interview lines. Voices go by model family, so a newer Opus keeps Opus's voice.
  * Models outside these families (and humans) stay silent.
  */
 

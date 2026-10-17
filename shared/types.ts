@@ -223,15 +223,22 @@ export interface VideoMoment {
 
 /**
  * One beat of a player's calculation, drawn on the board while their quote is spoken, the way a streamer
- * draws arrows: it appears as the voice reaches its words and clears when the next mark (or the move)
- * comes. `word` is an index into the quote's words (split on whitespace), so it can be timed to the voice.
+ * draws arrows: it builds up as the voice reaches its words and clears when the next mark comes, at the
+ * end of its sentence (or `until`), or with the move. `word` is an index into the quote's words (split on
+ * whitespace), so it can be timed to the voice.
  */
 export interface ThoughtMark {
   /** The words of the quote it goes with, as the director wrote them. */
   at: string;
   word: number;
-  /** The moves named, in the colour of the side making each, each drawn as its own words are said. */
-  arrows: { san: string; from: string; to: string; color: Color; word: number }[];
+  /** The last word it stays up through, when the director said (otherwise the end of its sentence). */
+  until?: number;
+  /**
+   * In the colour of the side whose piece it is, each drawn as its own words are said, on the board as the
+   * mark imagines it: a move named (`san`), played on from the moves before it, or (`hit`) a piece on that
+   * board attacking or defending a square ("d4>f3", the knight that has just landed there forking).
+   */
+  arrows: { san: string; from: string; to: string; color: Color; word: number; hit?: boolean }[];
   /** Squares named, as rings. */
   rings: { sq: string; word: number }[];
 }
@@ -246,14 +253,6 @@ export interface VideoHook {
   marks?: ThoughtMark[];
   /** The on-screen hook, a dozen words at most ("Sonnet thinks it's winning. It's mate in one."). */
   caption: string;
-}
-
-/** A pre-game line replayed as a flashback right after the move that proves it wrong (or right). */
-export interface VideoCallback {
-  color: Color;
-  /** Verbatim excerpt of that player's pre-game interview. */
-  line: string;
-  ply: number;
 }
 
 export interface VideoPackaging {
@@ -298,7 +297,6 @@ export interface VideoPlan {
   /** How each interview line is spoken (see VideoMoment.delivery). */
   interviewDelivery?: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
   hook?: VideoHook;
-  callback?: VideoCallback;
   packaging?: VideoPackaging;
   createdAt: number;
 }

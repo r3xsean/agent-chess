@@ -470,7 +470,7 @@
   color: #bab9b8;
 }
 
-/* ---------- cold open, rewind, flashback ---------- */
+/* ---------- cold open, rewind ---------- */
 
 .v-hook {
   flex: 1;
@@ -566,25 +566,6 @@
 }
 .v-p-caption .v-hook.engine .v-hook-text {
   font-size: 40px;
-}
-
-.v-flashback {
-  filter: sepia(0.55) saturate(0.9);
-}
-.v-flashback .v-quote {
-  border-color: #c9a227;
-  font-style: italic;
-}
-.v-flashback-tag {
-  align-self: flex-start;
-  padding: 6px 18px;
-  border-radius: 8px;
-  background: #c9a227;
-  color: #1e1d1a;
-  font-size: 30px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 1px;
 }
 
 .v-line-label {
@@ -1063,6 +1044,11 @@
   line-height: 1.35;
   font-weight: 600;
   font-style: italic;
+}
+
+/* A word naming what's drawn on the board, in its colour: colour only, so the text never reflows. */
+.v-lit {
+  border-radius: 0.18em;
 }
 
 .v-callout.status {

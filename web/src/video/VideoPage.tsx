@@ -15,7 +15,7 @@ import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/naming";
-import { buildTimeline, FRAME, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
+import { buildTimeline, FRAME, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { useMeta } from "../api";
@@ -170,8 +170,12 @@ interface BoardView {
   check?: string;
   badge?: { sq: string; c: Classification; s: number };
   arrow?: [string, string];
-  /** What a thinking player names, drawn as it's said: arrows (the mover's own moves, or the opponent's) and rings, each p of the way drawn. */
-  marks?: { arrows: { from: string; to: string; own: boolean; p: number }[]; rings: { sq: string; p: number }[] };
+  /**
+   * What a thinking player names, drawn as it's said: arrows (the mover's side's, or the opponent's; `hit`,
+   * a piece's reach rather than a move) and rings, each at opacity `o` and `pop` of the way through
+   * snapping in.
+   */
+  marks?: { arrows: { from: string; to: string; own: boolean; hit?: boolean; o: number; pop: number }[]; rings: { sq: string; o: number; pop: number }[] };
   illegal?: { attempt: string; sq?: string; color: Color; p: number };
   /** A marker on a king: the draw offer or the white flag. */
   mark?: { sq: string; emoji: string; s: number };
@@ -194,7 +198,7 @@ interface View {
    * `side`: the edge of the board the bubble covers (its speaker's), or "off" the board (beside it in the
    * YouTube cut, above it in the short) when the thought's marks are under it there.
    */
-  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off" };
+  thought?: { text: string; color: Color; selfEval: string; fade: number; side?: "top" | "bottom" | "off"; lit?: Lit[] };
   reveal?: number;
   /** The cold open's caption, over the payoff moment. */
   hook?: string;
@@ -302,6 +306,46 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
 /** How far the bubble sits in from the board's edge (video.css .v-bubble). */
 const BUBBLE_INSET = 22;
 
+/** A word of the thought lit up in the colour of what it names while that's on the board, at opacity o. */
+type Lit = { word: number; color: string; o: number };
+
+/**
+ * The marks on the board at `local` seconds into a scene, and the words they light up. Each mark builds
+ * up, arrow by arrow, and comes off fading as the next one starts drawing (or its sentence ends). Each
+ * item snaps in with a little pop; in a line of three moves or more, a move dims once the next is drawn,
+ * so the eye follows the newest. `alpha` fades the lot (a kept mark, as its move is played).
+ */
+function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { marks?: BoardView["marks"]; lit: Lit[] } {
+  const arrows: NonNullable<BoardView["marks"]>["arrows"] = [];
+  const rings: NonNullable<BoardView["marks"]>["rings"] = [];
+  const lit: Lit[] = [];
+  const pop = (at: number) => r3(clamp01((local - at) / 0.2));
+  const shown = (at: number) => clamp01((local - at) / 0.08);
+  for (const mk of marks) {
+    if (local < mk.start || local >= mk.end + MARK_FADE) continue;
+    const a0 = alpha * (local < mk.end ? 1 : 1 - (local - mk.end) / MARK_FADE);
+    const moves = mk.arrows.filter((a) => !a.hit);
+    for (const a of mk.arrows) {
+      if (a.at > local) continue;
+      let o = a0 * shown(a.at);
+      if (!a.hit && moves.length >= 3) {
+        const next = moves[moves.indexOf(a) + 1];
+        if (next && next.at <= local) o *= 1 - 0.45 * ease(clamp01((local - next.at) / 0.2));
+      }
+      const own = a.color === mover;
+      arrows.push({ from: a.from, to: a.to, own, ...(a.hit && { hit: true }), o: r3(o), pop: pop(a.at) });
+      if (a.said) lit.push({ word: a.word, color: own ? OWN_ARROW : OPP_ARROW, o: r3(o) });
+    }
+    for (const r of mk.rings) {
+      if (r.at > local) continue;
+      const o = a0 * shown(r.at);
+      rings.push({ sq: r.sq, o: r3(o), pop: pop(r.at) });
+      if (r.said) lit.push({ word: r.word, color: RING, o: r3(o) });
+    }
+  }
+  return { marks: arrows.length || rings.length ? { arrows, rings } : undefined, lit };
+}
+
 /** How many of a thought's arrows and rings reach the ranks a bubble at that edge covers (White at the bottom). */
 function underBubble(marks: SceneMark[], side: "top" | "bottom", ranks: number): number {
   const covered = (lo: number, hi: number) => (side === "bottom" ? lo <= ranks : hi >= 9 - ranks);
@@ -326,7 +370,7 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
   const fade = isGameScene(s) && isGameScene(tl.scenes[idx - 1]) ? 1 : r3(clamp01(local / 0.35));
   const v: View = { idx, kind: s.kind, fade };
 
-  if (s.kind === "interview" || s.kind === "flashback") v.reveal = s.text.split(/\s+/).length;
+  if (s.kind === "interview") v.reveal = s.text.split(/\s+/).length;
   if ((s.kind === "think" || s.kind === "move") && s.hook) v.hook = s.hook;
 
   if (s.kind === "rewind") {
@@ -365,15 +409,9 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
       evalW: r3(score ? winPercentWhite(score) : 50),
       evalText: formatScore(score),
     };
-    // Only the mark being said is up: the board clears for each new one.
-    const mk = s.marks?.find((x) => x.start <= local && local < x.end);
-    if (mk) {
-      const drawn = (at: number) => r3(ease(clamp01((local - at) / 0.25)));
-      v.board.marks = {
-        arrows: mk.arrows.filter((a) => a.at <= local).map((a) => ({ from: a.from, to: a.to, own: a.color === m.color, p: drawn(a.at) })),
-        rings: mk.rings.filter((r) => r.at <= local).map((r) => ({ sq: r.sq, p: drawn(r.at) })),
-      };
-    }
+    // Only the idea being said is up: the board wipes for each new one.
+    const drawn = s.marks ? marksAt(s.marks, local, m.color) : { lit: [] };
+    if (drawn.marks) v.board.marks = drawn.marks;
     v.callout = { label: `${name} is thinking…`, evalText: formatScore(score), status: true };
     // The bubble covers the edge of the board by its speaker's card, as many ranks as its measured height
     // reaches. When the thought's marks are drawn there, it moves off the board for the whole thought
@@ -382,7 +420,7 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
     const h = bubbles.get(idx);
     const ranks = h === undefined ? 3 : Math.ceil((BUBBLE_INSET + h) / ((tl.format === "landscape" ? 860 : 900) / 8));
     const side = !s.marks || underBubble(s.marks, home, ranks) === 0 ? home : "off";
-    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side };
+    v.thought = { text: s.thought, color: m.color, selfEval: m.selfEvalRaw, fade: r3(clamp01(local / 0.3)), side, ...(drawn.lit.length && { lit: drawn.lit }) };
     // While they think, the bar already shows where they believe their move leaves them; the engine's
     // level only moves once it lands.
     v.focus = { i: s.i, label: telling(prep.belief[s.i]) };
@@ -526,6 +564,9 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number, bubbles: Map<numbe
       evalW: r3(wb + (wa - wb) * ep),
       evalText: formatScore(ep < 0.5 ? before : after),
     };
+    // The thought's last idea, ending on this move, comes off as the piece goes along its arrow.
+    const kept = s.carry && 1 - clamp01(local / (s.anim + 0.25));
+    if (s.carry && kept) v.board.marks = marksAt([{ ...s.carry, start: -Infinity, end: Infinity }], 1e6, m.color, r3(kept)).marks;
     v.callout = {
       label: moveLabel(m.ply, m.san),
       cls: a?.classification,
@@ -610,8 +651,8 @@ function VBoard({ b, size, orientation }: { b: BoardView; size: number; orientat
       })}
       {(b.arrow || b.marks) && (
         <svg className="v-arrows" viewBox="0 0 8 8">
-          {b.marks?.rings.map((r) => <Ring key={r.sq} at={at(r.sq)} p={r.p} />)}
-          {b.marks?.arrows.map((a, k) => <Arrow key={k} from={at(a.from)} to={at(a.to)} color={a.own ? OWN_ARROW : OPP_ARROW} p={a.p} />)}
+          {b.marks?.rings.map((r, k) => <Ring key={k} at={at(r.sq)} o={r.o} pop={r.pop} />)}
+          {b.marks?.arrows.map((a, k) => <Arrow key={k} from={at(a.from)} to={at(a.to)} color={a.own ? OWN_ARROW : OPP_ARROW} o={a.o} pop={a.pop} thin={a.hit} />)}
           {b.arrow && <Arrow from={at(b.arrow[0])} to={at(b.arrow[1])} color={OWN_ARROW} />}
         </svg>
       )}
@@ -648,33 +689,37 @@ const RING = "#e68f00";
 
 type XY = { x: number; y: number };
 
-/** An arrow between two squares (in board units), drawn from its start p of the way (0 → 1). */
-function Arrow({ from, to, color, p = 1 }: { from: XY; to: XY; color: string; p?: number }) {
+const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
+
+/**
+ * An arrow between two squares (in board units), the way it's drawn on lichess: whole at once, landing a
+ * touch bold and settling (`pop` 0 → 1). `thin`: a piece's reach rather than a move, lighter.
+ */
+function Arrow({ from, to, color, o = 1, pop = 1, thin = false }: { from: XY; to: XY; color: string; o?: number; pop?: number; thin?: boolean }) {
   const x1 = from.x + 0.5;
   const y1 = from.y + 0.5;
   const full = Math.hypot(to.x - from.x, to.y - from.y);
-  const len = full * p;
-  if (!full || len < 0.05) return null;
+  if (!full || o <= 0) return null;
   const ux = (to.x - from.x) / full;
   const uy = (to.y - from.y) / full;
-  const x2 = x1 + ux * len;
-  const y2 = y1 + uy * len;
-  // A short arrow, still growing, gets a smaller head.
-  const head = Math.min(0.42, len * 0.6);
+  const x2 = x1 + ux * full;
+  const y2 = y1 + uy * full;
+  const bold = 1 + 0.35 * (1 - easeOut(pop));
+  const head = Math.min(thin ? 0.34 : 0.42, full * 0.6) * bold;
   const bx = x2 - ux * head;
   const by = y2 - uy * head;
-  const w = (0.25 * head) / 0.42;
+  const w = (thin ? 0.2 : 0.25) * (head / (thin ? 0.34 : 0.42));
   return (
-    <g opacity="0.85">
-      <line x1={x1} y1={y1} x2={bx} y2={by} stroke={color} strokeWidth={0.17} />
+    <g opacity={r3((thin ? 0.7 : 0.85) * o)}>
+      <line x1={x1} y1={y1} x2={bx} y2={by} stroke={color} strokeWidth={(thin ? 0.1 : 0.17) * bold} />
       <polygon points={`${x2},${y2} ${bx - uy * w},${by + ux * w} ${bx + uy * w},${by - ux * w}`} fill={color} />
     </g>
   );
 }
 
-/** A ring around a square, settling in from slightly smaller as it's drawn (p: 0 → 1). */
-function Ring({ at, p }: { at: XY; p: number }) {
-  return <circle cx={at.x + 0.5} cy={at.y + 0.5} r={0.44 * (0.75 + 0.25 * p)} fill="none" stroke={RING} strokeWidth={0.07} opacity={0.9 * p} />;
+/** A ring around a square, landing a touch wide and settling (`pop` 0 → 1). */
+function Ring({ at, o, pop }: { at: XY; o: number; pop: number }) {
+  return <circle cx={at.x + 0.5} cy={at.y + 0.5} r={0.44 * (1 + 0.12 * (1 - easeOut(pop)))} fill="none" stroke={RING} strokeWidth={0.07} opacity={r3(0.9 * o)} />;
 }
 
 /** A player's own evaluation on the bar: White's win% as they see it, in their colour. */
@@ -864,9 +909,41 @@ function ThoughtBubble({ g, t, size }: { g: Game; t: NonNullable<View["thought"]
         <ThoughtLabel g={g} t={t} />
       )}
       <div className="v-bubble-text" style={{ fontSize: fitFont(size, t.text.length) }}>
-        {t.text}
+        {t.lit?.length ? <LitText text={t.text} lit={t.lit} /> : t.text}
       </div>
     </div>
+  );
+}
+
+/**
+ * The thought with the words that name what's on the board lit up in its colour, fading with it. Only the
+ * colour changes, never the size or weight, so the bubble keeps the size it was measured at.
+ */
+function LitText({ text, lit }: { text: string; lit: Lit[] }) {
+  const byWord = new Map<number, Lit>();
+  for (const l of lit) if (!byWord.has(l.word)) byWord.set(l.word, l);
+  let k = -1;
+  return (
+    <>
+      {text
+        .trim()
+        .split(/(\s+)/)
+        .map((part, n) => {
+          if (n % 2) return part;
+          const l = byWord.get(++k);
+          if (!l) return part;
+          const pct = Math.round(l.o * 100);
+          return (
+            <span
+              key={n}
+              className="v-lit"
+              style={{ color: `color-mix(in srgb, ${l.color} ${pct}%, currentColor)`, backgroundColor: `color-mix(in srgb, ${l.color} ${Math.round(pct * 0.16)}%, transparent)` }}
+            >
+              {part}
+            </span>
+          );
+        })}
+    </>
   );
 }
 
@@ -1123,32 +1200,6 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
   );
 }
 
-/** "Before the game, X said…": a pre-game line coming back at the moment it's proven wrong (or right). */
-function FlashbackScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: "flashback" }>; v: View; wide: boolean }) {
-  const ref = s.color === "w" ? g.white : g.black;
-  const ws = s.text.split(/\s+/);
-  return (
-    <div className={`v-interview v-flashback ${wide ? "landscape" : "portrait"}`}>
-      <div className="v-flashback-tag">⏮ Flashback · before the game</div>
-      <div className="v-interview-head">
-        <Avatar player={ref} size={wide ? 120 : 140} />
-        <div>
-          <div className="v-interview-kind">Pre-game interview</div>
-          <div className="v-interview-name" style={{ color: makerOf(ref.provider).color }}>
-            {ref.modelLabel}
-          </div>
-        </div>
-      </div>
-      <div className="v-quote" style={{ fontSize: wide ? 60 : 58 }}>
-        {ws.map((w, i) => (
-          <span key={i} style={{ opacity: i < (v.reveal ?? 0) ? 1 : 0 }}>
-            {w}{" "}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: number }) {
   const ref = color === "w" ? g.white : g.black;
@@ -1309,7 +1360,6 @@ function Frame({ g, tl, prep, v, ratings, rival }: { g: Game; tl: Timeline; prep
   if (v.board) body = <GameScene g={g} v={v} prep={prep} wide={wide} ratings={ratings} />;
   else if (s.kind === "versus") body = <VersusScene g={g} v={v} wide={wide} ratings={ratings} rival={rival} />;
   else if (s.kind === "interview") body = <InterviewScene g={g} s={s} v={v} wide={wide} />;
-  else if (s.kind === "flashback") body = <FlashbackScene g={g} s={s} v={v} wide={wide} />;
   else if (s.kind === "result") body = <ResultScene g={g} v={v} wide={wide} ratings={ratings} rival={rival} />;
   else if (s.kind === "end") body = <EndScene g={g} />;
   const { w, h } = FRAME[tl.format];
