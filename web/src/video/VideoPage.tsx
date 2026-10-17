@@ -328,27 +328,31 @@ function marksAt(marks: SceneMark[], local: number, mover: Color, alpha = 1): { 
   const sideColor = (c: Color | undefined) => (c ? (c === mover ? OWN_ARROW : OPP_ARROW) : RING);
   const shown = (at: number) => clamp01((local - at) / 0.08);
   for (const mk of marks) {
-    if (local < mk.start || local >= mk.end + MARK_FADE) continue;
-    const a0 = alpha * (local < mk.end ? 1 : 1 - (local - mk.end) / MARK_FADE);
+    // A drawing the next mark repeats soon stays up (`hold`) past this mark's coming off, until it's drawn again.
+    const held = Math.max(-Infinity, ...mk.arrows.map((a) => a.hold ?? -Infinity), ...mk.rings.map((r) => r.hold ?? -Infinity));
+    if (local < mk.start || (local >= mk.end + MARK_FADE && local >= held)) continue;
+    const a0 = alpha * (local < mk.end ? 1 : Math.max(0, 1 - (local - mk.end) / MARK_FADE));
+    const stays = (hold?: number) => (hold !== undefined && local < hold ? alpha : a0);
     const moves = mk.arrows.filter((a) => !a.hit);
     for (const a of mk.arrows) {
       if (a.at > local) continue;
-      let o = a0 * shown(a.at);
+      let o = stays(a.hold) * shown(a.at);
       if (!a.hit && moves.length >= 3) {
         const next = moves[moves.indexOf(a) + 1];
         if (next && next.at <= local) o *= 1 - 0.45 * ease(clamp01((local - next.at) / 0.2));
       }
       const own = a.color === mover;
-      arrows.push({ from: a.from, to: a.to, own, ...(a.hit && { hit: true }), o: r3(o), pop: pop(a.at) });
+      if (o > 0) arrows.push({ from: a.from, to: a.to, own, ...(a.hit && { hit: true }), o: r3(o), pop: pop(a.at) });
       // Each word lights up as it's said (an arrow can name a piece a few words later: "Rxe8+ … the rook"),
       // in the colour of the side whose piece it names: an arrow to the opponent's knight lights "Nd7" red.
-      for (const l of a.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)), at: l.at });
+      for (const l of a.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(a0 * shown(a.at) * shown(l.at)), at: l.at });
     }
     for (const r of mk.rings) {
       if (r.at > local) continue;
-      const o = a0 * shown(r.at);
-      rings.push({ sq: r.sq, ...(r.side && { own: r.side === mover }), o: r3(o), pop: pop(r.at) });
-      for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(o * shown(l.at)), at: l.at });
+      const o = stays(r.hold) * shown(r.at);
+      if (o > 0) rings.push({ sq: r.sq, ...(r.side && { own: r.side === mover }), o: r3(o), pop: pop(r.at) });
+      // Words come off with their mark, even under a drawing that stays up.
+      for (const l of r.lit) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(a0 * shown(r.at) * shown(l.at)), at: l.at });
     }
     // The director's refs: exactly the words it said point at the board.
     for (const l of mk.lit ?? []) if (l.at <= local) lit.push({ word: l.word, color: sideColor(l.color), o: r3(a0 * shown(l.at)), at: l.at });

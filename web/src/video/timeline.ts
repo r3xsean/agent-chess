@@ -42,9 +42,10 @@ export interface SceneMark {
   start: number;
   end: number;
   keep?: boolean;
-  arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; lit: SceneLit[] }[];
+  /** `hold`: the next mark draws it again, so it stays up through the wipe until that copy has settled in. */
+  arrows: { from: string; to: string; color: Color; at: number; hit?: boolean; lit: SceneLit[]; hold?: number }[];
   /** `side`: whose piece is in the circle (none: an empty square), which sets its colour. */
-  rings: { sq: string; at: number; side?: Color; lit: SceneLit[] }[];
+  rings: { sq: string; at: number; side?: Color; lit: SceneLit[]; hold?: number }[];
   /** The words of the director's refs (see ThoughtRef), lit as they're said, once what they point at is drawn. */
   lit?: SceneLit[];
 }
@@ -66,6 +67,10 @@ const MARK_LOOKBACK = 10;
 export const MARK_FADE = 0.2;
 const MARK_LEAD = 0.1;
 const MARK_HOLD = 0.5;
+/** How soon into the next mark a drawing it repeats must come for the last one's copy to stay up until it does. */
+const MARK_BRIDGE = 2;
+/** How long a drawing takes to snap in and settle: a held copy stays that long past the new one appearing. */
+const MARK_SETTLE = 0.25;
 
 export interface Timeline {
   format: Format;
@@ -178,6 +183,22 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       const start = Math.min(...arrows.map((a) => a.at), ...rings.map((r) => r.at));
       const last = Math.max(mk.word, ...mk.arrows.map((a) => a.word), ...mk.rings.map((r) => r.word), ...(mk.refs ?? []).map((r) => r.words[1]));
       return { start, natural: after(mk.until ?? sentenceEnd(quote, last)) + MARK_HOLD, arrows, rings, lit };
+    });
+    // An arrow or circle the next mark draws again soon after it starts stays up through the wipe until
+    // it's drawn again, rather than coming off and straight back (the knight circled in idea after idea).
+    const arrowKey = (a: { from: string; to: string; hit?: boolean; color: Color }) => `${a.from}${a.to}${a.hit ? "~" : ""}${a.color}`;
+    const ringKey = (r: { sq: string; side?: Color }) => `${r.sq}${r.side ?? ""}`;
+    timed.forEach((mk, n) => {
+      const next = timed[n + 1];
+      if (!next) return;
+      for (const a of mk.arrows) {
+        const again = next.arrows.find((b) => arrowKey(b) === arrowKey(a));
+        if (again && again.at - next.start <= MARK_BRIDGE) Object.assign(a, { hold: again.at + MARK_SETTLE });
+      }
+      for (const r of mk.rings) {
+        const again = next.rings.find((b) => ringKey(b) === ringKey(r));
+        if (again && again.at - next.start <= MARK_BRIDGE) Object.assign(r, { hold: again.at + MARK_SETTLE });
+      }
     });
     return {
       marks: timed.map(({ start, natural, arrows, rings, lit }, n) => {
