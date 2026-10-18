@@ -1390,6 +1390,11 @@
   flex: 0 0 316px;
   width: 316px;
   align-self: center;
+  /* Never taller than the window: once the upload section is in, the panel scrolls on its own. */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #4b4945 transparent;
   background: #262522;
   border-radius: 10px;
   padding: 16px;
@@ -1397,6 +1402,9 @@
   flex-direction: column;
   gap: 12px;
   font-size: 13px;
+}
+.render-panel > * {
+  flex-shrink: 0;
 }
 .render-panel h3 {
   margin: 0;
@@ -1579,5 +1587,7 @@
     flex: none;
     width: 100%;
     max-width: 480px;
+    max-height: none;
+    overflow: visible;
   }
 }
