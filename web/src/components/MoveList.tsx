@@ -56,10 +56,15 @@ export function MoveList({
 
   return (
     <div ref={ref}>
-      {game.opening && (
+      {(game.opening || game.options?.rated === false) && (
         <div className="opening-name">
-          <span className="chip">{game.opening.eco}</span>
-          <b>{game.opening.name}</b>
+          {game.opening && (
+            <>
+              <span className="chip">{game.opening.eco}</span>
+              <b>{game.opening.name}</b>
+            </>
+          )}
+          {game.options?.rated === false && <span className="chip" title="This game doesn't change anyone's rating">Unrated</span>}
         </div>
       )}
       {rows.length === 0 && <div className="empty">No moves yet.</div>}

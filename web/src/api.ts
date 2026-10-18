@@ -12,6 +12,7 @@ export interface GameSummary {
   plies: number;
   opening: Game["opening"];
   tournamentId?: string;
+  rated: boolean;
   accuracy: { w: number | null; b: number | null } | null;
 }
 

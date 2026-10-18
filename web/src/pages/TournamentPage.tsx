@@ -32,7 +32,7 @@ export function TournamentPage({ id }: { id: string }) {
     <div className="page">
       <h1>🏆 {t.name}</h1>
       <p className="sub">
-        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin · {t.status}
+        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin{t.rated === false ? " · unrated" : ""} · {t.status}
       </p>
       {t.status === "running" && (
         <div className="card" style={{ padding: 14 }}>

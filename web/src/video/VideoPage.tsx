@@ -1967,6 +1967,8 @@ function Thumbnail({ g, prep }: { g: Game; prep: Prep }) {
 /* ------------------------------ ratings at the time of the game ------------------------------ */
 
 async function loadRatings(g: Game): Promise<Ratings> {
+  // An unrated game's video shows no ratings.
+  if (g.options?.rated === false) return null;
   // Saved when the game was rated, so games played since never move them.
   const before = g.ratingBefore;
   const change = g.ratingChange;

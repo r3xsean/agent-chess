@@ -7,7 +7,7 @@ import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
-import { board, playerOf, ratingOf, startFenOf } from "./game";
+import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
 import { renderBoardPng } from "./boardImage";
 import { agentDir, games, readJournal, readLessons } from "./store";
 import { MAX_LESSONS, MAX_LESSON_LINES } from "./game";
@@ -189,6 +189,7 @@ export function pregameBrief(g: Game, color: Color): string {
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
+    ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     isHuman(playerOf(g, other(color)))
       ? "Your opponent is a human, playing their own moves on the website."
       : `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
@@ -276,7 +277,7 @@ export function postgameBrief(g: Game, color: Color): string {
   const notable = mine.filter((m) => ["brilliant", "great", "blunder", "mistake", "miss"].includes(m.analysis!.classification));
   const out = [
     "=== GAME OVER ===",
-    `${res} — ${g.result} (${g.termination}). Rating change: ${g.ratingChange?.[color] && g.ratingChange[color] > 0 ? "+" : ""}${g.ratingChange?.[color] ?? 0}`,
+    `${res} — ${g.result} (${g.termination}). ${isRated(g) ? `Rating change: ${g.ratingChange?.[color] && g.ratingChange[color] > 0 ? "+" : ""}${g.ratingChange?.[color] ?? 0}` : "Unrated game: no rating change."}`,
     `Full game: ${moveList(g.moves)}`,
     "",
     "Engine review of your play (now that the game is over, you may see it):",

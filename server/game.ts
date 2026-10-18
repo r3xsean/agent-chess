@@ -73,6 +73,7 @@ export function createGame(opts: {
   broadcaster: Game["broadcaster"];
   tournamentId?: string;
   learning?: boolean;
+  rated?: boolean;
   /** A Chess960 game from this starting position (0–959). */
   chess960?: number;
 }): Game {
@@ -103,7 +104,7 @@ export function createGame(opts: {
     playStartedAt: null,
     interviewsCompleteAt: null,
     ...(opts.chess960 !== undefined ? { opening: { eco: "960", name: `Chess960 #${opts.chess960}` } } : {}),
-    options: { pieceList: true, learning: opts.learning ?? true },
+    options: { pieceList: true, learning: opts.learning ?? true, rated: opts.rated ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
   ensurePlayer(opts.white);
@@ -204,20 +205,27 @@ export const playerFinished = (g: Game, c: Color) =>
 /** Ready to start: the pre-game interview is in (a human is always ready). */
 const preReady = (g: Game, c: Color) => seatIsHuman(g, c) || !!g.interviews.pre[c];
 
-/** A model is busy while any of its games (tournament or not) is unfinished, post-game duties included. */
+/** A model is busy while any of its rated games (tournament or not) is unfinished, post-game duties included. Unrated games never hold it up. */
 const busyModels = () => {
   const busy = new Set<string>();
-  for (const g of games.values()) if (g.phase !== "finished") for (const p of [g.white, g.black]) if (!isHuman(p)) busy.add(p.model);
+  for (const g of games.values()) if (g.phase !== "finished" && isRated(g)) for (const p of [g.white, g.black]) if (!isHuman(p)) busy.add(p.model);
   return busy;
+};
+
+/** Games a tournament plays at once: as many as its players can fill unless it asked for fewer. */
+export const boardsOf = (t: Tournament) => {
+  const most = Math.max(1, Math.floor(t.players.length / 2));
+  return Math.min(Math.max(1, t.boards ?? most), most);
 };
 
 /**
  * The pairings a tournament can start right now, in schedule order: a free board each, and
- * (with more than one board) no model that is already playing anywhere.
+ * (with more than one board) no model that is already in a rated game anywhere. An unrated
+ * tournament's games don't hold their models up either, so a model can be in several of them at once.
  */
 export function startablePairings(t: Tournament) {
   const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished").length;
-  const boards = Math.max(1, t.boards ?? 1);
+  const boards = boardsOf(t);
   if (boards === 1) return live ? [] : t.pairings.filter((p) => !p.gameId).slice(0, 1);
   const byId = new Map(t.players.map((p) => [p.id, p]));
   const busy = busyModels();
@@ -227,7 +235,7 @@ export function startablePairings(t: Tournament) {
     if (p.gameId) continue;
     const models = [byId.get(p.white)!.model, byId.get(p.black)!.model];
     if (models.some((m) => busy.has(m))) continue;
-    models.forEach((m) => busy.add(m));
+    if (t.rated !== false) models.forEach((m) => busy.add(m));
     out.push(p);
   }
   return out;
@@ -283,7 +291,7 @@ export function tick() {
   // Multi-board tournaments can also be held up by games outside them (a model was busy elsewhere):
   // when a board is free and a pairing could start, ask again.
   for (const t of tournaments.values()) {
-    if (!t.autoRun || t.status !== "running" || (t.boards ?? 1) <= 1) continue;
+    if (!t.autoRun || t.status !== "running" || boardsOf(t) <= 1) continue;
     if (now - (t.lastKickAt ?? 0) < KICK_COOLDOWN_MS || !startablePairings(t).length) continue;
     kickTournament(t, () => (t.lastKickAt = Date.now() - KICK_COOLDOWN_MS + 60_000));
   }
@@ -311,9 +319,18 @@ function endGame(g: Game, result: Result, termination: string) {
   touch(g);
 }
 
+/** Rated unless it was set up unrated (games from before the option are all rated). */
+export const isRated = (g: Game) => g.options?.rated !== false;
+
 /** Glicko-2 for one finished game: both players update from their ratings before it. */
 function applyRating(g: Game) {
   if (!g.result) return;
+  // An unrated game leaves the ratings and the leaderboard record alone.
+  if (!isRated(g)) {
+    delete g.ratingBefore;
+    delete g.ratingChange;
+    return;
+  }
   const pw = ensurePlayer(g.white);
   const pb = ensurePlayer(g.black);
   const sw = g.result === "1-0" ? 1 : g.result === "0-1" ? 0 : 0.5;

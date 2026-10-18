@@ -165,7 +165,7 @@ export interface Game {
   playStartedAt: number | null;
   endedAt?: number;
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
-  options?: { pieceList?: boolean; learning?: boolean };
+  options?: { pieceList?: boolean; learning?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
   lessonsDone?: Partial<Record<Color, boolean>>;
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<Color | "x", number>>;
@@ -404,9 +404,11 @@ export interface Tournament {
   autoRun?: boolean;
   /** Every game is Chess960; each pairing carries its start position (shared by a double round-robin's return game). */
   chess960?: boolean;
+  /** false: none of its games are rated. */
+  rated?: boolean;
   pairings: { white: string; black: string; gameId?: string; chess960?: number }[];
   status: "running" | "finished";
-  /** Games played at once (default 1). Above 1, no model ever plays two games at the same time, in or out of the tournament. */
+  /** Games played at once (default: as many as the players fill, half of them). Above 1, no model is ever in two rated games at the same time, in or out of the tournament; unrated games don't count. */
   boards?: number;
   /** Last time the server asked T3 to start more pairings (so it doesn't ask twice in a row). */
   lastKickAt?: number;

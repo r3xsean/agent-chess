@@ -26,6 +26,8 @@ import {
   seatIsHuman,
   seatKeysFor,
   startablePairings,
+  boardsOf,
+  isRated,
   submitTurn,
   tick,
   touch,
@@ -288,6 +290,7 @@ function gameSummary(g: Game) {
     plies: g.moves.length,
     opening: g.opening,
     tournamentId: g.tournamentId,
+    rated: isRated(g),
     accuracy: g.review ? { w: g.review.w.accuracy, b: g.review.b.accuracy } : null,
   };
 }
@@ -486,8 +489,8 @@ app.post(
     saveTournamentNow(t);
     bus.emit("lobby");
     // Several boards: start whatever can go now; anything blocked starts as boards and models free up.
-    if ((t.boards ?? 1) > 1 && !startablePairings(t).length) return { ok: true, waiting: true };
-    if ((t.boards ?? 1) > 1) t.lastKickAt = Date.now();
+    if (boardsOf(t) > 1 && !startablePairings(t).length) return { ok: true, waiting: true };
+    if (boardsOf(t) > 1) t.lastKickAt = Date.now();
     else if (live) return { ok: true, alreadyRunning: live.gameId };
     await triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
       throw new ActionError(e.message);
@@ -512,7 +515,7 @@ app.post(
     const black = playerRef(req.body.black ?? {});
     if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model, effort and personality). Change one of them.");
-    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false, chess960: chess960Choice(req.body.chess960) });
+    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false, rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
     // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
     const human = humanSide(g);
     const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
@@ -685,11 +688,12 @@ app.post(
       doubleRound: !!req.body.doubleRound,
       broadcaster: broadcasterConfig(req.body.broadcaster),
       learning: req.body.learning !== false,
+      rated: req.body.rated !== false,
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
     };
-    const boards = Math.floor(Number(req.body.boards) || 1);
-    if (boards > 1) t.boards = Math.min(boards, Math.floor(unique.length / 2));
+    // Left out, boards means as many games at once as the players can fill; 1 plays them one at a time.
+    if (req.body.boards != null) t.boards = Math.floor(Number(req.body.boards)) || 1;
     if (req.body.chess960) {
       // Every pairing gets its own start position; in a double round-robin the return game replays it with colours swapped.
       t.chess960 = true;
@@ -729,11 +733,11 @@ app.post(
     }
     const byId = new Map(t.players.map((p) => [p.id, p]));
     const start = (next: Tournament["pairings"][number]) => {
-      const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, chess960: next.chess960 });
+      const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, rated: t.rated !== false, chess960: next.chess960 });
       next.gameId = g.id;
       return g;
     };
-    if ((t.boards ?? 1) <= 1) {
+    if (boardsOf(t) <= 1) {
       if (live.length) return { game: games.get(live[0].gameId!), launch: launchSpec(games.get(live[0].gameId!)!), alreadyRunning: true };
       const g = start(t.pairings.find((p) => !p.gameId)!);
       saveTournamentNow(t);

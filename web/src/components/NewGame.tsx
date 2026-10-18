@@ -58,6 +58,28 @@ export function LearningToggle({ value, onChange }: { value: boolean; onChange: 
   );
 }
 
+export function RatedToggle({ value, onChange, tournament }: { value: boolean; onChange: (v: boolean) => void; tournament?: boolean }) {
+  return (
+    <div className="seat" style={{ marginTop: 14 }}>
+      <h3>
+        📈 Rated
+        <span className={`toggle ${value ? "on" : ""}`} style={{ marginLeft: "auto" }} onClick={() => onChange(!value)}>
+          {value ? "On" : "Off"} <span className="sw" />
+        </span>
+      </h3>
+      <div style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.45 }}>
+        {value
+          ? tournament
+            ? "Every result updates the players' ratings and leaderboard records."
+            : "The result updates the players' ratings and leaderboard records."
+          : tournament
+            ? "No game in it changes anyone's rating or leaderboard record."
+            : "The result doesn't change anyone's rating or leaderboard record."}
+      </div>
+    </div>
+  );
+}
+
 /** Chess960 on or off; empty position = a random one (0–959) for each game. */
 export interface Chess960Choice {
   on: boolean;
@@ -181,6 +203,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high", personality: "python" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [learning, setLearning] = useState(true);
+  const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -206,6 +229,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
             <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
+            <RatedToggle value={rated} onChange={setRated} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
               <button className="btn" onClick={onClose}>
@@ -215,7 +239,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, learning, chess960: chess960Body(c960) });
+                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, learning, rated, chess960: chess960Body(c960) });
                     setCreated(r.game.id);
                   } catch (e) {
                     setErr(String(e));
@@ -240,6 +264,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [learning, setLearning] = useState(true);
+  const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
@@ -257,6 +282,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
         black: me === "b" ? human : agent,
         broadcaster: bc,
         learning,
+        rated,
         chess960: chess960Body(c960),
       });
       saveSeat(r.game.id, r.humanKey);
@@ -322,6 +348,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
             <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
+            <RatedToggle value={rated} onChange={setRated} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
               <button className="btn" onClick={onClose}>
@@ -349,6 +376,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   ]);
   const [double, setDouble] = useState(false);
   const [learning, setLearning] = useState(true);
+  const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
   const [created, setCreated] = useState<string | null>(null);
@@ -392,6 +420,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
             <Chess960Toggle value={c960} onChange={setC960} tournament />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
+            <RatedToggle value={rated} onChange={setRated} tournament />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
               <span style={{ color: "var(--muted)", fontSize: 13 }}>
@@ -404,7 +433,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, chess960: c960.on });
+                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, rated, chess960: c960.on });
                     setCreated(t.id);
                   } catch (e) {
                     setErr(String(e));

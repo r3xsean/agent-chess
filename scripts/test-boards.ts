@@ -46,9 +46,31 @@ for (let trial = 0; trial < 50; trial++) {
   if (left) fail(`trial ${trial}: ${left} pairings never started`);
 }
 
+// No boards given: as many games at once as the players fill (3 for 7 players).
+games.clear();
+const auto = { id: "a", players: refs, pairings: roundRobin(refs.map((r) => r.id), false), status: "running" } as any;
+const autoFirst = startablePairings(auto);
+if (autoFirst.length !== 3) fail(`default should fill 3 boards, started ${autoFirst.length}`);
+if (new Set(autoFirst.flatMap((p) => [p.white, p.black])).size !== 6) fail("default boards share a player");
+
+// An unrated game elsewhere doesn't hold its model up.
+games.clear();
+const free = { id: "f", players: refs.slice(0, 4), pairings: roundRobin(refs.slice(0, 4).map((r) => r.id), false), status: "running" } as any;
+const casual = fakeGame(refs[0], { id: "human:human", model: "human", provider: "human" });
+casual.options = { rated: false };
+if (!startablePairings(free).some((p) => [p.white, p.black].includes(refs[0].id))) fail("an unrated game kept its model out of the tournament");
+casual.options = { rated: true };
+if (startablePairings(free).some((p) => [p.white, p.black].includes(refs[0].id))) fail("a rated game should keep its model out");
+
+// An unrated tournament doesn't hold its own players up: a model can be on two boards at once.
+games.clear();
+const loose = { ...free, id: "l", pairings: roundRobin(refs.slice(0, 4).map((r) => r.id), false), rated: false } as any;
+const looseFirst = startablePairings(loose);
+if (looseFirst.length !== 2) fail(`unrated tournament should fill both boards, started ${looseFirst.length}`);
+
 // One board keeps the old behaviour: one game at a time, regardless of other games.
 games.clear();
-const single = { id: "s", players: refs, pairings: roundRobin(refs.map((r) => r.id), false), status: "running" } as any;
+const single = { id: "s", players: refs, pairings: roundRobin(refs.map((r) => r.id), false), boards: 1, status: "running" } as any;
 fakeGame(refs[0], refs[1]);
 const first = startablePairings(single);
 if (first.length !== 1 || first[0] !== single.pairings[0]) fail("single board should start the first pairing");

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from "../api";
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
+import { personalityById } from "../../../shared/personalities";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
   return (
@@ -58,7 +59,10 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
               <td className="g-b">
                 <PlayerCell p={g.black} rating={ratings?.[g.black.id]} />
               </td>
-              <td className="res g-res">{g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}</td>
+              <td className="res g-res">
+                {g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
+                {!g.rated && <div style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>unrated</div>}
+              </td>
               <td className="g-acc">{g.accuracy ? `${g.accuracy.w?.toFixed(1) ?? "–"} / ${g.accuracy.b?.toFixed(1) ?? "–"}` : "–"}</td>
               <td className="g-open" style={{ color: "var(--text-2)", maxWidth: 220 }}>{g.opening?.name ?? "–"}</td>
               <td className="g-moves">{Math.ceil(g.plies / 2)}</td>
@@ -139,6 +143,102 @@ function Predictors({ base, live }: { base: string; live: number }) {
   );
 }
 
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
+const ALL = "";
+
+/** The leaderboard, narrowed by model, effort and personality (each "All" by default). Ranks count within the filter. */
+function Leaderboard({ players }: { players: PlayerStats[] }) {
+  const [model, setModel] = useState(ALL);
+  const [effort, setEffort] = useState(ALL);
+  const [personality, setPersonality] = useState(ALL);
+  const options = (key: (r: PlayerRef) => string, label: (r: PlayerRef) => string, order?: (a: string, b: string) => number) =>
+    // A human has no effort: no blank option for it.
+    [...new Map(players.filter((p) => key(p.ref)).map((p) => [key(p.ref), label(p.ref)])).entries()].sort(([a, la], [b, lb]) => order?.(a, b) || la.localeCompare(lb));
+  const models = options((r) => r.model, (r) => r.modelLabel);
+  const efforts = options(
+    (r) => r.effort,
+    (r) => r.effort,
+    (a, b) => (EFFORT_ORDER.indexOf(a) + 1 || 99) - (EFFORT_ORDER.indexOf(b) + 1 || 99),
+  );
+  const personalities = options((r) => r.personality, (r) => personalityById(r.personality).name);
+  const shown = players.filter(
+    (p) => (model === ALL || p.ref.model === model) && (effort === ALL || p.ref.effort === effort) && (personality === ALL || p.ref.personality === personality),
+  );
+  const filtered = model !== ALL || effort !== ALL || personality !== ALL;
+  const picker = (label: string, value: string, set: (v: string) => void, opts: [string, string][]) => (
+    <label className="field" style={{ marginBottom: 0, minWidth: 150 }}>
+      {label}
+      <select value={value} onChange={(e) => set(e.target.value)}>
+        <option value={ALL}>All</option>
+        {opts.map(([id, name]) => (
+          <option key={id} value={id}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  return (
+    <>
+      <h2>🏆 Leaderboard</h2>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
+        {picker("Model", model, setModel, models)}
+        {picker("Effort", effort, setEffort, efforts)}
+        {picker("Personality", personality, setPersonality, personalities)}
+        {filtered && (
+          <button
+            className="btn"
+            onClick={() => {
+              setModel(ALL);
+              setEffort(ALL);
+              setPersonality(ALL);
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="card">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Player</th>
+              <th>Rating</th>
+              <th className="hide-sm">Games</th>
+              <th>W / D / L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((p, i) => (
+              <tr key={p.id} className="click" onClick={() => (location.hash = `#/player/${encodeURIComponent(p.id)}`)}>
+                <td style={{ color: "var(--muted)", fontWeight: 700 }}>{i + 1}</td>
+                <td>
+                  <PlayerCell p={p.ref} />
+                </td>
+                <td style={{ fontWeight: 800 }}>
+                  <RatingText p={p} />
+                </td>
+                <td className="hide-sm">{p.games}</td>
+                <td>
+                  <span style={{ color: "var(--green)" }}>{p.wins}</span> / {p.draws} / <span style={{ color: "var(--c-blunder)" }}>{p.losses}</span>
+                </td>
+              </tr>
+            ))}
+            {shown.length === 0 && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {players.length ? "No player matches these filters." : "Nobody has played yet."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: boolean; onNewGame: () => void; onPlay: () => void; onNewTournament: () => void }) {
   const lobby = useStream<LobbyData>("/api/lobby/stream");
   const meta = useMeta();
@@ -181,51 +281,17 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
                 <PlayerCell p={g.white} rating={ratings[g.white.id]} />
                 <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs</div>
                 <PlayerCell p={g.black} rating={ratings[g.black.id]} />
-                <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>{phaseLabel(g)}</div>
+                <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>
+                  {phaseLabel(g)}
+                  {!g.rated && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · unrated</span>}
+                </div>
               </a>
             ))}
           </div>
         </>
       )}
 
-      <h2>🏆 Leaderboard</h2>
-      <div className="card">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Player</th>
-              <th>Rating</th>
-              <th className="hide-sm">Games</th>
-              <th>W / D / L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lobby.players.map((p, i) => (
-              <tr key={p.id} className="click" onClick={() => (location.hash = `#/player/${encodeURIComponent(p.id)}`)}>
-                <td style={{ color: "var(--muted)", fontWeight: 700 }}>{i + 1}</td>
-                <td>
-                  <PlayerCell p={p.ref} />
-                </td>
-                <td style={{ fontWeight: 800 }}>
-                  <RatingText p={p} />
-                </td>
-                <td className="hide-sm">{p.games}</td>
-                <td>
-                  <span style={{ color: "var(--green)" }}>{p.wins}</span> / {p.draws} / <span style={{ color: "var(--c-blunder)" }}>{p.losses}</span>
-                </td>
-              </tr>
-            ))}
-            {lobby.players.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty">
-                  Nobody has played yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <Leaderboard players={lobby.players} />
 
       {meta && <Predictors base={meta.crowdBase} live={live.length} />}
 
