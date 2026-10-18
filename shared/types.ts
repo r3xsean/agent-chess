@@ -4,6 +4,15 @@ export type SeatRole = Color | "x" | "d";
 export type Phase = "pregame" | "playing" | "postgame" | "finished";
 export type Result = "1-0" | "0-1" | "1/2-1/2";
 
+export interface GamePause {
+  at: number;
+  /** Stable reason for behavior; the readable reason is not used as a condition. */
+  code: string;
+  reason: string;
+  seats?: Color[];
+  resetAt?: number;
+}
+
 export type Classification =
   | "brilliant"
   | "great"
@@ -158,6 +167,12 @@ export interface Game {
   /** The full illegal attempts this turn, alongside `pendingIllegal` (missing on older games). */
   pendingTries?: Record<Color, IllegalTry[]>;
   turnStartedAt: number | null;
+  /** Freeze thinking time during a provider outage; persisted across restarts. */
+  clockPause?: GamePause;
+  /** Latest provider failure consumed per seat, so recovery cannot replay an old pause. */
+  usageLimitSeen?: Partial<Record<Color, string>>;
+  /** Successful game actions only: status checks and long-poll requests are not recovery. */
+  lastAgentActionAt?: Partial<Record<Color, number>>;
   analysis: Record<string, PositionAnalysis>;
   opening: { eco: string; name: string } | null;
   review: Record<Color, SideReview> | null;
@@ -173,6 +188,8 @@ export interface Game {
   launched?: Partial<Record<SeatRole, number>>;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
   lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
+  /** A replayed illegal submission is not evidence that the agent recovered. */
+  rejectedTurns?: Partial<Record<Color, { hashes: string[]; ply: number }>>;
   /** How many moves had been played when each seat was last shown the position (a YOUR MOVE brief or `status`). */
   briefedAt?: Partial<Record<Color, number>>;
   /** Last time the website asked T3 to summon agents for this game. */

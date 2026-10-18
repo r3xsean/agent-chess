@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import { currentThinkMs, pauseThinkingClock, resumeThinkingClock } from "../shared/thinkingClock";
+import type { Game } from "../shared/types";
+
+const g: Pick<Game, "turnStartedAt" | "clockPause"> = { turnStartedAt: 1_000 };
+assert.equal(currentThinkMs(g, 4_000), 3_000);
+pauseThinkingClock(g, { at: 4_000, code: "manual", reason: "Maintenance" });
+assert.equal(currentThinkMs(g, 7_204_000), 3_000, "hours of downtime must not count");
+pauseThinkingClock(g, { at: 9_000, code: "manual", reason: "Maintenance" });
+assert.equal(g.clockPause?.at, 4_000, "duplicate reports preserve the original pause");
+const restored = JSON.parse(JSON.stringify(g));
+assert.equal(currentThinkMs(restored, 7_204_000), 3_000, "pause survives persistence");
+resumeThinkingClock(restored, 7_204_000);
+assert.equal(currentThinkMs(restored, 7_206_000), 5_000, "preserve thinking before and after outage");
+resumeThinkingClock(restored, 7_206_000);
+assert.equal(currentThinkMs(restored, 7_206_000), 5_000, "duplicate resume is harmless");
+const ended = { turnStartedAt: null };
+pauseThinkingClock(ended, { at: 4_000, code: "manual", reason: "Maintenance" });
+assert.equal(currentThinkMs(ended, 9_000), 0);
+console.log("PASS: thinking clock excludes outages, survives restart, and resumes without losing prior thinking");

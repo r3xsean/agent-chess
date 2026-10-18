@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { currentThinkMs } from "../../../shared/thinkingClock";
 import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from "../../../shared/types";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
@@ -15,6 +16,7 @@ import { SummonButton } from "../components/NewGame";
 import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
 import { PlayerBar } from "../components/PlayerBar";
+import { PauseNotice } from "../components/PauseNotice";
 import { MoveList } from "../components/MoveList";
 import { ThinkingFeed } from "../components/ThinkingFeed";
 import { Studio } from "../components/Studio";
@@ -513,9 +515,10 @@ export function GamePage({ id }: { id: string }) {
   const illegalShown = view.illegal ?? (flash && isLive && flash.fen === view.fen ? flash.move : undefined);
 
   const thinkMs = (c: Color) =>
-    game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c && game.turnStartedAt ? now - game.turnStartedAt : 0);
+    game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c ? currentThinkMs(game, now) : 0);
   const rating = (c: Color) => lobby?.players.find((p) => p.id === (c === "w" ? game.white : game.black).id)?.rating;
   const status = (c: Color) => {
+    if (game.clockPause) return { text: "⏸ Paused", kind: "idle" as const };
     if (game.phase === "pregame") return game.interviews.pre[c] || c === human ? { text: "Ready", kind: "plain" as const } : { text: "In the studio", kind: "plain" as const };
     if (playing && turn === c && c === human) return { text: c === mine ? "Your move" : "Thinking", kind: "thinking" as const };
     if (playing && turn === c) {
@@ -571,7 +574,7 @@ export function GamePage({ id }: { id: string }) {
       status={status(c)}
       belief={beliefPill(c)}
       clockMs={thinkMs(c)}
-      active={playing && turn === c}
+      active={playing && turn === c && !game.clockPause}
     />
   );
   const agentName = agentSide ? sideName(game, agentSide) : "";
@@ -631,6 +634,7 @@ export function GamePage({ id }: { id: string }) {
       </div>
 
       <div className="side-panel">
+        {game.clockPause && <PauseNotice pause={game.clockPause} game={game} />}
         <div className="tabs">
           {(
             [
@@ -924,8 +928,8 @@ export function GamePage({ id }: { id: string }) {
             </a>
           )}
           {game.phase !== "finished" && (
-            <span className="live-dot" style={{ opacity: isLive ? 1 : 0.4, cursor: "pointer" }} onClick={() => go(total)}>
-              ● LIVE
+            <span className="live-dot" style={{ opacity: isLive ? 1 : 0.4, cursor: "pointer", ...(game.clockPause ? { color: "var(--pause-color)" } : {}) }} onClick={() => go(total)}>
+              {game.clockPause ? "⏸ PAUSED" : "● LIVE"}
             </span>
           )}
         </div>

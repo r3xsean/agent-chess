@@ -5,6 +5,7 @@ import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from ".
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { personalityById } from "../../../shared/personalities";
+import { PauseNotice } from "../components/PauseNotice";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
   return (
@@ -33,7 +34,7 @@ export function RatingText({ p }: { p: Pick<PlayerStats, "rating" | "rd"> }) {
 }
 
 const phaseLabel =(g: GameSummary) =>
-  g.phase === "pregame" ? "Pre-game" : g.phase === "playing" ? `Live · move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "postgame" ? "Post-game" : g.result ?? "Aborted";
+  g.clockPause ? `⏸ Paused · ${g.phase === "playing" ? `move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "pregame" ? "pre-game" : "post-game"}` : g.phase === "pregame" ? "Pre-game" : g.phase === "playing" ? `Live · move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "postgame" ? "Post-game" : g.result ?? "Aborted";
 
 export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: Record<string, number> }) {
   return (
@@ -60,7 +61,8 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
                 <PlayerCell p={g.black} rating={ratings?.[g.black.id]} />
               </td>
               <td className="res g-res">
-                {g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
+                {g.clockPause ? <span className="pause-label">{phaseLabel(g)}</span> : g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
+                {g.clockPause && <PauseNotice pause={g.clockPause} game={g} compact />}
                 {!g.rated && <div style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>unrated</div>}
               </td>
               <td className="g-acc">{g.accuracy ? `${g.accuracy.w?.toFixed(1) ?? "–"} / ${g.accuracy.b?.toFixed(1) ?? "–"}` : "–"}</td>
@@ -274,17 +276,18 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
 
       {live.length > 0 && (
         <>
-          <h2>🔴 Live now</h2>
+          <h2>{live.every((g) => g.clockPause) ? "⏸ Ongoing games" : "🔴 Live & ongoing"}</h2>
           <div className="live-cards">
             {live.map((g) => (
-              <a key={g.id} className="live-card" href={`#/game/${g.id}`}>
+              <a key={g.id} className={`live-card${g.clockPause ? " is-paused" : ""}`} href={`#/game/${g.id}`}>
                 <PlayerCell p={g.white} rating={ratings[g.white.id]} />
                 <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs</div>
                 <PlayerCell p={g.black} rating={ratings[g.black.id]} />
-                <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>
+                <div style={{ fontSize: 13, color: g.clockPause ? "var(--pause-color)" : "var(--green)", fontWeight: 700 }}>
                   {phaseLabel(g)}
                   {!g.rated && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · unrated</span>}
                 </div>
+                {g.clockPause && <PauseNotice pause={g.clockPause} game={g} compact />}
               </a>
             ))}
           </div>

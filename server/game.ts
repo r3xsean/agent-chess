@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { currentThinkMs } from "../shared/thinkingClock";
+import { playerActed } from "./pauses";
 import { EventEmitter } from "node:events";
 import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
 import { Engine } from "./engine";
@@ -292,6 +294,7 @@ function kickTournament(t: Tournament, onFail?: () => void) {
 export function tick() {
   const now = Date.now();
   for (const g of games.values()) {
+    if (g.clockPause) continue;
     if (g.phase === "pregame" && preReady(g, "w") && preReady(g, "b")) {
       g.interviewsCompleteAt ??= now;
       const bcSpoke = g.broadcast.some((l) => l.ts >= g.interviewsCompleteAt!);
@@ -338,6 +341,7 @@ function endGame(g: Game, result: Result, termination: string) {
   g.phase = "postgame";
   g.drawOffer = null;
   g.turnStartedAt = null;
+  // Unrecovered players may still owe their post-game interview/journal.
   g.endedAt = Date.now();
   applyRating(g);
   if (g.tournamentId) {
@@ -414,6 +418,10 @@ export function rebuildRatings() {
 
 export class ActionError extends Error {}
 
+function requireActionAllowed(g: Game) {
+  if (g.clockPause && g.clockPause.code !== "usage_limit") throw new ActionError(`Game paused: ${g.clockPause.reason}. Waiting for an explicit resume.`);
+}
+
 export interface TurnInput {
   move: string;
   commentary: string;
@@ -484,6 +492,7 @@ function parseLine(g: Game, fen: string, raw: string, note: string): CalcLine {
 }
 
 export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord {
+  requireActionAllowed(g);
   if (g.phase !== "playing" || g.result) throw new ActionError("The game is not in progress.");
   const c = board(g);
   if (c.turn() !== color) throw new ActionError("It is not your turn. Run `wait`.");
@@ -507,7 +516,7 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     .map((l) => parseLine(g, fenBefore, l.moves, String(l.note ?? "")));
 
   const now = Date.now();
-  const thinkMs = g.turnStartedAt ? now - g.turnStartedAt : 0;
+  const thinkMs = currentThinkMs(g, now);
   if (!mv) {
     g.pendingIllegal[color].push(input.move.slice(0, 20));
     // The thinking behind it is kept for spectators; the agent is only told the move was illegal.
@@ -521,6 +530,8 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
       thinkMs,
       ts: now,
     });
+    playerActed(g, color, now);
+    saveGameNow(g);
     touch(g);
     throw new ActionError("Illegal move.");
   }
@@ -549,6 +560,7 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
   g.moves.push(rec);
   g.drawOffer = input.offerDraw ? color : null;
   g.turnStartedAt = now;
+  playerActed(g, color, now);
   // Opening names are for the standard setup; a Chess960 game is named after its start position.
   const op = variantOf(g) === "standard" ? lookupOpening(rec.fenAfter) : null;
   if (op) g.opening = op;
@@ -565,17 +577,22 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
 }
 
 export function resign(g: Game, color: Color) {
+  requireActionAllowed(g);
   if (g.phase !== "playing" || g.result) throw new ActionError("The game is not in progress.");
+  playerActed(g, color);
   endGame(g, color === "w" ? "0-1" : "1-0", `${colorName(color)} resigned`);
 }
 
 export function acceptDraw(g: Game, color: Color) {
+  requireActionAllowed(g);
   if (g.phase !== "playing" || g.result) throw new ActionError("The game is not in progress.");
   if (g.drawOffer !== other(color)) throw new ActionError("There is no draw offer from your opponent to accept.");
+  playerActed(g, color);
   endGame(g, "1/2-1/2", "draw agreed");
 }
 
 export function submitInterview(g: Game, color: Color, text: string) {
+  requireActionAllowed(g);
   text = String(text ?? "").trim();
   if (!text) throw new ActionError("Interview answer is empty.");
   if (text.length > MAX_INTERVIEW) throw new ActionError(`Keep it under ${MAX_INTERVIEW} characters (yours: ${text.length}).`);
@@ -588,11 +605,13 @@ export function submitInterview(g: Game, color: Color, text: string) {
     if (g.interviews.post[color]) throw new ActionError("You already gave your post-game interview.");
     g.interviews.post[color] = { text, ts: Date.now() };
   } else throw new ActionError("Interviews happen before and after the game only.");
+  playerActed(g, color);
   saveGameNow(g);
   touch(g);
 }
 
 export function submitJournal(g: Game, color: Color, text: string) {
+  requireActionAllowed(g);
   text = String(text ?? "").trim();
   if (g.phase !== "postgame") throw new ActionError("Journal entries are written after the game.");
   if (!text) throw new ActionError("Journal entry is empty.");
@@ -608,6 +627,7 @@ export function submitJournal(g: Game, color: Color, text: string) {
     text,
   });
   g.journalDone[color] = true;
+  playerActed(g, color);
   saveGameNow(g);
   touch(g);
 }
@@ -630,6 +650,7 @@ export function lessonItems(text: string): string[] {
 
 /** The player rewrites its model's whole lessons file (shared by every personality of that model). */
 export function submitLessons(g: Game, color: Color, text: string) {
+  requireActionAllowed(g);
   if (!g.options?.learning) throw new ActionError("Learning is off for this game.");
   if (g.phase !== "postgame") throw new ActionError("Lessons are updated after the game.");
   text = String(text ?? "").trim();
@@ -655,6 +676,7 @@ export function submitLessons(g: Game, color: Color, text: string) {
   }
   writeLessons(model, text, g.id);
   g.lessonsDone = { ...g.lessonsDone, [color]: true };
+  playerActed(g, color);
   saveGameNow(g);
   touch(g);
 }

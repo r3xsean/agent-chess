@@ -7,6 +7,7 @@ export interface GameSummary {
   white: PlayerRef;
   black: PlayerRef;
   phase: Game["phase"];
+  clockPause?: Game["clockPause"];
   result: Game["result"];
   termination: string | null;
   plies: number;

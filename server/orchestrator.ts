@@ -116,6 +116,7 @@ function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: strin
     "## 2. Look after them",
     `You're woken when a child task finishes; don't poll or sleep in loops. Look after only the seats you launched. Each time one finishes, GET ${API}/api/games/<id>/agents:`,
     "- Its seat shows `done: true`: nothing to do.",
+    "- `clockPause.code` is `usage_limit`, or the task failed with a usage limit: leave it to T3's auto-resume. Do not abort, cancel, re-delegate, or send repeated continuations. The server freezes the clocks and clears the usage pause when players act again. Other pause reasons also mean wait, not abort.",
     '- Not done: the agent stopped early. Continue it with `t3_thread_send` to its childThreadId: "The game is not over. Keep looping: run the CLI command your last reply asked for, and act on what it prints, until it prints DONE." If it can\'t be revived, `task_cancel` it and delegate its task again with clientRequestId `<its clientRequestId>-r<n>` (the same prompt: its key still works).',
     "- If the side to move's `secondsSinceSeen` passes 600 while its task still runs, check it with `task_status` before doing anything.",
     `- A game that can't go on: POST ${API}/api/games/<id>/abort (admin).`,

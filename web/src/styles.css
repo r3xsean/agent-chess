@@ -12,6 +12,7 @@
   --green: #81b64c;
   --green-hover: #a3d160;
   --green-shadow: #45753c;
+  --pause-color: #f3c878;
   --board-light: #ebecd0;
   --board-dark: #739552;
   --c-brilliant: #26c2a3;
@@ -1387,6 +1388,24 @@ cg-board square.check {
 .live-card:hover {
   border-color: var(--green);
 }
+.live-card.is-paused { border-color: #806339; }
+.pause-label { color: var(--pause-color); }
+.pause-notice {
+  flex-shrink: 0;
+  padding: 14px 16px;
+  border: 1px solid #806339;
+  border-left: 4px solid var(--pause-color);
+  border-radius: 8px;
+  background: #393125;
+  color: #e9dbc3;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pause-notice strong { display: block; color: var(--pause-color); font-size: 17px; margin-bottom: 4px; }
+.pause-reason { font-weight: 600; }
+.pause-explanation { margin-top: 8px; color: #cebea4; }
+.pause-summary { font-size: 12px; font-weight: 400; line-height: 1.4; color: #d5bf9c; overflow-wrap: anywhere; }
 .res {
   font-weight: 800;
 }

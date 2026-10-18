@@ -1,5 +1,8 @@
 import express, { type Request, type Response } from "express";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { resumeThinkingClock } from "../shared/thinkingClock";
+import { migratePause, pauseGame } from "./pauses";
+import { startUsageLimitWatcher } from "./usageLimits";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -65,6 +68,7 @@ setGameSource(() => games.values());
 if (!PUBLIC_MODE) startLocal();
 
 function startLocal() {
+  for (const g of games.values()) migratePause(g);
   rebuildRatings();
   loadOpenings();
   engine.start();
@@ -89,6 +93,7 @@ function startLocal() {
     if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
   setInterval(tick, 1000);
+  startUsageLimitWatcher(() => games.values(), (g) => { saveGameNow(g); touch(g); });
   startMirror();
 }
 
@@ -290,6 +295,7 @@ function gameSummary(g: Game) {
     white: g.white,
     black: g.black,
     phase: g.phase,
+    clockPause: g.clockPause,
     result: g.result,
     termination: g.termination,
     plies: g.moves.length,
@@ -568,6 +574,7 @@ app.get(
     const seatInfo = (c: Color) => (seatIsHuman(g, c) ? { human: true, done: true } : { secondsSinceSeen: ago(c), done: playerDone(c) });
     return {
       phase: g.phase,
+      clockPause: g.clockPause,
       result: g.result,
       seats: {
         white: seatInfo("w"),
@@ -580,6 +587,34 @@ app.get(
   }),
 );
 app.post(
+  "/api/games/:id/clock",
+  localOnly,
+  handle((req) => {
+    requireAdmin(req);
+    const g = getGame(String(req.params.id));
+    if (g.phase === "finished") throw new ActionError("The game is finished.");
+    if (req.body?.action === "pause") {
+      const at = req.body.at ?? Date.now();
+      if (typeof at !== "number" || !Number.isFinite(at)) throw new ActionError("Invalid pause time.");
+      const code = String(req.body.code ?? "manual");
+      if (!/^[a-z][a-z0-9_]{0,39}$/.test(code)) throw new ActionError("Invalid pause reason code.");
+      const seats = req.body.seats;
+      if (code === "usage_limit" && (!Array.isArray(seats) || !seats.length || seats.some((c: unknown) => c !== "w" && c !== "b"))) throw new ActionError("Usage pauses need affected seats (w/b).");
+      const resetAt = req.body.resetAt;
+      if (resetAt !== undefined && (typeof resetAt !== "number" || !Number.isFinite(resetAt))) throw new ActionError("Invalid reset time.");
+      pauseGame(g, { at: Math.max(g.createdAt, at), code, reason: String(req.body.reason ?? "Paused by the operator").trim().slice(0, 200) || "Paused by the operator", ...(code === "usage_limit" ? { seats: [...new Set<Color>(seats)] } : {}), resetAt });
+    } else if (req.body?.action === "resume") {
+      // Explicitly resuming also dismisses previously observed failures, including across restarts.
+      g.lastAgentActionAt = { w: Date.now(), b: Date.now() };
+      resumeThinkingClock(g);
+    }
+    else throw new ActionError("Use action pause or resume.");
+    saveGameNow(g);
+    touch(g);
+    return { ok: true, clockPause: g.clockPause ?? null };
+  }),
+);
+app.post(
   "/api/games/:id/abort",
   localOnly,
   handle((req) => {
@@ -587,6 +622,7 @@ app.post(
     const g = getGame(String(req.params.id));
     if (g.phase === "finished") return { ok: true };
     g.phase = "finished";
+    delete g.clockPause;
     g.termination = g.result ? g.termination : "aborted";
     touch(g);
     return { ok: true };
@@ -809,6 +845,7 @@ function seat(key: string) {
 
 /** What a player should do right now, or null if it must wait. */
 function playerTodo(g: Game, c: Color): string | null {
+  if (g.clockPause && g.clockPause.code !== "usage_limit") return null;
   switch (g.phase) {
     case "pregame":
       return g.interviews.pre[c] ? null : pregameBrief(g, c);
@@ -857,6 +894,7 @@ const postgameMissing = (g: Game, c: Color) =>
   [!g.interviews.post[c] && "interview", !g.journalDone[c] && "journal", !!g.options?.learning && !g.lessonsDone?.[c] && "lessons"].filter(Boolean) as string[];
 
 function waitingReason(g: Game, c: Color) {
+  if (g.clockPause) return `game paused: ${g.clockPause.reason}`;
   if (g.phase === "pregame") return "waiting for the other player's interview and the broadcaster's introduction";
   if (g.phase === "playing") return `your opponent is thinking (move ${Math.ceil((g.moves.length + 1) / 2)})`;
   if (g.phase === "postgame") return "the engine is finishing its review";
@@ -1044,7 +1082,19 @@ app.post(
         const prev = g.lastTurn?.[c];
         const seenSince = (g.briefedAt?.[c] ?? -1) === g.moves.length;
         if (prev?.hash === hash && !seenSince) return next(`OK — you already played ${prev.san} with this exact turn; it wasn't played again.`);
-        const rec = submitTurn(g, c, req.body.turn ?? {});
+        const rejected = g.rejectedTurns?.[c];
+        if (rejected?.ply === g.moves.length && rejected.hashes.includes(hash)) throw new ActionError("Illegal move.");
+        let rec: MoveRecord;
+        try {
+          rec = submitTurn(g, c, req.body.turn ?? {});
+        } catch (e) {
+          if (e instanceof ActionError && e.message === "Illegal move.") {
+            const hashes = rejected?.ply === g.moves.length ? [...rejected.hashes, hash] : [hash];
+            g.rejectedTurns = { ...g.rejectedTurns, [c]: { hashes, ply: g.moves.length } };
+            saveGameNow(g);
+          }
+          throw e;
+        }
         g.lastTurn = { ...g.lastTurn, [c]: { hash, san: rec.san } };
         saveGameNow(g);
         const lines = rec.lines.length ? ` Lines recorded: ${rec.lines.length}.` : "";

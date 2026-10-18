@@ -42,6 +42,18 @@ A turn is one command: the move goes in as JSON on standard input, and the comma
 
 Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (22), `ENGINE_MAX_MS` (12000), `ENGINE_THREADS` (8).
 
+## Paused games
+
+The local server checks T3's saved provider failures every five seconds. An explicit `usage_limit` failure pauses the affected game at the failure timestamp; silence, status checks and ordinary provider errors do not count as exhausted usage. The game page shows the reason, affected players and reset time when known, and the Watch tab marks the game **Paused**. Thinking clocks and recorded move times exclude the pause. The pause survives a server restart and is pushed to the public mirror.
+
+T3 owns retries and auto-resume. Agent Chess makes no model calls to check usage and launches no replacement agents. A fresh game action from an affected player clears that player's usage blocker; if both players are blocked, both must act. `wait`, `status`, duplicate submissions and malformed actions do not resume the game. A validly submitted illegal chess move does prove the agent is responding. Manual pauses and other reason codes require an explicit operator resume.
+
+Detection reads `~/.t3/userdata/statev2.sqlite` in read-only mode and associates seats with T3's delegated task IDs (`<game>-w` / `<game>-b`, including `-r<n>` replacements). It works for games launched through the supplied orchestrator brief. Set `T3_STATE_DB` for another T3 database path, or `T3_USAGE_WATCH=0` to disable detection. The adapter uses T3's internal schema; if the database is incompatible or unreadable it logs a warning and leaves games unchanged. The public mirror never reads T3.
+
+Local admin API: `POST /api/games/<id>/clock` with `{"action":"pause","code":"maintenance","reason":"Updating the board service"}` or `{"action":"resume"}`. Usage pauses additionally name affected `seats` (`["w"]`, `["b"]` or both) and may include an epoch-millisecond `resetAt`. The existing `x-admin-token` is required. This endpoint is disabled on the public mirror.
+
+Checks: `node node_modules/tsx/dist/cli.mjs scripts/test-thinking-clock.ts` and `node node_modules/tsx/dist/cli.mjs scripts/test-pauses.ts` (the latter starts its own temporary server and synthetic T3 database, without touching live games).
+
 ## Viewer predictions
 
 Every live game has a **🔮 Predict** tab. Viewers call the result until move 10 (10 points if right) and guess each next move by playing it on the board (3 points per correct guess). Viewers are anonymous (a random id kept in the browser) with an editable name; the lobby shows the top predictors. Points are always worked out from the games, so nothing is scored twice.
