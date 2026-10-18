@@ -169,6 +169,10 @@ export interface Game {
   lessonsDone?: Partial<Record<Color, boolean>>;
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<Color | "x", number>>;
+  /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
+  lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
+  /** How many moves had been played when each seat was last shown the position (a YOUR MOVE brief or `status`). */
+  briefedAt?: Partial<Record<Color, number>>;
   /** Last time the website asked T3 to summon agents for this game. */
   summonRequestedAt?: number;
   /** Tournament auto-run: the next pairing has been requested after this game finished. */
@@ -400,12 +404,12 @@ export interface Tournament {
   doubleRound: boolean;
   broadcaster: Game["broadcaster"];
   learning?: boolean;
+  /** false: none of its games are rated. */
+  rated?: boolean;
   /** Started from the website: each finished game automatically summons the next pairing. */
   autoRun?: boolean;
   /** Every game is Chess960; each pairing carries its start position (shared by a double round-robin's return game). */
   chess960?: boolean;
-  /** false: none of its games are rated. */
-  rated?: boolean;
   pairings: { white: string; black: string; gameId?: string; chess960?: number }[];
   status: "running" | "finished";
   /** Games played at once (default: as many as the players fill, half of them). Above 1, no model is ever in two rated games at the same time, in or out of the tournament; unrated games don't count. */

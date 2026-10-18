@@ -1,5 +1,3 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { personalityById } from "../shared/personalities";
@@ -8,8 +6,7 @@ import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
 import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
-import { renderBoardPng } from "./boardImage";
-import { agentDir, games, readJournal, readLessons } from "./store";
+import { games, readJournal, readLessons } from "./store";
 import { MAX_LESSONS, MAX_LESSON_LINES } from "./game";
 import { modelLabel } from "../shared/models";
 import { rivalry, seriesLine } from "./rivalry";
@@ -91,20 +88,21 @@ export function moveList(moves: MoveRecord[]): string {
   return parts.join(" ");
 }
 
+/** The last few full moves (from a White move), marked when earlier ones are left out. */
+export function recentMoves(moves: MoveRecord[], fullMoves = 10): string {
+  if (moves.length <= fullMoves * 2) return moveList(moves);
+  let from = moves.length - fullMoves * 2;
+  if (moves[from].color === "b") from++;
+  return `… ${moveList(moves.slice(from))}`;
+}
+
 export function turnBrief(g: Game, color: Color): string {
   const c = board(g);
   const fen = c.fen();
   const last = g.moves[g.moves.length - 1];
   const moveNo = Math.ceil((g.moves.length + 1) / 2);
-  const img = path.join(agentDir(g.id, color), "board.png");
-  try {
-    writeFileSync(img, renderBoardPng(fen, color, last ? { from: last.from, to: last.to } : undefined));
-  } catch (e) {
-    console.error("[board image]", e);
-  }
   const out = [
     `=== YOUR MOVE — move ${moveNo}, you are ${colorName(color)} ===`,
-    `Opponent: ${describePlayer(g, other(color))}`,
     ...(variantOf(g) === "chess960" ? [`Variant: Chess960 (start position #${g.chess960}). ${castlingNote(startFenOf(g))}`] : []),
     "",
     "Board (your side at the bottom; White = UPPERCASE, Black = lowercase, '.' = empty):",
@@ -116,16 +114,14 @@ export function turnBrief(g: Game, color: Color): string {
   ];
   if (c.inCheck()) out.push("⚠ You are in CHECK.");
   out.push(capturedSummary(g));
-  out.push(`Moves so far: ${moveList(g.moves)}`);
+  out.push(`Recent moves: ${recentMoves(g.moves)}`);
   if (g.drawOffer === other(color)) {
     out.push("", "🤝 Your opponent has offered a draw. Accept with `accept-draw`, or simply make a move to decline.");
   }
   if (g.pendingIllegal[color].length) out.push(`(Rejected this turn: ${g.pendingIllegal[color].join(", ")})`);
   const lessons = g.options?.learning ? readLessons(playerOf(g, color).model).text : "";
   const plain = personalityById(playerOf(g, color).personality).plain;
-  if (lessons) out.push("", plain ? "Your lessons from past games (keep them in mind):" : "Your lessons from past games (keep them in mind — they sharpen your execution, they don't change your style or risk appetite):", lessons);
-  out.push("", `Board image (same position, as it looks on screen): ${img}`);
-  out.push("", "Submit with: move <turn.json>   (see your instructions for the JSON format)");
+  if (lessons) out.push("", plain ? "Your lessons:" : "Your lessons (execution, not style or risk):", lessons);
   return out.join("\n");
 }
 
@@ -189,11 +185,11 @@ export function pregameBrief(g: Game, color: Color): string {
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
-    ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     isHuman(playerOf(g, other(color)))
       ? "Your opponent is a human, playing their own moves on the website."
       : `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
     headToHead(g, color),
+    ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
     "",
     journal.length ? "Your journal — recent games, plus your notes on this opponent (oldest first):" : "Your journal is empty — this is your first game.",
@@ -201,7 +197,7 @@ export function pregameBrief(g: Game, color: Color): string {
     "",
     ...lessonsBlock(g, color),
     `INTERVIEWER: "${pregameQuestion(g, color)}"`,
-    `Answer ${voiceOf(g, color)}, under 800 characters, with: interview <file.txt>  (or: interview --text "...")`,
+    `Answer ${voiceOf(g, color)}, under 800 characters, with: interview -  (text on standard input)`,
   ];
   return out.join("\n");
 }
@@ -271,6 +267,9 @@ function worstMoves(g: Game, color: Color, limit = 5): string[] {
 }
 
 export function postgameBrief(g: Game, color: Color): string {
+  const needs = postgameNeeds(g, color);
+  // Once part of it is in, the player already has the review: just say what's left.
+  if (g.interviews.post[color] || g.journalDone[color] || g.lessonsDone?.[color]) return ["=== GAME OVER — still to do ===", ...needs.lines, "", postgameSubmit(needs.keys)].join("\n");
   const r = g.review?.[color];
   const res = g.result === "1/2-1/2" ? "Draw" : (g.result === "1-0") === (color === "w") ? "You WON" : "You LOST";
   const mine = g.moves.filter((m) => m.color === color && m.analysis);
@@ -297,41 +296,51 @@ export function postgameBrief(g: Game, color: Color): string {
       "Note: you play for practical chances, so the engine will mark some deliberate risks as inaccuracies or mistakes. Judge a risk by whether it was a real practical chance, not by the engine's number — but a risk that simply lost material for nothing is still a mistake.",
     );
   if (g.options?.learning) out.push("", "Your worst moves, in detail (diagrams from your side):", ...worstMoves(g, color));
-  const needs: string[] = [];
+  if (needs.lines.length) out.push("", "Still to do:", ...needs.lines, "", postgameSubmit(needs.keys));
+  return out.join("\n");
+}
+
+/** The post-game tasks a player hasn't done yet, and the `postgame` JSON keys they go in. */
+function postgameNeeds(g: Game, color: Color) {
+  const lines: string[] = [];
+  const keys: string[] = [];
   if (!g.interviews.post[color]) {
-    needs.push(
-      `1) INTERVIEWER: "Walk us through that game — what was the key moment, and how do you feel about it?${seriesNow(g, color)}"`,
-      `   Answer ${voiceOf(g, color)}, under 800 characters: interview <file.txt>`,
+    keys.push("interview");
+    lines.push(
+      `1) "interview": INTERVIEWER: "Walk us through that game — what was the key moment, and how do you feel about it?${seriesNow(g, color)}"`,
+      `   Answer ${voiceOf(g, color)}, under 800 characters.`,
     );
   }
   if (!g.journalDone[color]) {
-    needs.push(
+    keys.push("journal");
+    lines.push(
       g.options?.learning
-        ? "2) Write a SHORT private journal entry (under 600 characters) about this game and this opponent — what happened, what they like to do. Future-you reads your recent entries before each game."
-        : "2) Write a SHORT private journal entry (under 600 characters) with lessons you want to remember for future games — about your own play, and about this opponent. Future-you will read it before the next game.",
-      "   Submit with: journal <file.txt>",
+        ? '2) "journal": a SHORT private journal entry (under 600 characters) about this game and this opponent — what happened, what they like to do. Future-you reads your recent entries before each game.'
+        : '2) "journal": a SHORT private journal entry (under 600 characters) with lessons you want to remember for future games — about your own play, and about this opponent. Future-you will read it before the next game.',
     );
   }
   if (g.options?.learning && !g.lessonsDone?.[color]) {
+    keys.push("lessons");
     const model = playerOf(g, color).model;
     const l = readLessons(model);
     // Remember which version this player was shown, so a concurrent update can't be silently overwritten.
     g.lessonsSeen = { ...g.lessonsSeen, [color]: l.version };
-    needs.push(
-      `3) Update your LESSONS — your playbook, shown to you before and during every future game (shared by all your ${modelLabel(model)} personalities).`,
+    lines.push(
+      `3) "lessons": update your LESSONS — your playbook, shown to you before and during every future game (shared by all your ${modelLabel(model)} personalities).`,
       `   Study your worst moves above. Then rewrite the WHOLE list: at most ${MAX_LESSON_LINES} bullet items and ${MAX_LESSONS} characters in total. Keep what still matters, merge duplicates, sharpen vague items, drop what's stale, add what this game taught you.`,
-      "   Each item is one bullet in the form \"- When [situation] → [what to do]\", e.g. \"- When a piece leaves a diagonal or file → re-check what that line now opens for BOTH sides, especially a queen or bishop standing behind it.\"",
+      "   Each item is one bullet in the form \"- When [situation] → [what to do]\", e.g. \"- When a piece leaves a diagonal or file → re-check what that line now opens for BOTH sides, especially a queen or bishop standing behind it.\" Separate the bullets with \\n in the JSON string.",
       "   Lessons are GENERAL PRINCIPLES about how you think, calculate and check moves — no opening move sequences, no specific positions.",
       personalityById(playerOf(g, color).personality).plain
         ? "   They're shared by every personality your model is ever asked to play, calm or wild, so keep them about EXECUTION, never about how much risk to take: no \"avoid gambits\", \"play solid\" or \"don't sacrifice\" (e.g. \"- When I sacrifice for an attack → count the attackers and defenders around the king before committing.\")."
         : "   They're shared by every personality you play, calm or wild, so they're about EXECUTION, never about how much risk to take: no \"avoid gambits\", \"play solid\" or \"don't sacrifice\". Your personality decides the risk; lessons make you better at whatever style you're playing (e.g. \"- When I sacrifice for an attack → count the attackers and defenders around the king before committing.\").",
       `   Your current lessons: ${l.text ? `\n${l.text}` : "(none yet)"}`,
-      "   Submit with: lessons <file.txt>",
     );
   }
-  if (needs.length) out.push("", "Still to do:", ...needs);
-  return out.join("\n");
+  return { lines, keys };
 }
+
+const postgameSubmit = (keys: string[]) =>
+  `Submit ${keys.length > 1 ? "them all at once" : "it"} with \`postgame\`, as JSON: { ${keys.map((k) => `"${k}": "…"`).join(", ")} }`;
 
 /* ------------------------- broadcaster event feed ------------------------- */
 

@@ -5,15 +5,16 @@ import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const URL = "http://127.0.0.1:5170";
+const URL = process.env.AGENT_CHESS_URL ?? "http://127.0.0.1:5170";
 const CLI = path.resolve("cli/chess.mjs");
 const tmp = mkdtempSync(path.join(tmpdir(), "chess-smoke-"));
-const TOKEN = (await import("node:fs")).readFileSync("data/admin-token.txt", "utf8").trim();
+const TOKEN = (await import("node:fs")).readFileSync(path.join(process.env.AGENT_CHESS_DATA ?? "data", "admin-token.txt"), "utf8").trim();
 const api = async (p, body) =>
   (await fetch(URL + p, body ? { method: "POST", headers: { "content-type": "application/json", "x-admin-token": TOKEN }, body: JSON.stringify(body) } : {})).json();
 const cli = (args) => {
   try {
-    return execFileSync("node", [CLI, ...args], { encoding: "utf8" });
+    // --no-wait: this script drives both seats in turn, so no command may block on the other one.
+    return execFileSync("node", [CLI, ...args, ...(args[0] === "wait" ? [] : ["--no-wait"])], { encoding: "utf8", env: { ...process.env, AGENT_CHESS_URL: URL } });
   } catch (e) {
     return e.stdout + e.stderr;
   }

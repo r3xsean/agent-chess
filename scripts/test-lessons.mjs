@@ -6,14 +6,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const URL = "http://127.0.0.1:5170";
+const URL = process.env.AGENT_CHESS_URL ?? "http://127.0.0.1:5170";
+const DATA = process.env.AGENT_CHESS_DATA ?? "data";
 const CLI = path.resolve("cli/chess.mjs");
 const MODEL = "gpt-5.6-terra"; // both seats share a model → exercises the shared-lessons concurrency check
-const token = readFileSync("data/admin-token.txt", "utf8").trim();
+const token = readFileSync(path.join(DATA, "admin-token.txt"), "utf8").trim();
 const post = async (p, body) =>
   (await fetch(URL + p, { method: "POST", headers: { "content-type": "application/json", "x-admin-token": token }, body: JSON.stringify(body ?? {}) })).json();
 const cli = async (...a) => {
-  const r = await run("node", [CLI, ...a]).catch((e) => e);
+  // --no-wait: this script drives both seats in turn, so no command may block on the other one.
+  const r = await run("node", [CLI, ...a, ...(a[0] === "wait" ? [] : ["--no-wait"])], { env: { ...process.env, AGENT_CHESS_URL: URL } }).catch((e) => e);
   return (r.stdout ?? "").trim();
 };
 const check = (label, ok) => console.log(`${ok ? "PASS" : "FAIL"}  ${label}`);
@@ -30,7 +32,7 @@ async function newGame() {
   return { game, key, prompt: launch.tasks[0].prompt };
 }
 const turn = (g, side, move) => {
-  const f = path.resolve("data/agents", g.id, side === "white" ? "w" : "b", "t.json");
+  const f = path.resolve(DATA, "agents", g.id, side === "white" ? "w" : "b", "t.json");
   writeFileSync(f, JSON.stringify({ move, commentary: "test", eval: "0" }));
   return f;
 };
@@ -38,7 +40,7 @@ const turn = (g, side, move) => {
 try {
   // Game 1: scholar's mate, so Black has a real blunder to study.
   const { game: g, key, prompt } = await newGame();
-  check("player prompt documents the lessons command", prompt.includes("lessons <file.txt>"));
+  check("player prompt documents lessons in the postgame command", prompt.includes("`postgame -`") && prompt.includes("LESSONS"));
   await cli("interview", "--text", "Hi.", "--key", key.white);
   await cli("interview", "--text", "Hi.", "--key", key.black);
   await new Promise((r) => setTimeout(r, 1500));
@@ -49,7 +51,7 @@ try {
   await new Promise((r) => setTimeout(r, 6000));
   const blackBrief = await cli("wait", "--key", key.black);
   check("post-game brief shows worst moves in detail", blackBrief.includes("Your worst moves, in detail") && blackBrief.includes("What punishes Nf6"));
-  check("post-game brief asks for lessons", blackBrief.includes("Update your LESSONS"));
+  check("post-game brief asks for lessons", blackBrief.includes("update your LESSONS") && blackBrief.includes('"lessons": "…"'));
   const whiteBrief = await cli("wait", "--key", key.white); // both seats now saw v0
 
   for (const side of ["white", "black"]) {
@@ -80,7 +82,7 @@ try {
   await cli("interview", "--text", "Hi.", "--key", k2.black);
   await new Promise((r) => setTimeout(r, 1500));
   const t1 = await cli("wait", "--key", k2.white);
-  check("every move's brief shows the lessons", t1.includes("Your lessons from past games") && t1.includes("f7 square"));
+  check("every move's brief shows the lessons", t1.includes("Your lessons") && t1.includes("f7 square"));
   check("every move's brief shows the piece list", t1.includes("Pieces — White: Ke1"));
 
   const reset = await post(`/api/lessons/${MODEL}/reset`);
@@ -91,9 +93,9 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   // Cleanup: throwaway games, their files, the test model's lessons and the test players' journals.
   for (const id of created) {
-    for (const p of [`data/games/${id}.json`, `data/agents/${id}`, `data/audio/${id}`]) if (existsSync(p)) rmSync(p, { recursive: true, force: true });
+    for (const p of [`${DATA}/games/${id}.json`, `${DATA}/agents/${id}`, `${DATA}/audio/${id}`]) if (existsSync(p)) rmSync(p, { recursive: true, force: true });
   }
-  for (const p of [`data/lessons/${MODEL}.json`, `data/journals/${MODEL}_low_magician.json`, `data/journals/${MODEL}_low_python.json`])
+  for (const p of [`${DATA}/lessons/${MODEL}.json`, `${DATA}/journals/${MODEL}_low_magician.json`, `${DATA}/journals/${MODEL}_low_python.json`])
     if (existsSync(p)) rmSync(p, { force: true });
   console.log(`cleaned up ${created.length} test games (restart the server to drop them from memory)`);
 }

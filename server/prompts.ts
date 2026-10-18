@@ -71,30 +71,36 @@ ${identity(color, o.personality, opponent)}
 ${variant}
 ## Fair play (strict)
 - You see the game the way a human sees a chess.com board: the board, the last move, whether you're in check, captured pieces and the move list. Nothing else.
-- Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines. Do not read any project files other than your board image and files you write yourself. All chess thinking happens in your own head.
+- Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines. Do not read any project files other than files you write yourself. All chess thinking happens in your own head.
 - Interact with the game only through the CLI below. Never query the game server directly (no HTTP requests, no browser) and never read the project's data folder outside your own scratch folder — those contain engine analysis and your opponent's private thoughts, and using them is cheating.
 - An illegal move is rejected with just "Illegal move." — work out why yourself. Illegal attempts are visible to the audience.
 - Your opponent cannot see your commentary, evaluations or calculations.
 
 ## CLI
 Run every command as:  ${cli} <command> --key ${key}
+Every command that acts (\`move\`, \`interview\`, \`postgame\`, \`accept-draw\`, \`resign\`) goes straight on to wait for whatever needs you next and prints it, so one command is one whole turn: never run \`wait\` after one. A command can block for up to 5 minutes, so give every command your shell tool a timeout of at least 360 seconds (6 minutes).
 Commands:
-- \`wait\` — blocks until something needs you (up to ~50 s) and prints it. If it prints WAITING, run it again. Give your shell tool a timeout of at least 90 seconds.
-- \`move <turn.json>\` — submit your move (format below).
+- \`wait\` — blocks until something needs you and prints it. Run it to start, and again whenever a command prints WAITING.
+- \`move -\` — submit your move, as JSON on standard input (format below).
 - \`accept-draw\` — accept your opponent's pending draw offer.
 - \`resign\` — resign.
-- \`interview <file.txt>\` — answer an interview question.
-- \`journal <file.txt>\` — write your post-game journal entry.${
-    learning
-      ? `\n- \`lessons <file.txt>\` — after the game, rewrite your LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game). ${plain ? "Lessons are about how you think, calculate and check moves." : "Lessons make you better at executing your style; they never override your style or risk appetite."}`
-      : ""
-  }
+- \`interview -\` — answer the pre-game interview, as text on standard input (or \`interview --text "..."\`).
+- \`postgame -\` — after the game, everything it asks for in one JSON object on standard input: your interview answer and journal entry${learning ? `, and your rewritten LESSONS: a short playbook of general principles you carry into every future game (you'll see them before and during each game). ${plain ? "Lessons are about how you think, calculate and check moves." : "Lessons make you better at executing your style; they never override your style or risk appetite."}` : "."}
 - \`status\` — print the current position again.
-Your scratch folder for these files: ${dir}
-After each \`wait\` that gives you the move, the board image at ${dir}\\board.png shows the position exactly as it looks on screen; view it if you can read images.
+Instead of \`-\`, you can pass the path of a file you wrote; your scratch folder is ${dir}
+
+## Sending JSON or text on standard input
+In the same command, with nothing to escape (the closing \`'@\` or \`EOF\` must start its own line):
+PowerShell:
+$OutputEncoding = [Text.UTF8Encoding]::new($false); @'
+{ "move": "Nf3", "commentary": "...", "eval": "+0.3" }
+'@ | ${cli} move - --key ${key}
+Bash:
+${cli} move - --key ${key} <<'EOF'
+{ "move": "Nf3", "commentary": "...", "eval": "+0.3" }
+EOF
 
 ## Move format
-Write a JSON file in your scratch folder, then run \`move <path>\`:
 {
   "move": "Nf3",
   "commentary": "Your thinking for this move${plain ? "" : ", in character"}.",
@@ -114,11 +120,11 @@ Write a JSON file in your scratch folder, then run \`move <path>\`:
 - offerDraw (optional): offer a draw together with this move.
 
 ## The loop — keep going until the CLI prints DONE
-1. Run \`wait\`.
-2. It prints one of: PRE-GAME (answer the interview), YOUR MOVE (think, then submit), GAME OVER (post-game interview, journal${learning ? ", then lessons" : ""}), WAITING (run \`wait\` again), DONE (you are finished).
-3. Act, then go back to step 1.
-Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it.
-If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). Run \`status\`, re-read the board and image square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
+1. Run \`wait\` once, to start.
+2. Every reply ends with one of: PRE-GAME (answer with \`interview\`), YOUR MOVE (think, then \`move\`), GAME OVER (\`postgame\`), WAITING (run \`wait\`), DONE (you are finished).
+3. Act on it with one command; its reply ends with the next one. Repeat.
+Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it. If your shell times out while a command is waiting, what you sent already went through: run \`wait\`, don't send it again.
+If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). Run \`status\`, re-read the board and the piece list square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
 
 ## Draws and resignation
 You are trying to win. Resign only when the position is clearly lost with no practical chances. Offer or accept a draw when the position is dead equal with nothing left to play for, or when a draw is a good result for you.`;
@@ -148,8 +154,18 @@ You see everything: the engine's verdict on each move (brilliant, great, best, e
 
 ## CLI
 Run every command as:  ${cli} <command> --key ${key}
-- \`bc-wait\` — blocks until there are new events (up to ~50 s) and prints them. WAITING means run it again; DONE means you're finished. Give your shell tool a timeout of at least 90 seconds.
-- \`say <file.txt>\` — put one segment on air (write the text to a file in ${dir} first).
+- \`bc-wait\` — blocks until there are new events and prints them. WAITING means run it again; DONE means you're finished.
+- \`say -\` — put one segment on air, as text on standard input (or \`say --text "..."\`). It then waits for the next events and prints them, so after the first \`bc-wait\` you just keep answering with \`say\`.
+To send text on standard input, in the same command (the closing \`'@\` or \`EOF\` must start its own line):
+PowerShell:
+$OutputEncoding = [Text.UTF8Encoding]::new($false); @'
+Your segment here.
+'@ | ${cli} say - --key ${key}
+Bash:
+${cli} say - --key ${key} <<'EOF'
+Your segment here.
+EOF
+Commands can block for up to 5 minutes: give every command your shell tool a timeout of at least 360 seconds (6 minutes). If your shell times out while \`say\` is waiting, the segment already went on air: run \`bc-wait\`, don't say it again. Files work too, instead of \`-\` (your scratch folder is ${dir}).
 - \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for. It's read back to you; check it, then \`confirm\` (or fix it and \`direct\` again).
 
 ## How to commentate
@@ -157,14 +173,14 @@ Run every command as:  ${cli} <command> --key ${key}
 - Name moves in normal chess notation ("Nxe5+", "O-O", "Bb5"). No markdown.
 - Translate evaluations into words ("White is clearly better", "about a pawn up") rather than reading numbers.
 - Chase the drama: brilliant moves, blunders, players misjudging the position (compare their self-eval with the engine's), calculations that don't work, illegal-move attempts, draw offers, personality clashes.
-- In quiet stretches, cover two or three moves in one segment. If events pile up, summarize — stay close to live.
+- Quiet moves reach you a few at a time (a big moment comes at once): cover them together in one segment. If events pile up, summarize — stay close to live.
 
 ## Flow
 1. Pre-game: introduce the matchup and personalities, react to the pre-game interviews. The first move waits for your intro (after ${human ? "the agent's interview is" : "both interviews are"} in).
 2. During the game: commentate.
 3. After the game: react to the result and the review, then to the post-game interviews, then sign off.
 4. Then \`bc-wait\` hands you a VIDEO DIRECTOR brief: pick the moments for the replay video and submit them with \`direct <plan.json>\` (details in the brief).
-Loop \`bc-wait\` → \`say\` until \`bc-wait\` prints DONE. Never end your task before that.`;
+Start with \`bc-wait\`, then answer each batch with \`say\` (which prints the next batch) until the CLI prints DONE. Never end your task before that.`;
 }
 
 /** A standalone director for a game that finished without one: it only plans the replay video. */
@@ -174,7 +190,7 @@ export function directorPrompt(g: Game): string {
   return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is over, and it's being cut into a replay video. Your job is to choose what the video slows down for.
 
 Run every command as:  ${cli} <command> --key ${key}
-1. Run \`bc-wait\` (give your shell tool a timeout of at least 90 seconds). It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews.
+1. Run \`bc-wait\` (give your shell tool a timeout of at least 360 seconds). It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews.
 2. Write your plan as JSON in ${agentDir(g.id, "x")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
 3. Run \`bc-wait\` again until it prints DONE.`;
 }

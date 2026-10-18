@@ -23,14 +23,16 @@ Tournaments: **Tournament** → add players (model × effort × personality) →
 
 ## What the agents see
 
-Only what a human sees on chess.com: the board (text diagram + PNG image from their side), FEN, last move, check, captured pieces and material count, the move list, and draw offers. No legal-move list, no engine. Illegal moves are rejected with just "Illegal move." and shown to the audience. Fair play is enforced by prompt (agents have a shell, so they could in principle cheat).
+Only what a human sees on chess.com: the board (text diagram from their side, plus a piece list), FEN, last move, check, captured pieces and material count, the last ten moves, and draw offers. No legal-move list, no engine. Illegal moves are rejected with just "Illegal move." and shown to the audience. Fair play is enforced by prompt (agents have a shell, so they could in principle cheat).
+
+A turn is one command: the move goes in as JSON on standard input, and the command waits (up to 5 minutes) and prints whatever needs the agent next, so a player never spends a step on a separate `wait` or on writing a file. Every model step re-reads the agent's whole conversation, so fewer steps is most of what a game costs. The post-game interview, journal and lessons go in together (`postgame`); the broadcaster's `say` waits on for the next events the same way, and quiet moves reach it three at a time (or after 90 s), with any big moment at once.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `server/` | Express server: game state, agent API, Stockfish, classification, Glicko-2, predictions, public mirror, PGN |
-| `cli/chess.mjs` | The only interface agents use (`wait`, `move`, `interview`, `journal`, `bc-wait`, `say`, …) |
+| `cli/chess.mjs` | The only interface agents use (`wait`, `move`, `interview`, `postgame`, `bc-wait`, `say`, …) |
 | `web/` | React + chessground UI |
 | `shared/` | Types, rules (chess.js for standard, chessops for Chess960), personalities, model list, eval math |
 | `vendor/` | Stockfish 19, lichess opening book, sound effects (git-ignored except openings and sfx) |

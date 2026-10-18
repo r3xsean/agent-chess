@@ -1,5 +1,5 @@
 import express, { type Request, type Response } from "express";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -777,7 +777,12 @@ app.post(
 
 /* ------------------------------ agent API (used by cli/chess.mjs) ------------------------------ */
 
-const WAIT_MS = 45_000;
+/**
+ * How long a call blocks for the next thing to do. Every model step re-reads the agent's whole
+ * conversation, so a WAITING reply is expensive: keep them rare. The CLI allows 330 s, and agents
+ * are asked for a 360 s shell timeout.
+ */
+const WAIT_MS = 300_000;
 
 function seat(key: string) {
   const s = seatKeys[key];
@@ -803,6 +808,39 @@ function playerTodo(g: Game, c: Color): string | null {
   }
 }
 
+/**
+ * The post-game in one call: interview, journal and lessons. Parts already done are skipped, so after
+ * a rejection the player can send the same JSON again with the bad part fixed.
+ */
+function submitPostgame(g: Game, c: Color, input: any): string {
+  // A retry of one that went through (its shell timed out mid-wait) just carries on.
+  if ((g.phase === "postgame" || g.phase === "finished") && !postgameMissing(g, c).length) return "OK — your post-game is already in.";
+  if (g.phase !== "postgame") throw new ActionError("`postgame` is for after the game.");
+  if (!input || typeof input !== "object") throw new ActionError('Send a JSON object: { "interview": "…", "journal": "…", "lessons": "…" }.');
+  const parts = [
+    // Lessons first: they have the strictest checks, so a rejection there leaves nothing half-done.
+    { key: "lessons", todo: !!g.options?.learning && !g.lessonsDone?.[c], save: (t: string) => submitLessons(g, c, t) },
+    { key: "interview", todo: !g.interviews.post[c], save: (t: string) => submitInterview(g, c, t) },
+    { key: "journal", todo: !g.journalDone[c], save: (t: string) => submitJournal(g, c, t) },
+  ].filter((p) => p.todo && typeof input[p.key] === "string" && input[p.key].trim());
+  if (!parts.length) throw new ActionError(`Nothing to save: include what's still to do (${postgameMissing(g, c).join(", ") || "nothing"}).`);
+  const saved: string[] = [];
+  for (const p of parts) {
+    try {
+      p.save(input[p.key]);
+    } catch (e) {
+      if (!(e instanceof ActionError)) throw e;
+      throw new ActionError(`"${p.key}" was not saved: ${e.message}${saved.length ? ` (${saved.join(" and ")} saved — send the JSON again with "${p.key}" fixed).` : ""}`);
+    }
+    saved.push(p.key);
+  }
+  const missing = postgameMissing(g, c);
+  return `OK — saved ${saved.join(", ")}.${missing.length ? ` Still missing: ${missing.join(", ")}.` : ""}`;
+}
+
+const postgameMissing = (g: Game, c: Color) =>
+  [!g.interviews.post[c] && "interview", !g.journalDone[c] && "journal", !!g.options?.learning && !g.lessonsDone?.[c] && "lessons"].filter(Boolean) as string[];
+
 function waitingReason(g: Game, c: Color) {
   if (g.phase === "pregame") return "waiting for the other player's interview and the broadcaster's introduction";
   if (g.phase === "playing") return `your opponent is thinking (move ${Math.ceil((g.moves.length + 1) / 2)})`;
@@ -812,9 +850,10 @@ function waitingReason(g: Game, c: Color) {
 
 /**
  * Long-poll until `check` returns something. `check` must be side-effect free: it runs inside
- * game-change events, so mutating the game from it would re-trigger itself.
+ * game-change events, so mutating the game from it would re-trigger itself. `recheckMs` also runs
+ * it on a timer, for a check that depends on the clock.
  */
-function waitUntil<T>(g: Game, check: () => T | null, res: Response): Promise<T | null> {
+function waitUntil<T>(g: Game, check: () => T | null, res: Response, recheckMs?: number): Promise<T | null> {
   return new Promise((resolve) => {
     const now = check();
     if (now) return resolve(now);
@@ -823,6 +862,7 @@ function waitUntil<T>(g: Game, check: () => T | null, res: Response): Promise<T 
       if (done) return;
       done = true;
       clearTimeout(timer);
+      clearInterval(ticker);
       bus.off(`game:${g.id}`, onChange);
       res.off("close", onClose);
       resolve(v);
@@ -834,6 +874,7 @@ function waitUntil<T>(g: Game, check: () => T | null, res: Response): Promise<T 
     // The response closing before we've written means the CLI went away.
     const onClose = () => finish(null);
     const timer = setTimeout(() => finish(null), WAIT_MS);
+    const ticker = recheckMs ? setInterval(onChange, recheckMs) : undefined;
     bus.on(`game:${g.id}`, onChange);
     res.on("close", onClose);
   });
@@ -849,6 +890,17 @@ function readText(body: any) {
 /** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
 const planDrafts = new Map<string, VideoPlan>();
 
+/** Quiet moves wait for company, so the broadcaster covers a few in one segment instead of one step per move. */
+const BC_BATCH_MOVES = 3;
+const BC_HOLD_MS = 90_000;
+const BC_BIG = new Set(["brilliant", "great", "mistake", "miss", "blunder"]);
+function bcHold(g: Game, fresh: { id: string; ts: number }[]) {
+  if (g.phase !== "playing" || fresh.length >= BC_BATCH_MOVES || fresh.some((e) => !e.id.startsWith("move-"))) return false;
+  const moves = fresh.map((e) => g.moves[Number(e.id.slice(5)) - 1]);
+  if (moves.some((m) => !m || m.illegalAttempts.length || m.offeredDraw || BC_BIG.has(m.analysis?.classification ?? ""))) return false;
+  return Date.now() - Math.min(...fresh.map((e) => e.ts)) < BC_HOLD_MS;
+}
+
 app.post(
   "/api/agent/:cmd",
   localOnly,
@@ -857,28 +909,32 @@ app.post(
     const { g, role } = seat(String(req.body?.key ?? ""));
     const text = (t: string) => res.type("text/plain").send(t);
     if (role === "x") {
-      if (cmd === "bc-wait") {
+      /** Wait for the broadcaster's next events (`say` goes straight on to this too), after `done` if given. */
+      const bcNext = async (done = "") => {
+        if (done && req.body.noWait) return text(`${done} Run \`bc-wait\`.`);
         const pending = () => {
           const fresh = broadcasterEvents(g).filter((e) => !g.bcDelivered.includes(e.id));
           // Once the show is over, the broadcaster plans the replay video before signing off. A standalone
           // director (a game without a broadcaster) goes straight to its brief, not the old event feed.
           if (g.phase === "finished" && needsDirection(g)) return { kind: "direct" as const, fresh };
           if (g.phase === "finished" && g.broadcasterDone) return { kind: "done" as const, fresh };
-          if (fresh.length) return { kind: "events" as const, fresh };
+          if (fresh.length && !bcHold(g, fresh)) return { kind: "events" as const, fresh };
           if (g.phase === "finished") return { kind: "done" as const, fresh };
           return null;
         };
-        const out = await waitUntil(g, pending, res);
-        if (!out) return text("WAITING — nothing new yet. Run `bc-wait` again.");
-        if (out.kind === "direct") return text(directorBrief(g));
+        const out = await waitUntil(g, pending, res, 5_000);
+        const head = done ? `${done}\n\n` : "";
+        if (!out) return text(`${head}WAITING — nothing new yet. Run \`bc-wait\`.`);
+        if (out.kind === "direct") return text(head + directorBrief(g));
         // Events count as consumed only when the CLI acknowledges them after printing (bc-ack);
         // an unacknowledged batch is simply delivered again on the next bc-wait.
         const ack = randomBytes(6).toString("hex");
         bcAcks.set(ack, { gameId: g.id, ids: out.fresh.map((e) => e.id), done: out.kind === "done" });
         res.setHeader("x-ack", ack);
-        if (out.kind === "done") return text("DONE — the broadcast is over. Your task is complete; you can stop now.");
-        return text(out.fresh.map((e) => e.text).join("\n\n") + "\n\n(Now `say` something about this.)");
-      }
+        if (out.kind === "done") return text(`${head}DONE — the broadcast is over. Your task is complete; you can stop now.`);
+        return text(head + out.fresh.map((e) => e.text).join("\n\n") + "\n\n(Now `say` something about this.)");
+      };
+      if (cmd === "bc-wait") return bcNext();
       if (cmd === "bc-ack") {
         const a = bcAcks.get(String(req.body?.ack ?? ""));
         if (!a || a.gameId !== g.id) return text("OK");
@@ -891,7 +947,7 @@ app.post(
       if (cmd === "say") {
         if (g.phase === "finished" && g.broadcasterDone) throw new ActionError("The broadcast is over.");
         const line = say(g, readText(req.body));
-        return text(`OK — segment ${line.id} is on air. Run \`bc-wait\` for more.`);
+        return bcNext(`OK — segment ${line.id} is on air.`);
       }
       if (cmd === "direct") {
         if (g.phase !== "finished") throw new ActionError("The video plan comes after the game — keep commentating.");
@@ -919,34 +975,61 @@ app.post(
     }
 
     const c = role as Color;
-    switch (cmd) {
-      case "wait": {
-        const out = await waitUntil(g, () => playerTodo(g, c), res);
-        return text(out ?? `WAITING — ${waitingReason(g, c)}. Run \`wait\` again.`);
+    // Every command that acts goes straight on to wait for whatever needs the player next, so a turn is one call.
+    const next = async (done = "") => {
+      // Scripts that drive both seats in turn (--no-wait) can't block on one side.
+      if (done && req.body.noWait) return text(`${done} Run \`wait\`.`);
+      const out = await waitUntil(g, () => playerTodo(g, c), res);
+      if (out) {
+        // Seen as of the hand-off: the website's "Agent idle" counts from here, not from when the call began.
+        g.seen[c] = Date.now();
+        if (out.startsWith("=== YOUR MOVE")) briefed(c);
       }
+      return text((done ? `${done}\n\n` : "") + (out ?? `WAITING — ${waitingReason(g, c)}. Run \`wait\`.`));
+    };
+    const briefed = (col: Color) => (g.briefedAt = { ...g.briefedAt, [col]: g.moves.length });
+    switch (cmd) {
+      case "wait":
+        return next();
       case "status":
+        if (g.phase === "playing") briefed(c);
         return text(g.phase === "playing" ? turnBrief(g, c) : playerTodo(g, c) ?? `WAITING — ${waitingReason(g, c)}.`);
       case "move": {
+        // A turn is a retry (its shell timed out mid-wait and it was sent again) when it's the same JSON as the
+        // last one accepted and the player hasn't been shown the position since: then it isn't played again.
+        // The same JSON after seeing the new position is a real move. Both are saved, so a restart keeps them.
+        const hash = createHash("sha256").update(JSON.stringify(req.body.turn ?? {})).digest("hex").slice(0, 16);
+        const prev = g.lastTurn?.[c];
+        const seenSince = (g.briefedAt?.[c] ?? -1) === g.moves.length;
+        if (prev?.hash === hash && !seenSince) return next(`OK — you already played ${prev.san} with this exact turn; it wasn't played again.`);
         const rec = submitTurn(g, c, req.body.turn ?? {});
+        g.lastTurn = { ...g.lastTurn, [c]: { hash, san: rec.san } };
+        saveGameNow(g);
         const lines = rec.lines.length ? ` Lines recorded: ${rec.lines.length}.` : "";
-        const over = g.result ? ` The game is over: ${g.result} (${g.termination}). Run \`wait\`.` : " Run `wait` for your opponent's reply.";
-        return text(`OK — played ${rec.san}.${lines}${over}`);
+        const over = g.result ? ` The game is over: ${g.result} (${g.termination}).` : "";
+        return next(`OK — played ${rec.san}.${lines}${over}`);
       }
       case "accept-draw":
         acceptDraw(g, c);
-        return text("OK — draw agreed. Run `wait` for the post-game.");
+        return next("OK — draw agreed.");
       case "resign":
         resign(g, c);
-        return text("OK — you resigned. Run `wait` for the post-game.");
-      case "interview":
-        submitInterview(g, c, readText(req.body));
-        return text("OK — interview recorded. Run `wait`.");
+        return next("OK — you resigned.");
+      case "interview": {
+        // A retry of an answer already on record (its shell timed out mid-wait) just waits again, even
+        // once the game has moved on to the next phase.
+        const t = readText(req.body).trim();
+        if (![g.interviews.pre[c]?.text, g.interviews.post[c]?.text].includes(t)) submitInterview(g, c, t);
+        return next("OK — interview recorded.");
+      }
       case "lessons":
-        submitLessons(g, c, readText(req.body));
-        return text("OK — lessons saved. Run `wait`.");
+        if (!g.lessonsDone?.[c]) submitLessons(g, c, readText(req.body));
+        return next("OK — lessons saved.");
       case "journal":
-        submitJournal(g, c, readText(req.body));
-        return text("OK — journal saved. Run `wait`.");
+        if (!g.journalDone[c]) submitJournal(g, c, readText(req.body));
+        return next("OK — journal saved.");
+      case "postgame":
+        return next(submitPostgame(g, c, req.body.postgame));
       default:
         throw new ActionError(`Unknown command: ${cmd}`);
     }
