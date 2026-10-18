@@ -460,16 +460,19 @@ export function parseEval(v: string | number): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseLine(g: Game, fen: string, raw: string, note: string): CalcLine {
-  const c = newRules(fen, variantOf(g));
-  const san: string[] = [];
-  let brokenAt: string | undefined;
-  const tokens = raw
+/** The moves a calculated line names, as the player wrote them (move numbers dropped). */
+export const lineTokens = (raw: string) =>
+  raw
     .replace(/(\d+)\.(\.\.)?/g, " ")
     .split(/[\s,]+/)
     .map(cleanToken)
     .filter(Boolean);
-  for (const t of tokens) {
+
+function parseLine(g: Game, fen: string, raw: string, note: string): CalcLine {
+  const c = newRules(fen, variantOf(g));
+  const san: string[] = [];
+  let brokenAt: string | undefined;
+  for (const t of lineTokens(raw)) {
     const mv = tryMove(c, t);
     if (!mv) {
       brokenAt = t;

@@ -47,6 +47,8 @@ import { summonAvailable, triggerOrchestrator } from "./summon";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { publishLaunch, publishState, recordPublished, requestPublish } from "./publish";
 import { gameToPgn } from "./pgn";
+import { analyticsRows, modelAnalytics } from "./analytics";
+import type { AnalyticsScope } from "../shared/analytics";
 import { loadOpenings } from "./openings";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
@@ -672,6 +674,18 @@ app.get(
         };
       })
       .sort((a, b) => b.best.rating - a.best.rating);
+  }),
+);
+
+/** The Agents tab: every model's row of the comparison table, and one model's full analytics (?scope=rated: rated games only). */
+const analyticsScope = (req: Request): AnalyticsScope => (req.query.scope === "rated" ? "rated" : "all");
+app.get("/api/analytics", handle((req) => analyticsRows(analyticsScope(req))));
+app.get(
+  "/api/analytics/:model",
+  handle((req) => {
+    const a = modelAnalytics(String(req.params.model), analyticsScope(req));
+    if (!a) throw new ActionError("No games for this model yet");
+    return a;
   }),
 );
 

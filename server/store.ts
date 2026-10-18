@@ -136,7 +136,10 @@ export function appendJournal(playerId: string, entry: JournalEntry) {
 const lessonsFile = (model: string) => path.join(DATA, "lessons", `${safe(model)}.json`);
 export const readLessons = (model: string): Lessons =>
   readJson(lessonsFile(model), { model, version: 0, text: "", updatedAt: null, history: [] } as Lessons);
+/** Goes up with every lessons write, here or arriving at the mirror, so readers can cache lessons files. */
+export let lessonsRevision = 0;
 export function writeLessons(model: string, text: string, gameId: string | null) {
+  lessonsRevision++;
   const cur = readLessons(model);
   const next: Lessons = {
     model,
@@ -153,6 +156,7 @@ export function writeLessons(model: string, text: string, gameId: string | null)
 
 /** Store a model's lessons as they are (the public mirror, receiving them). */
 export function writeLessonsFile(model: string, lessons: Lessons) {
+  lessonsRevision++;
   mkdirSync(path.join(DATA, "lessons"), { recursive: true });
   writeJson(lessonsFile(model), lessons);
 }

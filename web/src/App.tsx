@@ -54,7 +54,7 @@ export function App() {
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
   else if (section === "memory") page = <MemoryPage />;
   // "personalities" is the page's old name; old links still land here.
-  else if (section === "agents" || section === "personalities") page = <AgentsPage model={section === "agents" ? id : ""} />;
+  else if (section === "agents" || section === "personalities") page = <AgentsPage model={section === "agents" ? id : ""} query={new URLSearchParams(search)} />;
   else page = <Lobby local={local} onNewGame={() => setModal("game")} onPlay={() => setModal("play")} onNewTournament={() => setModal("tournament")} />;
 
   return (
