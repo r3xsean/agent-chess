@@ -3,11 +3,11 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, Tournament, VideoPlan } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, SeatRole, Tournament, VideoPlan } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
-import { adminToken, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournament, saveTournamentNow, seatKeys, tournaments } from "./store";
+import { adminToken, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
   acceptDraw,
@@ -25,6 +25,8 @@ import {
   playerFinished,
   seatIsHuman,
   seatKeysFor,
+  seatClaimed,
+  claimSeats,
   startablePairings,
   boardsOf,
   isRated,
@@ -42,6 +44,7 @@ import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoF
 import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
 import { summonAvailable, triggerOrchestrator } from "./summon";
+import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { publishLaunch, publishState, recordPublished, requestPublish } from "./publish";
 import { gameToPgn } from "./pgn";
 import { loadOpenings } from "./openings";
@@ -468,10 +471,9 @@ app.post(
     requireAdmin(req);
     const g = getGame(String(req.params.id));
     const seat = String(req.body?.seat);
-    if (!["w", "b", "x"].includes(seat)) throw new ActionError('seat must be "w", "b" or "x"');
-    g.launched = { ...g.launched, [seat]: Date.now() };
-    saveGameNow(g);
-    touch(g);
+    if (!["w", "b", "x", "d"].includes(seat)) throw new ActionError('seat must be "w", "b", "x" or "d"');
+    // A seat its brief already handed out keeps that time, so its agent turning up since still counts.
+    if (!seatClaimed(g, seat as SeatRole)) claimSeats(g, [seat as SeatRole]);
     return { ok: true, launched: g.launched };
   }),
 );
@@ -545,6 +547,7 @@ app.get(
     // ?redo=1 throws the current plan away so a new director can make another.
     if (req.query.redo && g.video) {
       delete g.video;
+      if (g.launched) delete g.launched.d;
       g.videoRedos = (g.videoRedos ?? 0) + 1;
       saveGameNow(g);
       touch(g);
@@ -557,7 +560,7 @@ app.get(
   handle((req) => {
     const g = getGame(String(req.params.id));
     const now = Date.now();
-    const ago = (r: Color | "x") => (g.seen[r] ? Math.round((now - g.seen[r]!) / 1000) : null);
+    const ago = (r: SeatRole) => (g.seen[r] ? Math.round((now - g.seen[r]!) / 1000) : null);
     const playerDone = (c: Color) => g.phase === "finished" || playerFinished(g, c);
     // A human seat is played from the website: nothing for an orchestrator to launch or revive.
     const seatInfo = (c: Color) => (seatIsHuman(g, c) ? { human: true, done: true } : { secondsSinceSeen: ago(c), done: playerDone(c) });
@@ -567,7 +570,9 @@ app.get(
       seats: {
         white: seatInfo("w"),
         black: seatInfo("b"),
-        broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" && !needsDirection(g) } : null,
+        broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" } : null,
+        // The video director comes after the game: done once the plan is saved (or there's nothing to plan).
+        director: g.phase === "finished" && (g.broadcaster?.enabled || g.launched?.d) ? { secondsSinceSeen: ago("d"), done: !needsDirection(g) } : null,
       },
     };
   }),
@@ -725,29 +730,25 @@ app.post(
     requireAdmin(req);
     const t = tournaments.get(String(req.params.id));
     if (!t) throw new ActionError("No such tournament");
-    const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished");
-    if (!live.length && !t.pairings.some((p) => !p.gameId)) {
-      t.status = "finished";
-      saveTournament(t);
-      return { finished: true };
-    }
-    const byId = new Map(t.players.map((p) => [p.id, p]));
-    const start = (next: Tournament["pairings"][number]) => {
-      const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, learning: t.learning !== false, rated: t.rated !== false, chess960: next.chess960 });
-      next.gameId = g.id;
-      return g;
-    };
-    if (boardsOf(t) <= 1) {
-      if (live.length) return { game: games.get(live[0].gameId!), launch: launchSpec(games.get(live[0].gameId!)!), alreadyRunning: true };
-      const g = start(t.pairings.find((p) => !p.gameId)!);
-      saveTournamentNow(t);
-      return { game: g, launch: launchSpec(g) };
-    }
-    // Several boards: start every pairing that can go now. Only the new games come back, so each
-    // orchestrator run launches only what it started; games already running are listed by id.
-    const started = startablePairings(t).map(start);
-    saveTournamentNow(t);
-    return { started: started.map((g) => ({ game: g, launch: launchSpec(g) })), running: live.map((p) => p.gameId) };
+    const res = tournamentNext(t);
+    if ("finished" in res) return res;
+    // Several boards: only the new games come back, so each orchestrator run launches only what it started.
+    if (boardsOf(t) > 1) return { started: res.games.map((g) => ({ game: g, launch: launchSpec(g) })), running: res.running };
+    const g = res.games[0];
+    return { game: g, launch: launchSpec(g), ...(res.alreadyRunning ? { alreadyRunning: true } : {}) };
+  }),
+);
+
+// What one orchestrator run has to do (the T3 webhook's prompt just says to fetch this): the steps for its
+// action alone, with the tasks to delegate in it. Body: { action, gameId?, tournamentId?, source?: "chat" }.
+app.post(
+  "/api/orchestrator/brief",
+  localOnly,
+  handle((req, res) => {
+    requireAdmin(req);
+    const b = req.body ?? {};
+    const brief = orchestratorBrief(String(b.action ?? ""), { gameId: b.gameId || undefined, tournamentId: b.tournamentId || undefined }, b.source === "chat" ? "chat" : "webhook");
+    res.type("text/plain").send(brief);
   }),
 );
 
@@ -761,7 +762,7 @@ app.post(
   handle((req) => {
     const g = getGame(String(req.params.id));
     const s = seatKeys[String(req.body?.key ?? "")];
-    if (!s || s.gameId !== g.id || s.role === "x" || !seatIsHuman(g, s.role)) throw new ActionError("This browser isn't seated in this game.");
+    if (!s || s.gameId !== g.id || (s.role !== "w" && s.role !== "b") || !seatIsHuman(g, s.role)) throw new ActionError("This browser isn't seated in this game.");
     const c = s.role;
     g.seen[c] = Date.now();
     const action = String(req.body?.action ?? "");
@@ -887,6 +888,24 @@ function readText(body: any) {
   return String(body?.text ?? "");
 }
 
+const PLAYER_COMMANDS = `  wait                 block until something needs you and print it
+  move -               submit your move (JSON on standard input: move, commentary, eval, lines, offerDraw)
+  accept-draw          accept your opponent's draw offer
+  resign               resign the game
+  interview -          answer the pre-game interview (text on standard input, or --text "...")
+  postgame -           after the game: everything it asks for in one JSON object
+  status               print the current position again`;
+/** What `help` (and an unknown command) shows each seat: its own commands and nothing else. */
+const SEAT_COMMANDS: Record<SeatRole, string> = {
+  w: PLAYER_COMMANDS,
+  b: PLAYER_COMMANDS,
+  x: `  bc-wait              block until there are new events and print them
+  say -                put one segment on air (text on standard input, or --text "..."), then wait for the next events`,
+  d: `  brief                print the video director brief
+  direct <plan.json>   submit your video plan; it's read back to you
+  confirm              save the plan once its readback is right`,
+};
+
 /** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
 const planDrafts = new Map<string, VideoPlan>();
 
@@ -908,15 +927,47 @@ app.post(
     const cmd = String(req.params.cmd);
     const { g, role } = seat(String(req.body?.key ?? ""));
     const text = (t: string) => res.type("text/plain").send(t);
+    // Each seat sees only its own commands.
+    if (cmd === "help") return text(`Your commands (run each as: node chess.mjs <command> --key <your key>):\n${SEAT_COMMANDS[role]}`);
+    const unknown = () => new ActionError(`Unknown command: ${cmd}. Yours are:\n${SEAT_COMMANDS[role]}`);
+    if (role === "d") {
+      if (cmd === "brief") {
+        if (g.video && !planDrafts.has(g.id)) return text("DONE — this game's video plan is saved. Your task is complete; you can stop now.");
+        if (g.phase !== "finished" || !needsDirection(g)) throw new ActionError("This game isn't ready for its video plan yet (it needs to be finished and reviewed).");
+        return text(directorBrief(g));
+      }
+      if (cmd === "direct") {
+        if (g.phase !== "finished") throw new ActionError("The video plan comes after the game.");
+        if (g.video) throw new ActionError("This game's video plan is already saved.");
+        // A plan that passes the checks is read back before it's final: what each quote will draw and light
+        // up, and in which colour, for the director to confirm or fix.
+        const plan = validatePlan(g, req.body?.plan);
+        planDrafts.set(g.id, plan);
+        return text(
+          `The plan passes the checks (${plan.moments.length} moments). Before it's saved, check what the video will draw and light up:\n\n${planReadback(g, plan)}\n` +
+            `Colours: green is the speaking player's pieces and moves, red the opponent's, amber an empty square. Go through every line: is each lit word lit for the piece or square the player meant, at the right moment in the idea, in the right colour? Does every drawing show what the words say (never an arrow for something they say can't happen)? Is anything they point at left undrawn?\n` +
+            `If all of it is right, run \`confirm\`. If anything is off, fix the plan and submit it again with \`direct\`.`,
+        );
+      }
+      if (cmd === "confirm") {
+        const plan = planDrafts.get(g.id);
+        if (!plan && g.video) return text("DONE — the video plan is already saved. Your task is complete; you can stop now.");
+        if (!plan) throw new ActionError("There's no plan waiting to be confirmed: submit it with `direct <plan.json>` first.");
+        planDrafts.delete(g.id);
+        g.video = { ...plan, createdAt: Date.now() };
+        saveGameNow(g);
+        touch(g);
+        directorDone(g.id);
+        return text(`OK — video plan saved (${plan.moments.length} moments).\n\nDONE — your task is complete; you can stop now.`);
+      }
+      throw unknown();
+    }
     if (role === "x") {
       /** Wait for the broadcaster's next events (`say` goes straight on to this too), after `done` if given. */
       const bcNext = async (done = "") => {
         if (done && req.body.noWait) return text(`${done} Run \`bc-wait\`.`);
         const pending = () => {
           const fresh = broadcasterEvents(g).filter((e) => !g.bcDelivered.includes(e.id));
-          // Once the show is over, the broadcaster plans the replay video before signing off. A standalone
-          // director (a game without a broadcaster) goes straight to its brief, not the old event feed.
-          if (g.phase === "finished" && needsDirection(g)) return { kind: "direct" as const, fresh };
           if (g.phase === "finished" && g.broadcasterDone) return { kind: "done" as const, fresh };
           if (fresh.length && !bcHold(g, fresh)) return { kind: "events" as const, fresh };
           if (g.phase === "finished") return { kind: "done" as const, fresh };
@@ -925,7 +976,6 @@ app.post(
         const out = await waitUntil(g, pending, res, 5_000);
         const head = done ? `${done}\n\n` : "";
         if (!out) return text(`${head}WAITING — nothing new yet. Run \`bc-wait\`.`);
-        if (out.kind === "direct") return text(head + directorBrief(g));
         // Events count as consumed only when the CLI acknowledges them after printing (bc-ack);
         // an unacknowledged batch is simply delivered again on the next bc-wait.
         const ack = randomBytes(6).toString("hex");
@@ -949,29 +999,7 @@ app.post(
         const line = say(g, readText(req.body));
         return bcNext(`OK — segment ${line.id} is on air.`);
       }
-      if (cmd === "direct") {
-        if (g.phase !== "finished") throw new ActionError("The video plan comes after the game — keep commentating.");
-        // A plan that passes the checks is read back before it's final: what each quote will draw and light
-        // up, and in which colour, for the director to confirm or fix.
-        const plan = validatePlan(g, req.body?.plan);
-        planDrafts.set(g.id, plan);
-        return text(
-          `The plan passes the checks (${plan.moments.length} moments). Before it's saved, check what the video will draw and light up:\n\n${planReadback(g, plan)}\n` +
-            `Colours: green is the speaking player's pieces and moves, red the opponent's, amber an empty square. Go through every line: is each lit word lit for the piece or square the player meant, at the right moment in the idea, in the right colour? Does every drawing show what the words say (never an arrow for something they say can't happen)? Is anything they point at left undrawn?\n` +
-            `If all of it is right, run \`confirm\`. If anything is off, fix the plan and submit it again with \`direct\`.`,
-        );
-      }
-      if (cmd === "confirm") {
-        const plan = planDrafts.get(g.id);
-        if (!plan) throw new ActionError("There's no plan waiting to be confirmed: submit it with `direct <plan.json>` first.");
-        planDrafts.delete(g.id);
-        g.video = { ...plan, createdAt: Date.now() };
-        saveGameNow(g);
-        touch(g);
-        directorDone(g.id);
-        return text(`OK — video plan saved (${plan.moments.length} moments). Run \`bc-wait\`.`);
-      }
-      throw new ActionError(`Unknown broadcaster command: ${cmd}. Use bc-wait, say, direct or confirm.`);
+      throw unknown();
     }
 
     const c = role as Color;
@@ -1031,7 +1059,7 @@ app.post(
       case "postgame":
         return next(submitPostgame(g, c, req.body.postgame));
       default:
-        throw new ActionError(`Unknown command: ${cmd}`);
+        throw unknown();
     }
   }),
 );

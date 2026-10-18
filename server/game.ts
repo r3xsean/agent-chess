@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result, Tournament } from "../shared/types";
+import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
 import { Engine } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
@@ -110,10 +110,7 @@ export function createGame(opts: {
   ensurePlayer(opts.white);
   ensurePlayer(opts.black);
   games.set(g.id, g);
-  for (const role of ["w", "b", "x"] as const) {
-    const key = `${g.id}-${role}-${randomBytes(4).toString("hex")}`;
-    seatKeys[key] = { gameId: g.id, role };
-  }
+  for (const role of ["w", "b", "x", "d"] as const) addSeatKey(g.id, role);
   // The caller is about to hand out these seat keys, so they must be on disk first.
   saveSeatsNow();
   saveGameNow(g);
@@ -122,12 +119,49 @@ export function createGame(opts: {
   return g;
 }
 
+function addSeatKey(gameId: string, role: SeatRole) {
+  const key = `${gameId}-${role}-${randomBytes(4).toString("hex")}`;
+  seatKeys[key] = { gameId, role };
+  return key;
+}
+
 export const seatKeysFor = (gameId: string) =>
   Object.fromEntries(
     Object.entries(seatKeys)
       .filter(([, v]) => v.gameId === gameId)
       .map(([k, v]) => [v.role, k]),
-  ) as Record<"w" | "b" | "x", string>;
+  ) as Record<SeatRole, string>;
+
+/** A seat handed to an orchestrator whose agent never shows up is free again after this long. */
+const CLAIM_MS = 10 * 60_000;
+
+/**
+ * Whether a seat is taken: handed to an orchestrator run (in its brief, or recorded as launched) and its
+ * agent has turned up since, or handed out only just now. Handing out and checking happen in one step on
+ * the server, so two runs asking at once never get the same seat.
+ */
+export function seatClaimed(g: Game, seat: SeatRole, now = Date.now()) {
+  const t = g.launched?.[seat];
+  return !!t && ((g.seen[seat] ?? 0) >= t || now - t < CLAIM_MS);
+}
+
+/** Hand seats to an orchestrator run. */
+export function claimSeats(g: Game, seats: SeatRole[]) {
+  if (!seats.length) return;
+  const now = Date.now();
+  g.launched = { ...g.launched, ...Object.fromEntries(seats.map((s) => [s, now])) };
+  saveGameNow(g);
+  touch(g);
+}
+
+/** The director's key (games from before directors had their own seat get one now). */
+export function directorKey(gameId: string) {
+  const have = seatKeysFor(gameId).d;
+  if (have) return have;
+  const key = addSeatKey(gameId, "d");
+  saveSeatsNow();
+  return key;
+}
 
 /* ------------------------------ analysis ------------------------------ */
 
@@ -243,8 +277,9 @@ export function startablePairings(t: Tournament) {
 
 const KICK_COOLDOWN_MS = 5 * 60_000;
 
-/** Ask T3 for an orchestrator run that starts this tournament's next pairings. */
+/** Ask T3 for an orchestrator run that starts this tournament's next pairings (never for a run with nothing to start). */
 function kickTournament(t: Tournament, onFail?: () => void) {
+  if (!startablePairings(t).length) return;
   t.lastKickAt = Date.now();
   saveTournament(t);
   triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {

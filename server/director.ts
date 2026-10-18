@@ -17,7 +17,7 @@ import { leftEnPrise } from "./wintr";
 import { boardOf, describe, drawnLine, imagined, isHit, markColors, moverKind, moveWordAt, phraseAt, phraseEnd, quoteWords, refProblems, resolveRefs, sanKey, squareWordAt } from "../shared/thoughtMarks";
 
 /*
- * After the game the broadcaster turns video director: it reads the whole game and picks the
+ * After the game a video director (its own task, apart from the broadcaster) reads the whole game and picks the
  * moments the replay video should slow down for, plus the best line of each interview.
  */
 
@@ -51,7 +51,7 @@ export function directorBrief(g: Game): string {
   const name = (c: Color) => sideName(g, c);
   const human = humanSide(g);
   const out: string[] = [
-    "VIDEO DIRECTOR — the broadcast is over. One last job: plan the replay video of this game.",
+    "VIDEO DIRECTOR — plan the replay video of this game.",
     "",
     "The game is cut into a YouTube video (every move) and a TikTok video (quiet moves fly by in under a second). Both slow down only for the moments you pick: a quote from the mover's own commentary on that move appears as a speech bubble, then they play it and the board holds on the move and its engine verdict. Between your moments, the YouTube cut keeps the players talking with asides: short lines from their commentary, said while the moves play on (see `asides` below).",
     "",
@@ -131,7 +131,7 @@ export function directorBrief(g: Game): string {
     });
     if (m.offeredDraw) out.push(`  offered a draw with this move`);
     if (m.commentary.trim()) out.push(`  commentary: ${m.commentary.trim()}`);
-    for (const b of g.broadcast.filter((l) => l.ply === m.ply && l.ts <= (g.endedAt ?? Infinity))) out.push(`  you said: ${b.text}`);
+    for (const b of g.broadcast.filter((l) => l.ply === m.ply && l.ts <= (g.endedAt ?? Infinity))) out.push(`  broadcaster said: ${b.text}`);
   });
 
   out.push(
@@ -236,7 +236,7 @@ export function directorBrief(g: Game): string {
     "- packaging (required): `title` for YouTube (at most 80 characters, the story not the notation, names the models); `caption` for TikTok (at most 150 characters, may end with a few hashtags); `thumbnail`: the move whose position makes the thumbnail and at most 4 words of big text.",
     "- Selling the video without spoiling it: the title, thumbnail and caption are what people see before they click. They may name the twist (the blunder, the trap, the comeback), because the viewer still wants to see how it happened, but never the ending: who won, that it was drawn, or that someone escaped. Make the title and thumbnail a pair that never says the same thing twice. One sets up the stakes (who was winning, how sure they were) and the other delivers the turn. The thumbnail shows the position after its move with that move's engine verdict icon (a blunder's ?? already says something went wrong). When the title names the twist, the thumbnail sells the stakes instead of showing the punishment again: the winning side's last strong move before the turn (\"MATE IN 24…\"), or the blunder with the mover's false confidence (\"TOTALLY SAFE\"). When the title only sets things up, the punishment itself can be the thumbnail.",
     `- Everything spoken (quotes, asides, hook, interview lines) is voiced, and together it must stay under ${VOICE_BUDGET} characters. Plans that follow the limits above fit easily.`,
-    "If the server rejects the plan it says why; fix it and submit again. Once it passes, it's read back to you: every quote with its lit words, every drawing and ref with what it points at on the board and its colour, and when each aside is said. Check each line against what the player meant (and that the asides read in order as a conversation), then run `confirm` to save it, or fix the plan and submit it again. Then run `bc-wait`.",
+    "If the server rejects the plan it says why; fix it and submit again. Once it passes, it's read back to you: every quote with its lit words, every drawing and ref with what it points at on the board and its colour, and when each aside is said. Check each line against what the player meant (and that the asides read in order as a conversation), then run `confirm` to save it, or fix the plan and submit it again. Saving it completes your task.",
   );
   return out.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
 }

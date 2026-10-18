@@ -2,7 +2,8 @@ import type { Color, Game } from "../shared/types";
 import { personalityById, RISK_LABEL, riskRule } from "../shared/personalities";
 import { CLI } from "./paths";
 import { agentDir } from "./store";
-import { seatKeysFor, startFenOf } from "./game";
+import { claimSeats, directorKey, seatKeysFor, startFenOf } from "./game";
+import { needsDirection } from "./director";
 import { castlingNote, variantOf } from "../shared/rules";
 import { describePlayer } from "./briefing";
 import { fullName, humanSide, isHuman, sideName } from "../shared/naming";
@@ -166,7 +167,6 @@ ${cli} say - --key ${key} <<'EOF'
 Your segment here.
 EOF
 Commands can block for up to 5 minutes: give every command your shell tool a timeout of at least 360 seconds (6 minutes). If your shell times out while \`say\` is waiting, the segment already went on air: run \`bc-wait\`, don't say it again. Files work too, instead of \`-\` (your scratch folder is ${dir}).
-- \`direct <plan.json>\` — after the game only: submit the replay video plan the director brief asks for. It's read back to you; check it, then \`confirm\` (or fix it and \`direct\` again).
 
 ## How to commentate
 - One segment = 1–3 sentences, under 400 characters. Lively, conversational English, like a streamer typing to chat.
@@ -178,35 +178,49 @@ Commands can block for up to 5 minutes: give every command your shell tool a tim
 ## Flow
 1. Pre-game: introduce the matchup and personalities, react to the pre-game interviews. The first move waits for your intro (after ${human ? "the agent's interview is" : "both interviews are"} in).
 2. During the game: commentate.
-3. After the game: react to the result and the review, then to the post-game interviews, then sign off.
-4. Then \`bc-wait\` hands you a VIDEO DIRECTOR brief: pick the moments for the replay video and submit them with \`direct <plan.json>\` (details in the brief).
+3. After the game: react to the result and the review, then to the post-game interviews, then sign off. The CLI prints DONE once the show is over.
 Start with \`bc-wait\`, then answer each batch with \`say\` (which prints the next batch) until the CLI prints DONE. Never end your task before that.`;
 }
 
-/** A standalone director for a game that finished without one: it only plans the replay video. */
+/** The video director: a finished game's own task, apart from the broadcast. It only plans the replay video. */
 export function directorPrompt(g: Game): string {
-  const key = seatKeysFor(g.id).x;
+  const key = directorKey(g.id);
   const cli = `node "${CLI}"`;
   return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is over, and it's being cut into a replay video. Your job is to choose what the video slows down for.
 
 Run every command as:  ${cli} <command> --key ${key}
-1. Run \`bc-wait\` (give your shell tool a timeout of at least 360 seconds). It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews.
-2. Write your plan as JSON in ${agentDir(g.id, "x")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
-3. Run \`bc-wait\` again until it prints DONE.`;
+1. Run \`brief\`. It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews, and how to write the plan.
+2. Write your plan as JSON in ${agentDir(g.id, "d")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
+3. \`confirm\` prints DONE once the plan is saved: your task is complete.`;
 }
 
+/** How long a launched director is left to finish before another run may launch one. */
+const DIRECTOR_STALE_MS = 45 * 60_000;
+
+/**
+ * The director task for a finished game, or none (with why), handed to the run that asks: a second run
+ * asking within the next 45 minutes gets none. A broadcast game's first plan is made by its broadcaster's
+ * model; a game without a broadcaster, or a redo, gets the default director.
+ */
 export function directorLaunch(g: Game, effort?: string) {
-  // A standalone director is always the default director model, whoever broadcast the game.
-  const bc = { ...DEFAULT_DIRECTOR, effort: effort ?? DEFAULT_DIRECTOR.effort };
+  const none = (note: string) => ({ gameId: g.id, tasks: [], note });
+  if (g.phase !== "finished") return none("The game isn't finished yet: its director comes after the game.");
+  if (!needsDirection(g)) return none(g.video ? "The video plan is already made." : "There's nothing to plan: the game has no moves or no engine review yet.");
+  const since = g.launched?.d ? Date.now() - g.launched.d : Infinity;
+  if (since < DIRECTOR_STALE_MS) return none(`Another run launched this game's director ${Math.round(since / 60_000)} min ago; leave it to that run.`);
+  const base = g.broadcaster?.enabled && !g.videoRedos ? g.broadcaster : DEFAULT_DIRECTOR;
+  const who = { ...base, effort: effort ?? base.effort };
+  claimSeats(g, ["d"]);
   return {
     gameId: g.id,
     tasks: [
       {
         role: "director",
+        seat: "d",
         title: `🎬 Video director — ${g.id}`,
         // A redo's director is a new task, not the earlier one again.
         clientRequestId: g.videoRedos ? `${g.id}-director-redo${g.videoRedos}` : `${g.id}-director`,
-        target: { providerInstanceId: bc.provider, model: bc.model, options: effortOption(bc.provider, bc.effort) },
+        target: { providerInstanceId: who.provider, model: who.model, options: effortOption(who.provider, who.effort) },
         prompt: directorPrompt(g),
       },
     ],
@@ -222,6 +236,7 @@ export function launchSpec(g: Game) {
     const p = c === "w" ? g.white : g.black;
     return {
       role: c === "w" ? "white" : "black",
+      seat: c as string,
       title: `♟ ${colorName(c)}: ${fullName(p)} — ${g.id}`,
       clientRequestId: `${g.id}-${c}`,
       target: { providerInstanceId: p.provider, model: p.model, options: effortOption(p.provider, p.effort) },
@@ -231,6 +246,7 @@ export function launchSpec(g: Game) {
   if (g.broadcaster?.enabled) {
     tasks.push({
       role: "broadcaster",
+      seat: "x",
       title: `🎙 Broadcaster — ${g.id}`,
       clientRequestId: `${g.id}-x`,
       target: {

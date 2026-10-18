@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, rename
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, Tournament } from "../shared/types";
+import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, SeatRole, Tournament } from "../shared/types";
 import { DATA } from "./paths";
 import { GLICKO_START } from "./glicko";
 
@@ -29,8 +29,8 @@ export const memoryEvents = new EventEmitter();
 export const games = new Map<string, Game>();
 export const tournaments = new Map<string, Tournament>();
 export let players: Record<string, PlayerStats> = {};
-/** Secret per seat, so the CLI can only act for the seat it was given. */
-export let seatKeys: Record<string, { gameId: string; role: "w" | "b" | "x" }> = {};
+/** Secret per seat, so the CLI can only act for the seat it was given (w, b, the broadcaster x, the video director d). */
+export let seatKeys: Record<string, { gameId: string; role: SeatRole }> = {};
 
 /** Orchestrator credential for endpoints that reveal seat keys (launch specs). Stored in data/admin-token.txt. */
 export let adminToken = "";

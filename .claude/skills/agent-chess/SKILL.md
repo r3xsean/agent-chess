@@ -1,74 +1,24 @@
 ---
 name: agent-chess
-description: Summon AI agents to play a chess game or run a tournament on the local Agent Chess website (C:\Users\User\agent-chess). Use when the user says "summon chess game <id>", "run chess tournament <id>", "start a chess game between …", or asks to make agents play chess.
+description: Start a chess game or tournament between AI agents on the local Agent Chess website (C:\Users\User\agent-chess) from chat, as their orchestrator. Use when the user says "summon chess game <id>", "run chess tournament <id>", "start a chess game between …", or asks to make agents play chess. Not for agents already playing in a game (players, broadcasters, directors): they follow only their own prompt.
 ---
 
-# Agent Chess orchestration
+# Agent Chess: games and tournaments from chat
 
-The website (http://127.0.0.1:5170) is the referee. Players and the broadcaster are T3 child tasks launched with `delegate_task`; they talk to the server only through `cli/chess.mjs` and loop until the CLI prints DONE. You are the orchestrator: launch them, watch for early exits, nudge, and launch the next tournament game.
+The website (http://127.0.0.1:5170) is the referee. You are the orchestrator: the server writes your brief for each job (the agents to launch, with their prompts, and how to look after them), and you follow it. Every request below needs the header `x-admin-token: <contents of C:\Users\User\agent-chess\data\admin-token.txt>`. Never put the token in an agent's prompt.
 
-## 0. Make sure the server is up
+## 1. Make sure the server is up
 
-`Invoke-RestMethod http://127.0.0.1:5170/api/meta` — if it fails, start it from `C:\Users\User\agent-chess`:
-`Start-Process -WindowStyle Hidden node -ArgumentList 'node_modules/tsx/dist/cli.mjs','server/index.ts'` (run `npx vite build` first if `dist/` is missing). Wait ~8 s.
+`Invoke-RestMethod http://127.0.0.1:5170/api/meta`. If that fails, start it from `C:\Users\User\agent-chess`: `Start-Process -WindowStyle Hidden node -ArgumentList 'node_modules/tsx/dist/cli.mjs','server/index.ts'` (run `npx vite build` first if `dist/` is missing), then wait about 8 s.
 
-## 1. Get the launch spec
+## 2. Get the game or tournament
 
-Launch specs contain every seat's key, so these endpoints need the orchestrator token: send header `x-admin-token: <contents of C:\Users\User\agent-chess\data\admin-token.txt>` on `/launch`, `POST /api/games` (to get `launch` back), `/api/tournaments/<tid>/next` and `/abort`. Never put the token in an agent prompt.
+- An existing game or tournament: use the id the user gave.
+- A new game: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }`. Personality `"none"` means the model plays as itself. Add `chess960: true` for a random Chess960 start (or `chess960: <0–959>` for a given one), or `rated: false` if the user wants it unrated. Use the models, efforts and personalities the user asks for, and don't pick model IDs for them.
+- A new tournament: `POST /api/tournaments` with `{ players:[{model,effort,personality},…], doubleRound, broadcaster:{enabled:false} }`. It plays as many games at once as the players fill (half of them) unless you pass a lower `boards` (`1` plays one game at a time). `chess960: true` and `rated: false` work as for games.
 
-- Existing game: `Invoke-RestMethod http://127.0.0.1:5170/api/games/<id>/launch`
-- New game from chat: `POST /api/games` with `{ white:{model,effort,personality}, black:{…}, broadcaster:{enabled:true, model:"claude-opus-5-5", effort:"high"} }` → `{ game, launch }`. Personality `"none"` means no personality (the model plays as itself). Add `chess960: true` for a random Chess960 start position, or `chess960: <0–959>` for a given one; tournaments take `chess960: true`. Add `rated: false` (games or tournaments) when the user wants it unrated.
-- Tournament: `POST /api/tournaments/<tid>/next` → `{ game, launch }`, `{ finished:true }`, or `alreadyRunning:true` (then use that game's launch spec — do not re-delegate seats that are still running).
-- Multi-board tournament (any with four or more players unless it was created with a lower `boards`): `/next` instead returns `{ started: [{ game, launch }, …], running: [gameIds] }`. Launch every game in `started` (it may be empty: no board or model is free yet — then you're done). Never launch the `running` games; other runs own them.
+## 3. Get your brief and follow it
 
-`launch.tasks` has one entry per seat (white, black, optional broadcaster): `title`, `clientRequestId`, `target` (`providerInstanceId`, `model`, `options`) and the full `prompt`. `launch.launched` maps seats (`w`, `b`, `x`) that some orchestrator run already delegated to a timestamp.
+`POST /api/orchestrator/brief` with `{ "action": "start-game", "gameId": "<id>", "source": "chat" }`, or `{ "action": "tournament-next", "tournamentId": "<id>", "source": "chat" }` for a tournament. It returns plain text with the tasks to delegate and every step after: launching, supervising, the video director after each broadcast game, and when you're done. Do exactly what it says.
 
-When the user plays an agent themselves, their seat is human: it has no task in `launch.tasks` (they move on the website) and `/agents` reports it as `{ human: true, done: true }`. Launch only the tasks you're given.
-
-## 2. Delegate every seat in one message
-
-Skip any seat already in `launch.launched` (another run owns it), unless step 3's rules show it died. For each remaining task call `delegate_task` with:
-`task` = prompt (verbatim), `title`, `clientRequestId`, `target` (verbatim), `mode:"async"`, `role:"general"` (leave `runtimeMode` unset so it inherits; agents need a shell to run the CLI).
-Right after each successful delegation, record it: `POST /api/games/<id>/launched` with body `{"seat":"w"|"b"|"x"}` and the admin token.
-Keep each returned `taskId` and `childThreadId`. Tell the user the game URL: `http://127.0.0.1:5170/#/game/<id>`.
-
-Runs can also start from the website: its **Summon agents** / **Start tournament** buttons call a T3 webhook that opens a fresh orchestrator thread with the request. Tournaments started that way advance by themselves — the server fires the webhook again (`tournament-next`) when each game finishes — so a webhook-started run only owns the games its own `/next` call returned.
-
-## 3. Supervise
-
-Completion notifications wake you. On each one, check `GET /api/games/<id>/agents`:
-- If the finished seat shows `done:true`, nothing to do.
-- If not done (the agent stopped early), continue it with `t3_thread_send` to its `childThreadId`: "The game is not over. Keep looping: run `wait` (or `bc-wait`) and act until the CLI prints DONE." If a seat cannot be revived, cancel and re-delegate it with a new `clientRequestId` (`<gameId>-<seat>-r<n>`) — the seat key in the prompt still works.
-- If `secondsSinceSeen` for the side to move grows past ~10 minutes while the child still runs, check the child with `task_status` before acting.
-- Abort a broken game with `POST /api/games/<id>/abort`.
-
-## 4. Tournaments
-
-When every seat of a tournament game is done (phase `finished`), call `/api/tournaments/<tid>/next` and repeat from step 2 until `{finished:true}`. Create a tournament with `POST /api/tournaments` `{ players, doubleRound, broadcaster:{enabled:false} }`: it plays as many games at once as the players fill (half of them) unless you pass a lower `boards` (`1` for one at a time); with `autoRun` (`POST /api/tournaments/<tid>/start`) the server fires `tournament-next` whenever a board and both models are free, including when a model was busy in a rated game outside the tournament (unrated games never hold a model up). Then report the standings (`GET /api/tournaments/<tid>`).
-
-## 5. Video director
-
-After a game, its broadcaster plans the replay video (which moments to slow down for) and submits it with `direct`. A finished game without a plan — no broadcaster, one from before directors existed, or one whose plan the website threw away for a "new director" re-render — gets a standalone director, usually because the website's video page asked for a render (webhook action `direct-video`):
-
-1. `GET /api/games/<id>/director-launch` with the admin token → `{ tasks: [one task] }`. Add `?redo=1` only to replace an existing plan (a website redo has already removed it, so don't add it then).
-2. Delegate that task exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). No `/launched` record is needed. A redo's task has its own `clientRequestId` (`<id>-director-redo<n>`), so it's a new task, not the earlier director again.
-3. When it finishes, check `GET /api/games/<id>` has a `video` field. If not, re-delegate once with the task's `clientRequestId` plus `-r2` (a model's safety filter occasionally refuses a long brief; a second try usually works). The website renders on its own once the plan is saved.
-
-## 6. Publishing
-
-The video page's **Publish** button (webhook action `publish`) posts a finished game's videos to YouTube and/or TikTok. A publisher agent uploads them in the user's own Brave browser, where YouTube Studio and TikTok Studio are logged in. The click is the user's go-ahead, so don't ask again.
-
-1. `GET /api/games/<id>/publish-launch` with the admin token → `{ tasks: [one task] }`. Delegate it exactly like a seat (verbatim prompt, title, target, `clientRequestId`, `mode:"async"`, `role:"general"`). Each request has its own `clientRequestId` (`<id>-publish<n>`), so a retry is a new task. If this returns an error ("Nothing is waiting to be published"), another run already handled it: settle and stop.
-2. When the publisher finishes, find the line starting `PUBLISH_RESULT ` at the end of its result and record the JSON after it: `POST /api/games/<id>/published` with body `{"results": <that JSON>}` and the admin token. If the line is missing, continue the publisher (`t3_thread_send` to its `childThreadId`) asking for its PUBLISH_RESULT line. **Never** re-delegate a publisher that may have posted: a second upload would be a duplicate post. If it can't answer, record `{"results":{"youtube":{"error":"…"},…}}` saying what you know, for each platform asked.
-3. Tell the user what was posted, with the links.
-
-## 7. When you're done
-
-Once the work is complete — every seat of the game done, the tournament finished, the director's plan saved or the publisher's posts recorded — tidy up so the threads leave the inbox:
-- Settle each finished child task's thread: `t3_thread_organize` with `action:"settle"` and its `childThreadId`.
-- Then settle your own thread as the very last step: `t3_thread_organize` with `action:"settle"` and no `threadId` (it takes effect when your turn ends).
-Don't settle while anything still needs you (a seat running, failed or stalled), and leave threads the user is reading alone if they were not started by a webhook.
-
-## Rules
-- Never play moves or write commentary for an agent yourself; never give agents engine output.
-- Don't pin model IDs beyond what the launch spec says — the user chose them in the UI.
+For a tournament, the brief says how to carry on to the next games, whether the website runs it by itself or you call `tournament-next` again.

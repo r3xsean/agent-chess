@@ -211,9 +211,17 @@ For each platform: "url" when it's posted (null if the post exists but you could
   }`;
 }
 
-/** The publisher task for the orchestrator to delegate (one per request: a retry is a new task). */
-export function publishLaunch(g: Game) {
+/**
+ * The publisher task for the orchestrator to delegate (one per request: a retry is a new task). `handOut`
+ * gives it to one run only: another run asking for the same request gets an error, so it can't post twice.
+ */
+export function publishLaunch(g: Game, handOut = false) {
   if (g.publish?.status !== "requested") throw new Error("Nothing is waiting to be published for this game.");
+  if (handOut) {
+    if (g.publish.handedOutAt) throw new Error("This request's publisher was already handed to another orchestrator run.");
+    g.publish.handedOutAt = Date.now();
+    saveGameNow(g);
+  }
   return {
     gameId: g.id,
     tasks: [

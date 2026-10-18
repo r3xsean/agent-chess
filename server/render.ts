@@ -111,6 +111,7 @@ export async function startRender(gameId: string, formats: RenderFormat[], music
     if (!summonAvailable()) throw new Error("No T3 webhook configured, so no director can be summoned to redo the plan.");
     replaced.set(gameId, g.video);
     delete g.video;
+    if (g.launched) delete g.launched.d;
     g.videoRedos = (g.videoRedos ?? 0) + 1;
     saveGameNow(g);
     touch(g);

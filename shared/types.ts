@@ -1,4 +1,6 @@
 export type Color = "w" | "b";
+/** A game's agent seats: the two players, the broadcaster (x) and the video director (d). */
+export type SeatRole = Color | "x" | "d";
 export type Phase = "pregame" | "playing" | "postgame" | "finished";
 export type Result = "1-0" | "0-1" | "1/2-1/2";
 
@@ -151,7 +153,7 @@ export interface Game {
   /** Feed event ids already handed to the broadcaster. */
   bcDelivered: string[];
   /** Last time each seat talked to the server. */
-  seen: Partial<Record<Color | "x", number>>;
+  seen: Partial<Record<SeatRole, number>>;
   pendingIllegal: Record<Color, string[]>;
   /** The full illegal attempts this turn, alongside `pendingIllegal` (missing on older games). */
   pendingTries?: Record<Color, IllegalTry[]>;
@@ -168,7 +170,7 @@ export interface Game {
   options?: { pieceList?: boolean; learning?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
   lessonsDone?: Partial<Record<Color, boolean>>;
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
-  launched?: Partial<Record<Color | "x", number>>;
+  launched?: Partial<Record<SeatRole, number>>;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
   lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
   /** How many moves had been played when each seat was last shown the position (a YOUR MOVE brief or `status`). */
@@ -336,6 +338,8 @@ export interface PublishState {
   requestedAt: number;
   /** Counts the requests, so each one's publisher is a new task. */
   attempt: number;
+  /** When this request's publisher was handed to an orchestrator run (only one run ever gets it). */
+  handedOutAt?: number;
   /** Every post made so far, kept across requests: a platform posted once is never posted again. */
   posts: Partial<Record<PublishPlatform, PublishedPost>>;
   /** What went wrong, per platform, in the last request. */

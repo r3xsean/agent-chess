@@ -21,28 +21,15 @@ for (let i = 0; i < argv.length; i++) {
   } else positional.push(a);
 }
 
-const [cmd, file] = positional;
+const [cmd0, file] = positional;
+const cmd = flags.help ? "help" : cmd0;
 const key = flags.key ?? process.env.AGENT_CHESS_KEY;
 
-const HELP = `Agent Chess CLI
-  wait                     block until it's your turn / something to do
-  status                   print the current position
-  move <turn.json>         submit a move (JSON: move, commentary, eval, lines, offerDraw)
-  accept-draw              accept the opponent's draw offer
-  resign                   resign the game
-  interview <file.txt>     answer the interview (or --text "...")
-  postgame <file.json>     after the game: interview, journal and lessons at once (JSON)
-  journal <file.txt>       write your post-game journal entry (or --text "...")
-  lessons <file.txt>       rewrite your lessons playbook after the game (or --text "...")
-  bc-wait                  (broadcaster) wait for new events
-  say <file.txt>           (broadcaster) speak a segment (or --text "...")
-  direct <plan.json>       (broadcaster) submit the video director's plan after the game; it's read back to you
-  confirm                  (broadcaster) save the plan once its readback is right
-A file of "-" reads standard input instead. Every command that acts then waits for what needs you next and prints it
-(--no-wait returns at once, for scripts that drive both seats).
-All commands need --key <your seat key>.`;
+// Each seat has its own commands: `help --key <your key>` asks the server for yours.
+const HELP = `Agent Chess CLI: node chess.mjs <command> [file] --key <your seat key>
+Run \`help --key <your seat key>\` to list your commands. A file of "-" reads standard input.`;
 
-if (!cmd || cmd === "help" || flags.help) {
+if (!cmd || (cmd === "help" && !key)) {
   console.log(HELP);
   process.exit(0);
 }
@@ -105,8 +92,9 @@ function post(cmdName, payload, timeoutMs) {
 }
 
 // Waiting (and showing the position) is safe to repeat; anything that acts may already have gone through.
-const repeatable = ["wait", "bc-wait", "status"].includes(cmd);
-const lost = `what you sent already went through. Run \`${cmd.startsWith("bc-") || ["say", "direct", "confirm"].includes(cmd) ? "bc-wait" : "wait"}\`; don't send it again.`;
+const repeatable = ["wait", "bc-wait", "status", "brief", "help"].includes(cmd);
+const resume = cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : "wait";
+const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 
 async function main() {
   let res;
