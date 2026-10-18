@@ -23,7 +23,8 @@ export function MoveList({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    scrollIntoPanel(ref.current?.querySelector(".move-cell.on, .move-try.on"), "nearest", false);
+    const target = ref.current?.querySelector(".move-cell.on, .move-try.on") ?? (ply === 0 ? ref.current?.firstElementChild : null);
+    scrollIntoPanel(target, "nearest", false);
   }, [ply, tryAt, game.moves.length]);
 
   const rows: [MoveRecord, MoveRecord | undefined][] = [];

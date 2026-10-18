@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { Color, Game, Result } from "../../../shared/types";
 import { sideName } from "../../../shared/naming";
 import { START_FEN } from "../../../shared/rules";
@@ -23,7 +23,7 @@ export function useCrowd(base: string | null, gameId: string, viewer: ViewerInfo
 const pct = (n: number, total: number) => (total ? Math.round((n / total) * 100) : 0);
 
 /** Call the result, guess the next move, and see how the crowd is doing. */
-export function CrowdPanel({
+export const CrowdPanel = memo(function CrowdPanel({
   game,
   base,
   viewer,
@@ -189,4 +189,4 @@ export function CrowdPanel({
       {err && <div className="play-err">{err}</div>}
     </div>
   );
-}
+});

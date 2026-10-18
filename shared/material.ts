@@ -24,3 +24,24 @@ export function materialInfo(startFen: string, sans: string[], variant: Variant 
   }
   return { captured, material };
 }
+
+/** Replay a line once, retaining captures (including en passant) and promotions at every ply. */
+export function materialTimeline(startFen: string, sans: string[], variant: Variant = "standard"): MaterialInfo[] {
+  const c = newRules(startFen, variant);
+  const captured: Record<Color, string[]> = { w: [], b: [] };
+  const snapshot = (): MaterialInfo => {
+    const material: Record<Color, number> = { w: 0, b: 0 };
+    for (const ch of c.fen().split(" ")[0]) {
+      const t = ch.toLowerCase();
+      if (t in VALUE) material[ch === t ? "b" : "w"] += VALUE[t];
+    }
+    return { captured: { w: [...captured.w], b: [...captured.b] }, material };
+  };
+  const positions = [snapshot()];
+  for (const san of sans) {
+    const mv = c.move(san);
+    if (mv.captured) captured[mv.color].push(mv.captured);
+    positions.push(snapshot());
+  }
+  return positions;
+}

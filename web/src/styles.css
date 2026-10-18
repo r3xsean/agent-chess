@@ -856,6 +856,8 @@ cg-board square.check {
 
 /* thinking feed */
 .thought {
+  /* Selection changes only this card; don't invalidate the entire long transcript. */
+  contain: content;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   display: flex;

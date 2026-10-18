@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { currentThinkMs } from "../../../shared/thinkingClock";
 import { looseChess, newRules, START_FEN, variantOf, type Variant } from "../../../shared/rules";
 import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from "../../../shared/types";
@@ -7,7 +7,7 @@ import { formatScore, scoreToCp, winPercentFor, winPercentWhite } from "../../..
 import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
 import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
-import { materialInfo } from "../../../shared/material";
+import { materialTimeline } from "../../../shared/material";
 import { explainIllegal, illegalMovePath, lineBreakReason, triesOf } from "../../../shared/explain";
 import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
 import { CrowdPanel, useCrowd } from "../components/Crowd";
@@ -151,13 +151,18 @@ export function GamePage({ id }: { id: string }) {
 
   const total = game?.moves.length ?? 0;
   const ply = viewPly === null ? total : Math.min(viewPly, total);
-  const go = (p: number) => {
+  // Event handlers can receive several presses before React commits. Advance from the
+  // latest requested cursor so bursts don't drop moves or get stuck on an illegal try.
+  const cursor = useRef({ ply, tryAt: viewTry });
+  cursor.current = { ply, tryAt: viewTry };
+  const go = useCallback((p: number) => {
     setCalc(null);
     setExplore(null);
     setViewTry(null);
     const clamped = Math.max(0, Math.min(total, p));
+    cursor.current = { ply: clamped, tryAt: null };
     setViewPly(clamped >= total ? null : clamped);
-  };
+  }, [total]);
   // Illegal attempts are steps of their own, between the position they were tried in and the move played
   // from it (the live position's attempts so far, too). Not while you play: they're part of the agent's thinking.
   const fenAt = (p: number) => (p ? game!.moves[p - 1].fenAfter : (game?.moves[0]?.fenBefore ?? startFen));
@@ -165,13 +170,25 @@ export function GamePage({ id }: { id: string }) {
     !game || hidden || p < 0 ? [] : p < total ? game.moves[p].illegalAttempts : (game.pendingIllegal?.[fenAt(p).split(" ")[1] as Color] ?? []);
   const tryIdx = viewTry !== null && !calc && !explore && viewTry < triesAt(ply).length ? viewTry : null;
   /** Shows attempt j from the position after p moves (pinned there, even on the live position). */
-  const showTry = (p: number, j: number) => {
+  const showTry = useCallback((p: number, j: number) => {
     setCalc(null);
     setExplore(null);
     setViewPly(p);
     setViewTry(j);
-  };
+    cursor.current = { ply: p, tryAt: j };
+  }, []);
+  const playLine = useCallback((p: number, line: number, attempt?: number) => {
+    setExplore(null);
+    setViewTry(null);
+    setCalc({ ply: p, line, try: attempt, step: 0, playing: true });
+  }, []);
+  const startGuessing = useCallback((on: boolean) => {
+    setGuessing(on);
+    if (on) go(total);
+  }, [go, total]);
   const step = (d: 1 | -1) => {
+    const { ply, tryAt } = cursor.current;
+    const tryIdx = tryAt !== null && tryAt < triesAt(ply).length ? tryAt : null;
     if (d > 0) {
       const next = tryIdx === null ? 0 : tryIdx + 1;
       if (next < triesAt(ply).length) return showTry(ply, next);
@@ -187,7 +204,8 @@ export function GamePage({ id }: { id: string }) {
   // keyboard navigation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if ((e.target as HTMLElement)?.closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])") || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.preventDefault();
       if (e.key === "ArrowLeft") explore ? stepExplore(-1) : calc ? stepCalc(-1) : step(-1);
       else if (e.key === "ArrowRight") explore ? stepExplore(1) : calc ? stepCalc(1) : step(1);
       else if (e.key === "Escape") (setCalc(null), setExplore(null));
@@ -338,7 +356,10 @@ export function GamePage({ id }: { id: string }) {
     lastSting.current = { at: stingAt, cls: stingCls };
     const sting = !hidden && stingCls && STING[stingCls];
     if (!prev || !sting) return;
-    if (stingAt === prev.at + 1 || (stingAt === prev.at && !prev.cls)) setTimeout(() => playSfx(sting[0], sting[1]), 150);
+    if (stingAt === prev.at + 1 || (stingAt === prev.at && !prev.cls)) {
+      const timer = setTimeout(() => playSfx(sting[0], sting[1]), 150);
+      return () => clearTimeout(timer);
+    }
   }, [stingAt, stingCls]);
   // The game's own events, as they happen.
   const liveEvents = useRef<{ illegal: number; draw: Color | null; result: string | null } | null>(null);
@@ -373,13 +394,15 @@ export function GamePage({ id }: { id: string }) {
   useEffect(() => {
     if (tryIdx !== null) playSfx("illegal", 0.7);
   }, [tryIdx, ply]);
-  const material = useMemo(() => {
-    if (!game) return null;
-    const start = game.moves[0]?.fenBefore ?? startFen;
-    if (explore) return materialInfo(start, [...explore.preSans, ...explore.moves.slice(0, explore.step)], variant);
-    if (calc && calcLine) return materialInfo(start, [...game.moves.slice(0, calc.ply - 1).map((m) => m.san), ...calcLine.san.slice(0, calc.step)], variant);
-    return materialInfo(start, game.moves.slice(0, ply).map((m) => m.san), variant);
-  }, [game?.moves.length, ply, calc, calcLine, explore]);
+  const materialStart = game?.moves[0]?.fenBefore ?? startFen;
+  const materialSans = explore ? [...explore.preSans, ...explore.moves]
+    : calc && calcLine ? [...(game?.moves.slice(0, calc.ply - 1).map(m => m.san) ?? []), ...calcLine.san]
+    : game?.moves.map(m => m.san) ?? [];
+  const materialKey = materialSans.join(" ");
+  const materials = useMemo(() => materialTimeline(materialStart, materialSans, variant), [materialStart, materialKey, variant]);
+  const materialPly = explore ? explore.preSans.length + explore.step
+    : calc && calcLine ? calc.ply - 1 + Math.min(calc.step, calcLine.san.length) : ply;
+  const material = materials[materialPly];
   // What each player believed after every move, against the engine (recomputed as analysis arrives).
   const beliefList = useMemo(() => (game ? beliefs(game) : []), [game]);
 
@@ -874,7 +897,7 @@ export function GamePage({ id }: { id: string }) {
                 // Playing an attempt's calculation keeps that attempt's card selected.
                 ply={calc?.try !== undefined ? calc.ply - 1 : ply}
                 tryAt={calc?.try !== undefined ? calc.try : tryIdx}
-                calc={calc} onSelect={go} onSelectTry={showTry} onPlayLine={(p, line, attempt) => (setExplore(null), setViewTry(null), setCalc({ ply: p, line, try: attempt, step: 0, playing: true }))} />
+                calc={calc} onSelect={go} onSelectTry={showTry} onPlayLine={playLine} />
             ))}
           {tab === "studio" && <Studio game={game} hideBroadcast={hidden} />}
           {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
@@ -886,10 +909,7 @@ export function GamePage({ id }: { id: string }) {
               setViewer={setViewer}
               crowd={crowd}
               guessing={guessing}
-              setGuessing={(on) => {
-                setGuessing(on);
-                if (on) go(total); // guesses are about the live position
-              }}
+              setGuessing={startGuessing}
             />
           )}
         </div>

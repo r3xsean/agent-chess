@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { Color, Game } from "../../../shared/types";
 import { fullName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
@@ -8,7 +8,7 @@ type Item =
   | { kind: "bc"; ts: number; id: number; text: string }
   | { kind: "iv"; ts: number; color: Color; when: "pre" | "post"; text: string };
 
-export function Studio({ game, hideBroadcast }: { game: Game; hideBroadcast?: boolean }) {
+export const Studio = memo(function Studio({ game, hideBroadcast }: { game: Game; hideBroadcast?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const items: Item[] = [
     // The broadcaster talks engine verdicts and the agent's thinking: not for a player's eyes mid-game.
@@ -57,4 +57,4 @@ export function Studio({ game, hideBroadcast }: { game: Game; hideBroadcast?: bo
       )}
     </div>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef } from "react";
 import type { CalcLine, Color, Game, IllegalTry, MoveRecord } from "../../../shared/types";
 import { selfEvalColors, sideName } from "../../../shared/naming";
 import { beliefs, engineAfter, selfScore, standing, type Belief } from "../../../shared/belief";
@@ -49,12 +49,12 @@ function BeliefMeter({ game, m, b }: { game: Game; m: MoveRecord; b: Belief }) {
   );
 }
 
-function Thought({
+const Thought = memo(function Thought({
   game,
   m,
   belief,
   on,
-  calc,
+  selectedLine,
   onSelect,
   onPlayLine,
 }: {
@@ -62,15 +62,15 @@ function Thought({
   m: MoveRecord;
   belief: Belief | null;
   on: boolean;
-  calc: CalcRef | null;
-  onSelect: () => void;
-  onPlayLine: (i: number) => void;
+  selectedLine: number | null;
+  onSelect: (ply: number) => void;
+  onPlayLine: (ply: number, i: number, attempt?: number) => void;
 }) {
   const player = m.color === "w" ? game.white : game.black;
   const a = m.analysis;
   const self = m.selfEval;
   return (
-    <div className={`thought ${on ? "on" : ""}`} onClick={onSelect} data-ply={m.ply}>
+    <div className={`thought ${on ? "on" : ""}`} onClick={() => onSelect(m.ply)} data-ply={m.ply}>
       <PlayerAvatar player={player} size={36} />
       <div className="thought-body">
         <div className="thought-head">
@@ -106,21 +106,26 @@ function Thought({
           {a?.bestSan && a.bestSan !== m.san && a.classification !== "book" && <span className="eval-chip">Best was {a.bestSan}</span>}
           {m.offeredDraw && <span className="eval-chip">🤝 Offered a draw</span>}
         </div>
-        <Lines game={game} fen={m.fenBefore} lines={m.lines} on={(i) => !!calc && calc.ply === m.ply && calc.try === undefined && calc.line === i} onPlay={onPlayLine} />
+        <Lines game={game} fen={m.fenBefore} lines={m.lines} selectedLine={selectedLine} onPlay={(i) => onPlayLine(m.ply, i)} />
       </div>
     </div>
   );
-}
+});
 
 /** A turn's calculation lines, each playable on the board. */
-function Lines({ game, fen, lines, on, onPlay }: { game: Game; fen: string; lines: CalcLine[]; on: (i: number) => boolean; onPlay: (i: number) => void }) {
+function Lines({ game, fen, lines, selectedLine, onPlay }: { game: Game; fen: string; lines: CalcLine[]; selectedLine: number | null; onPlay: (i: number) => void }) {
+  const variant = variantOf(game);
+  // SSE snapshots replace arrays even when only a clock/seat changed. The chess work depends
+  // on the actual line, never on selection, autoplay steps, or the snapshot's object identity.
+  const lineKey = JSON.stringify(lines.map(l => [l.san, l.brokenAt]));
+  const reasons = useMemo(() => lines.map(l => lineBreakReason(fen, l, variant)), [fen, variant, lineKey]);
   if (!lines.length) return null;
   return (
     <div className="lines">
       {lines.map((l, i) => (
         <button
           key={i}
-          className={`line-chip ${on(i) ? "on" : ""}`}
+          className={`line-chip ${selectedLine === i ? "on" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             onPlay(i);
@@ -133,7 +138,7 @@ function Lines({ game, fen, lines, on, onPlay }: { game: Game; fen: string; line
             {l.brokenAt && (
               <span className="lb">
                 {" "}
-                ✕ {l.brokenAt} <span className="lbr">({lineBreakReason(fen, l, variantOf(game))})</span>
+                ✕ {l.brokenAt} <span className="lbr">({reasons[i]})</span>
               </span>
             )}
             {l.note && <span className="ln">{l.note}</span>}
@@ -148,7 +153,7 @@ function Lines({ game, fen, lines, on, onPlay }: { game: Game; fen: string; line
  * An illegal attempt as a turn of its own, before the move that followed it: the thinking that went
  * with it, and why it was rejected.
  */
-function TryCard({
+const TryCard = memo(function TryCard({
   game,
   ply,
   color,
@@ -156,7 +161,7 @@ function TryCard({
   move,
   t,
   on,
-  calc,
+  selectedLine,
   onSelect,
   onPlayLine,
   index,
@@ -169,15 +174,16 @@ function TryCard({
   move: string;
   t?: IllegalTry;
   on: boolean;
-  calc: CalcRef | null;
-  onSelect: () => void;
-  onPlayLine: (i: number) => void;
+  selectedLine: number | null;
+  onSelect?: (ply: number, i: number) => void;
+  onPlayLine: (ply: number, i: number, attempt?: number) => void;
   index: number;
 }) {
   const player = color === "w" ? game.white : game.black;
   const no = `${Math.ceil((ply + 1) / 2)}${color === "w" ? "." : "..."}`;
+  const reason = useMemo(() => explainIllegal(fen, move), [fen, move]);
   return (
-    <div className={`thought try ${on ? "on" : ""}`} onClick={onSelect} data-try={`${ply}:${index}`}>
+    <div className={`thought try ${on ? "on" : ""}`} onClick={() => onSelect?.(ply, index)} data-try={`${ply}:${index}`}>
       <PlayerAvatar player={player} size={36} />
       <div className="thought-body">
         <div className="thought-head">
@@ -198,14 +204,14 @@ function TryCard({
             </span>
           )}
         </div>
-        <div className="illegal-try">Rejected: {explainIllegal(fen, move)}</div>
-        {t && <Lines game={game} fen={fen} lines={t.lines} on={(i) => !!calc && calc.ply === ply + 1 && calc.try === index && calc.line === i} onPlay={onPlayLine} />}
+        <div className="illegal-try">Rejected: {reason}</div>
+        {t && <Lines game={game} fen={fen} lines={t.lines} selectedLine={selectedLine} onPlay={(i) => onPlayLine(ply + 1, i, index)} />}
       </div>
     </div>
   );
-}
+});
 
-export function ThinkingFeed(props: {
+export const ThinkingFeed = memo(function ThinkingFeed(props: {
   game: Game;
   ply: number;
   /** Which illegal attempt from the position after `ply` moves is on the board, if any. */
@@ -218,7 +224,8 @@ export function ThinkingFeed(props: {
 }) {
   const tryAt = props.tryAt ?? null;
   const ref = useRef<HTMLDivElement>(null);
-  // Opening the tab jumps straight to the current move; after that, following the game scrolls smoothly.
+  // Keep the selected card in view immediately, matching the move list. Repeated smooth
+  // scrolls chase an obsolete target while the viewer holds an arrow key.
   const opened = useRef(false);
   const g = props.game;
   const liveFen = g.moves[g.moves.length - 1]?.fenAfter ?? g.startFen ?? START_FEN;
@@ -232,7 +239,8 @@ export function ThinkingFeed(props: {
         : props.ply === g.moves.length && pending
           ? `.thought[data-try="${props.ply}:${pending - 1}"]`
           : `.thought[data-ply="${props.ply}"]`;
-    scrollIntoPanel(ref.current?.querySelector(sel), opened.current ? "nearest" : "center", opened.current);
+    const target = ref.current?.querySelector(sel) ?? (props.ply === 0 ? ref.current?.firstElementChild : null);
+    scrollIntoPanel(target, opened.current ? "nearest" : "center", false);
     opened.current = true;
   }, [props.ply, tryAt, g.moves.length, pending]);
   const pre = g.phase === "pregame";
@@ -250,9 +258,9 @@ export function ThinkingFeed(props: {
         t={t}
         index={j}
         on={props.ply === ply && tryAt === j}
-        calc={props.calc}
-        onSelect={() => props.onSelectTry?.(ply, j)}
-        onPlayLine={(i) => props.onPlayLine(ply + 1, i, j)}
+        selectedLine={props.calc?.ply === ply + 1 && props.calc.try === j ? props.calc.line : null}
+        onSelect={props.onSelectTry}
+        onPlayLine={props.onPlayLine}
       />
     ));
   return (
@@ -268,13 +276,13 @@ export function ThinkingFeed(props: {
             m={m}
             belief={belief[i]}
             on={m.ply === props.ply && tryAt === null}
-            calc={props.calc}
-            onSelect={() => props.onSelect(m.ply)}
-            onPlayLine={(i) => props.onPlayLine(m.ply, i)}
+            selectedLine={props.calc?.ply === m.ply && props.calc.try === undefined ? props.calc.line : null}
+            onSelect={props.onSelect}
+            onPlayLine={props.onPlayLine}
           />
         </Fragment>
       ))}
       {tries(g.moves.length, liveTurn, liveFen, g.pendingIllegal?.[liveTurn] ?? [], g.pendingTries?.[liveTurn])}
     </div>
   );
-}
+});
