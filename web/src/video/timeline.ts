@@ -81,6 +81,8 @@ export const LINE_RESTORE = 0.22;
 export const lineRewindDuration = (moves: number) => Math.min(1.2, moves * 0.18);
 /** How much longer a line holds on its hard move (great: the only move; brilliant: the sacrifice), badge and all. */
 const LINE_STRONG_HOLD = 0.9;
+/** How long a move holds before the engine line after it starts (the line's own lead-in comes on top). */
+const LINE_AFTER_MOVE = 0.5;
 /** How far apart the moves a narrator's cue brings on land, the last on its word. */
 const LINE_BURST = 0.35;
 const LINE_SETTLE = 0.15;
@@ -524,7 +526,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     if (aside && !m.illegalAttempts.length) sayAside(i);
     const next = g.moves[i + 1];
     const clock = !!next && !keys[i + 1] && !next.illegalAttempts.length;
-    push({ kind: "move", i, anim, key, dur: anim + hold(i) + (last ? 1 : 0), ...(carry && { carry }), ...(clock && { clock }) });
+    // A move with its engine line to follow only pauses long enough for its badge to land: the line takes
+    // over from there (its own lead-in is the rest of the wait), so it isn't held like a moment on its own.
+    const lineNext = !!ask && !lineFirst && !!planLine(g, i, ask);
+    push({ kind: "move", i, anim, key, dur: anim + (lineNext ? LINE_AFTER_MOVE : hold(i)) + (last ? 1 : 0), ...(carry && { carry }), ...(clock && { clock }) });
 
     // The engine line the director asked for: what didn't happen, played out, then why it's better (one
     // played before the move came first, above).
