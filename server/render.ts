@@ -2,21 +2,16 @@ import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { PORT, ROOT } from "./paths";
-import { games, saveGameNow } from "./store";
-import { touch } from "./game";
-import type { VideoPlan } from "../shared/types";
-import { needsDirection } from "./director";
-import { summonAvailable } from "./summon";
-import { launchDirector } from "./launcher";
+import { games } from "./store";
+import { videoApproved, videoRevision } from "./videoApproval";
 import { voiceGame } from "./voice";
 import { gameVideoDir, thumbOptionPath, thumbOptionUrl, videoPath, videoUrl, VIDEO_DIR } from "./videoFiles";
 
 export { VIDEO_DIR };
 
 /*
- * Video renders started from the website. One render runs at a time; the rest queue. A game with no
- * director's plan gets a director summoned first (through the T3 webhook), and the render waits for it;
- * a redo throws the plan away first, so a new director makes another.
+ * Video renders started after user approval. One render runs at a time; the rest queue.
+ * Planning and conversation never start recording or rendering.
  */
 
 export type RenderFormat = "landscape" | "portrait";
@@ -28,6 +23,7 @@ export interface RenderJob {
   music: string | null;
   /** Speak the players' lines (false: a deliberately silent render). */
   voices: boolean;
+  revision?: string;
   /** Only the thumbnails and the upload text, not the videos (see makeThumbnails). */
   packageOnly?: boolean;
   status: "waiting-director" | "queued" | "rendering" | "done" | "failed";
@@ -44,8 +40,6 @@ export interface RenderJob {
 
 export const MUSIC_DIR = path.join(ROOT, "vendor", "music");
 const SCRIPT = path.join(ROOT, "scripts", "render-video.mjs");
-/** How long to wait for a summoned director before rendering with the automatic picks. */
-const DIRECTOR_WAIT_MS = 15 * 60_000;
 
 const jobs: RenderJob[] = [];
 let running = false;
@@ -113,70 +107,20 @@ function update(job: RenderJob, patch: Partial<RenderJob>) {
   Object.assign(job, patch);
 }
 
-/** Plans thrown away for a redo, kept until the new director delivers in case it never does. */
-const replaced = new Map<string, VideoPlan>();
-
-/** The redo's director never came: the plan it was replacing goes back (unless a new one arrived after all). */
-function restorePlan(gameId: string): boolean {
-  const prev = replaced.get(gameId);
-  replaced.delete(gameId);
-  const g = games.get(gameId);
-  if (!prev || !g || g.video) return false;
-  g.video = prev;
-  saveGameNow(g);
-  touch(g);
-  return true;
-}
-
-/**
- * Queue a render. `redirect`: throw the director's plan away and summon a new director first (to re-cut a
- * video, or to get a plan made with features the old director didn't have).
- */
+/** Queue only the exact plan the user approved. Voice recording is part of this explicit step. */
 export async function startRender(gameId: string, formats: RenderFormat[], music: string | null, voices = true, redirect = false): Promise<RenderJob> {
   const g = games.get(gameId);
   if (!g) throw new Error("No such game.");
   if (g.phase !== "finished") throw new Error("The game isn't finished yet.");
+  if (redirect) throw new Error("Run the director, review the plan and approve it before rendering.");
+  if (!videoApproved(g)) throw new Error("Approve the current video plan before rendering.");
   if (music && !musicTracks().includes(music)) throw new Error(`No such track in vendor/music: ${music}`);
-  const active = jobs.find((j) => j.gameId === gameId && !j.packageOnly && !["done", "failed"].includes(j.status));
+  const active = jobs.find(j => j.gameId === gameId && !j.packageOnly && !["done", "failed"].includes(j.status));
   if (active) return active;
-  if (redirect && g.video) {
-    if (!summonAvailable()) throw new Error("No T3 webhook configured, so no director can be summoned to redo the plan.");
-    replaced.set(gameId, g.video);
-    delete g.video;
-    if (g.launched) delete g.launched.d;
-    g.videoRedos = (g.videoRedos ?? 0) + 1;
-    saveGameNow(g);
-    touch(g);
-  }
-
-  const job: RenderJob = { id: `${gameId}-${Date.now().toString(36)}`, gameId, formats, music, voices, status: "queued", stage: "Queued", progress: 0, createdAt: Date.now() };
+  const job: RenderJob = { id: `${gameId}-${Date.now().toString(36)}`, gameId, formats, music, voices, revision: videoRevision(g), status: "queued", stage: "Queued", progress: 0, createdAt: Date.now() };
   jobs.push(job);
-  if (needsDirection(g)) {
-    // Without a director the render goes on: with the old plan on a redo, otherwise the automatic picks.
-    const fallback = (why: string) => update(job, { status: "queued", stage: "Queued", note: `${why}; ${restorePlan(gameId) ? "keeping the previous plan" : "using the automatic picks"}.` });
-    if (summonAvailable()) {
-      update(job, { status: "waiting-director", stage: redirect ? "Summoning a new video director…" : "Summoning the video director…" });
-      launchDirector(g)
-        .then(() => update(job, { stage: "Waiting for the director to pick the moments…" }))
-        .catch((e) => {
-          fallback(`Couldn't summon a director (${e.message})`);
-          pump();
-        });
-      setTimeout(() => {
-        if (job.status === "waiting-director") fallback("The director didn't answer in time");
-        pump();
-      }, DIRECTOR_WAIT_MS);
-    } else update(job, { note: "No T3 webhook configured, so no director; using the automatic picks." });
-  }
   pump();
   return job;
-}
-
-/** The director saved its plan: release the renders that were waiting for it. */
-export function directorDone(gameId: string) {
-  replaced.delete(gameId);
-  for (const j of jobs) if (j.gameId === gameId && j.status === "waiting-director") update(j, { status: "queued", stage: "Queued" });
-  pump();
 }
 
 function pump() {
@@ -195,13 +139,16 @@ async function run(job: RenderJob): Promise<void> {
   // with some lines voiced and others silent would look broken, so if any line can't be voiced the
   // render stops and says why; a retry reuses everything already recorded.
   const g = games.get(job.gameId);
+  const changed = () => !job.packageOnly && (!g || !videoApproved(g) || videoRevision(g) !== job.revision);
+  const stale = () => update(job, { status: "failed", stage: "Plan changed", error: "Review and approve the updated plan, then render again.", finishedAt: Date.now() });
+  if (changed()) return stale();
   if (g?.video && job.voices && !job.packageOnly) {
     update(job, { status: "rendering", stage: "Recording the voices…", progress: 0 });
     const stop = (why: string) =>
       update(job, {
         status: "failed",
         stage: "Stopped: the voices aren't ready",
-        error: `${why} Render again to retry (lines already recorded are reused, not paid for twice), or tick "Without voices".`,
+        error: `${why} Render again to retry; lines already recorded are reused, not paid for twice.`,
         finishedAt: Date.now(),
       });
     try {
@@ -212,6 +159,7 @@ async function run(job: RenderJob): Promise<void> {
       return stop(`Recording failed: ${(e as Error).message}.`);
     }
   }
+  if (changed()) return stale();
   return renderFrames(job);
 }
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { DirectorThread } from "./DirectorThread";
+import type { VideoContext } from "../../../shared/directorThread";
 import type { PublishPlatform, PublishState, PublishVisibility, VideoPackaging, VideoPackagingOptions } from "../../../shared/types";
 
 const PLATFORMS: PublishPlatform[] = ["youtube", "tiktok"];
@@ -138,6 +140,8 @@ interface RenderState {
   thumbUrl: string | null;
   music: string[];
   directed: boolean;
+  approved: boolean;
+  revision: string;
   summonAvailable: boolean;
   /** The last request to post the videos, and what each platform still needs before it can be posted. */
   publish: PublishState | null;
@@ -298,15 +302,18 @@ const FORMAT_LABEL: Record<Format, string> = { landscape: "YouTube 16:9", portra
 const active = (j: RenderJob) => j.status !== "done" && j.status !== "failed";
 
 /** Render the replay to MP4 from the site: pick formats and music, follow progress, download. */
-export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => void }) {
+export function RenderPanel({ gameId, onPlan, context }: { gameId: string; onPlan: () => void; context: VideoContext }) {
   const [state, setState] = useState<RenderState | null>(null);
   const [formats, setFormats] = useState<Format[]>(["landscape", "portrait"]);
   const [music, setMusic] = useState("");
-  const [silent, setSilent] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [requestingRender, setRequestingRender] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const wasDirected = useRef<boolean | null>(null);
+  const revision = useRef<string | undefined>(undefined);
   /** Jobs seen running (by this panel, or started from it), and finished jobs already acted on. */
   const watched = useRef(new Set<string>());
   const handled = useRef(new Set<string>());
@@ -322,7 +329,8 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
     if (last && active(last)) watched.current.add(last.id);
     const ended = !!last && !active(last) && watched.current.has(last.id) && !handled.current.has(last.id);
     if (ended) handled.current.add(last!.id);
-    if ((wasDirected.current === false && s.directed) || ended) onPlan();
+    if ((revision.current !== undefined && revision.current !== s.revision) || (wasDirected.current === false && s.directed) || ended) onPlan();
+    revision.current = s.revision;
     wasDirected.current = s.directed;
   };
 
@@ -339,25 +347,24 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
     return () => clearInterval(timer);
   }, [gameId, busy]);
 
-  /** `redirect`: a new director makes a new plan first (the current one is thrown away). */
-  const render = async (redirect = false) => {
+  const render = async () => {
     setError("");
-    if (
-      redirect &&
-      !confirm(
-        "Throw away the director's plan and summon a new director? It picks new moments and quotes, so new voice lines get recorded. If no director answers, the current plan is kept.",
-      )
-    )
-      return;
+    setRequestingRender(true);
     try {
-      const s = await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null, voices: !silent, redirect });
+      const s = await api<RenderState>(`/api/games/${gameId}/render`, { formats, music: music || null });
       // The job this click started counts as watched even if it already ended (a fast failure).
       const last = s.jobs.at(-1);
       if (last) watched.current.add(last.id);
       take(s);
     } catch (e) {
       setError((e as Error).message);
-    }
+    } finally { setRequestingRender(false); }
+  };
+  const approve = async () => {
+    setApproving(true); setError("");
+    try { take(await api<RenderState>(`/api/games/${gameId}/video-approval`, { revision: state?.revision })); }
+    catch (e) { setError((e as Error).message); load(); }
+    finally { setApproving(false); }
   };
 
   const upload = async (f: File) => {
@@ -380,23 +387,21 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
 
   /** Store an edit to the upload text (the publisher posts with it); throws the server's reason it can't. */
   const editText = async (edits: { title?: string; description?: string; caption?: string }) => take(await api<RenderState>(`/api/games/${gameId}/upload-text`, edits));
-  const editLock = state?.publish?.status === "requested" ? "A publisher is posting these videos right now" : undefined;
+  const editLock = busy || chatBusy ? "Wait for the current video work to finish" : state?.publish?.status === "requested" ? "A publisher is posting these videos right now" : undefined;
   /** Use one of the director's options; throws the server's reason it can't. */
   const pick = async (picks: Pick) => take(await api<RenderState>(`/api/games/${gameId}/packaging/pick`, picks));
 
   return (
     <div className="render-panel">
-      <h3>🎬 Render MP4</h3>
-
-      <div className="rp-row">
-        {state?.directed ? (
-          <span className="rp-ok">✓ The director picked the key moments</span>
-        ) : state?.summonAvailable ? (
-          <span className="rp-muted">No director's plan yet: rendering summons one first (a few minutes).</span>
-        ) : (
-          <span className="rp-muted">No director's plan; the key moments come from the engine's verdicts.</span>
-        )}
-      </div>
+      <DirectorThread gameId={gameId} directed={!!state?.directed} locked={busy || state?.publish?.status === "requested"} context={context} onState={s => {
+        setChatBusy(s.status === "working" || s.status === "narrating");
+        if (revision.current !== s.revision) load();
+      }} />
+      <button className="rp-go" onClick={approve} disabled={!state?.directed || state.approved || busy || chatBusy || approving || state.publish?.status === "requested"}>
+        {state?.approved ? "✓ Plan approved" : approving ? "Approving…" : "Approve this plan"}
+      </button>
+      {state?.directed && <div className="rp-muted">{state.approved ? "Ready to record voices and render." : "Review your changes in the preview, then approve. Changes to the plan need approval again."}</div>}
+      <h3>3. Render with voices</h3>
 
       <div className="rp-row rp-formats">
         {(["landscape", "portrait"] as Format[]).map((f) => (
@@ -422,21 +427,10 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
         <input ref={file} type="file" accept="audio/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       </div>
 
-      <div className="rp-row rp-formats">
-        <label title="The players' lines in their own voices are recorded (or reused) before the render. Tick this for a version without them.">
-          <input type="checkbox" checked={silent} onChange={(e) => setSilent(e.target.checked)} disabled={busy} /> Without voices
-        </label>
-      </div>
-
-      <button className="rp-go" onClick={() => render()} disabled={busy || !formats.length}>
-        {busy ? (job!.packageOnly ? "Making the thumbnails…" : "Rendering…") : state?.videos.length ? "Render again (same plan)" : "Render"}
+      <div className="rp-muted">Records changed voice lines and reuses matching recordings, then makes the MP4.</div>
+      <button className="rp-go" onClick={() => render()} disabled={busy || requestingRender || chatBusy || !state?.approved || !formats.length}>
+        {busy ? (job!.packageOnly ? "Making the thumbnails…" : "Rendering…") : requestingRender ? "Starting…" : state?.videos.length ? "Render again with voices" : "Render with voices"}
       </button>
-      {/* The whole process again from the director's plan: to re-cut a video, or get a plan with newer features. */}
-      {state?.directed && state.summonAvailable && (
-        <button className="rp-redo" onClick={() => render(true)} disabled={busy || !formats.length}>
-          {state.videos.length ? "Re-render from scratch (new director)" : "Redo the director, then render"}
-        </button>
-      )}
 
       {job && (
         <div className={`rp-job ${job.status}`}>

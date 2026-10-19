@@ -10,7 +10,7 @@ import { beliefs, judge, selfScore, standing, type Belief } from "../../../share
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
-import { fenAt, resolveLineRefs, shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
+import { fenAt, lineVerdicts, planLine, resolveLineRefs, shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
 import { boardOf, pointsAt, quoteWords } from "../../../shared/thoughtMarks";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
@@ -19,6 +19,7 @@ import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/nam
 import { buildTimeline, FRAME, LINE_SLIDE, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type AsideCue, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
+import { lineTransition, rewindFrame } from "./linePlayback";
 import { useMeta } from "../api";
 import "./video.css";
 
@@ -376,17 +377,20 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
   lineCache.set(prep, cache);
   const key = `${i}:${kind}`;
   if (cache.has(key)) return cache.get(key)!;
-  const sl = shownLine(g, i, kind);
+  const ask = g.video?.moments.find((x) => x.ply === g.moves[i]?.ply)?.line;
+  const sl = ask?.kind === kind ? planLine(g, i, ask) : shownLine(g, i, kind, true);
   let out: LinePrep | null = null;
   if (sl) {
     const variant = variantOf(g);
     const m = g.moves[i];
     const a = m.analysis!;
-    const ask = g.video?.moments.find((x) => x.ply === m.ply)?.line;
     const start = g.startFen ?? START_FEN;
     // The real game up to where the line starts, then the line.
     const played = g.moves.slice(0, kind === "instead" ? i : i + 1).map((mv) => mv.san);
     const sans = sl.moves.map((mv) => mv.san);
+    // The variation marks its hard moves as an annotated game does: "Qh5!", "Bxh7+!!".
+    const verdicts = lineVerdicts(g, sl.moves);
+    const marked = sans.map((san, j) => (verdicts[j] === "great" || verdicts[j] === "brilliant" ? `${san}${ANNOTATION[verdicts[j]!]}` : san));
     const ks = [...Array(sl.moves.length + 1).keys()];
     const first = kind === "instead" ? m.ply : m.ply + 1;
     const lineScore = scoreAt(g, sl.fen);
@@ -402,7 +406,7 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
       sl,
       material: ks.map((k) => materialInfo(start, [...played, ...sans.slice(0, k)], variant)),
       check: ks.map((k) => checkSquare(k ? sl.moves[k - 1].after : sl.fen)),
-      labels: variation(sans, first),
+      labels: variation(marked, first),
       // The line's own fact, when the director wrote no caption, lights and draws nothing.
       note: lineNote(ask?.caption ?? sl.caption, ask?.caption ? ask : {}, sl.fen, sl.moves, sl.moves.length, sl.for),
       compare,
@@ -486,6 +490,8 @@ function asideAnchors(tl: Timeline): number[] {
 function asidesAt(g: Game, tl: Timeline, t: number): View["asides"] {
   const anchors = asideAnchors(tl);
   const out = tl.asides.flatMap((a, k) => {
+    // The narrator's beats are the engine line's comments, not the players' asides.
+    if (a.narrator) return [];
     const end = a.start + a.dur;
     if (t < a.start || t >= end + SPEECH_OPEN) return [];
     const open = Math.min(ease(clamp01((t - a.start) / SPEECH_OPEN)), t < end ? 1 : 1 - ease(clamp01((t - end) / SPEECH_OPEN)));
@@ -748,28 +754,63 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
         const o = r3(fade(from) * alpha);
         return o > 0 ? { text: note.caption, lit: note.lit.map((l) => ({ word: l.word, color: litColor(l.color), o: 1, at: from })), o } : undefined;
       };
-      // A variation's moves: played, the newest (the position on the board, highlighted as the game's current
-      // move is), and still to come.
-      const track = (labels: string[], k: number) => labels.map((label, j) => ({ label, state: (j < k - 1 ? "done" : j === k - 1 ? "now" : "next") as "done" | "now" | "next" }));
+      // A variation's moves as they're played: the ones played, and the newest (the position on the board,
+      // highlighted as the game's current move is). The ones still to come aren't written yet, so the list never
+      // gives away a move before the board (and the narrator) gets to it.
+      const track = (labels: string[], k: number) => labels.slice(0, Math.max(0, k)).map((label, j) => ({ label, state: (j < k - 1 ? "done" : "now") as "done" | "now" | "next" }));
       // Up top, what's being shown, in words: what the move allows, what if the better move had been played,
       // how it could have been punished, or why it works. Only the eval follows the board. The line under the
       // move's verdict folds away as the variation opens, and comes back as it closes.
       const a = m.analysis;
-      const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification);
+      // As on the move: an `instead` line revealed after it doesn't name its answer under the verdict either.
+      const askLine = g.video?.moments.find((x) => x.ply === m.ply)?.line;
+      const spoiler = s.line === "instead" && !s.first && !askLine?.showBest;
+      const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification) && !spoiler;
       const marked = `${m.san}${(a && ANNOTATION[a.classification]) ?? ""}`;
-      const firstLabel = moveLabel(s.line === "instead" ? m.ply : m.ply + 1, sl.moves[0].san);
-      const whatIf = (evalText: string, punish: boolean): View["callout"] => {
+      // The line's first move is only named up top once it's on the board: "What if…?" until then.
+      const whatIf = (evalText: string, punish: boolean, revealed = true): View["callout"] => {
+        const firstLabel = revealed ? moveLabel(s.line === "instead" ? m.ply : m.ply + 1, sl.moves[0].san) : "…";
         if (punish) return { label: `What ${label} allows`, sub: `The engine's best answer for ${sideName(g, other(m.color))}`, evalText, whatIf: "punish" };
+        // Played before the move: what was there, without giving away what they played.
+        if (s.first) return { label: `What if ${firstLabel}?`, sub: `What ${sideName(g, m.color)} had here`, evalText, whatIf: "line" };
         if (s.line === "instead") return { label: `What if ${firstLabel}?`, sub: `${sideName(g, m.color)}'s better move, instead of ${marked}`, evalText, whatIf: "line" };
         if (sl.for !== m.color) return { label: `What if ${firstLabel}?`, sub: `How ${sideName(g, sl.for)} could have punished ${marked}`, evalText, whatIf: "line" };
         return { label: `Why ${marked} works`, sub: "The engine's line from here", evalText, whatIf: "line" };
       };
-      v.line = verdictLine(g, prep, s.i, bad, telling(prep.belief[s.i]));
+      v.line = s.first ? undefined : verdictLine(g, prep, s.i, bad, telling(prep.belief[s.i]));
+      // A move's badge as it lands in a line (`land`: when it settled), popping in like a game move's.
+      const badgeOf = (mv: RulesMove | undefined, c: Classification | undefined, land: number): BoardView["badge"] =>
+        mv && c ? { sq: mv.to, c, s: r3(easeOutBack(clamp01((local - land) / 0.3))) } : undefined;
+      // The narrator's line being said, as the variation's comment (the director's caption takes over at the end).
+      const beatNow = s.beats?.filter((b) => b.at <= local).at(-1);
+      // What the narrator draws on its words, on the board as it stands (`fen`), each from when its word is said;
+      // the words light up in the colour of what they point at.
+      const beatDrawn = (fen: string) => {
+        const board = fenBoard(fen);
+        const arrows: NonNullable<BoardView["marks"]>["arrows"] = [];
+        const rings: NonNullable<BoardView["marks"]>["rings"] = [];
+        const lit: Lit[] = [];
+        for (const d of beatNow?.draws ?? []) {
+          const t0 = beatNow!.at + d.at;
+          if (local < t0) continue;
+          const o = r3(clamp01((local - t0) / 0.08));
+          const pop = r3(clamp01((local - t0) / 0.2));
+          const pc = board.get(d.ring ?? d.from ?? "");
+          if (d.ring) rings.push({ sq: d.ring, ...(pc && { own: pc.color === sl.for }), o, pop });
+          else if (d.from && d.to) arrows.push({ from: d.from, to: d.to, own: (pc?.color ?? sl.for) === sl.for, hit: true, o, pop });
+          // The words name what the drawing points at: the circled piece, or the piece a reach hits (else the one reaching).
+          const named = d.ring ? pc : (board.get(d.to ?? "") ?? pc);
+          for (let w = d.word; w <= (d.last ?? d.word); w++) lit.push({ word: w, color: litColor(named?.color), o: 1, at: t0 });
+        }
+        return { arrows, rings, lit };
+      };
+      const comment = (from: number, lit: Lit[] = []) =>
+        s.caption && local >= s.captionAt ? caption(L.note, s.captionAt, 1) : beatNow ? { text: beatNow.text, lit, o: r3(fade(beatNow.at, 0.25)) } : from >= 0 ? caption(L.note, from, 1) : undefined;
       // Opening over FOLD at the start, closing over FOLD at the end, and for a punishment, closing as the
       // board winds back and the line's variation opening in its place. The line under the verdict stays
       // folded away in between.
       const unfold = (from: number, to: number) => r3(ease(clamp01((local - from) / FOLD)) * ease(clamp01((to - local) / FOLD)));
-      const under = r3(1 - unfold(0, s.dur));
+      const under = r3(1 - unfold(s.enterAt, s.restoreEnd));
       const drawn = (arrows: NonNullable<BoardView["marks"]>["arrows"], rings: NonNullable<BoardView["marks"]>["rings"]) => (arrows.length || rings.length ? { arrows, rings } : undefined);
 
       const sp = s.punish;
@@ -788,20 +829,18 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           fen = pm[on - 1].after;
           anim = slide(pm.slice(1), sp.moveAt, on - 1);
         } else {
-          const step = (sp.back[1] - sp.back[0]) / (n + 1);
-          const done = (local - sp.back[0]) / step;
-          const j = Math.min(n, Math.floor(done));
-          const mv = pm[n - j];
-          const a = moveAnim(mv.before, mv, variant, done - j);
-          on = n - j;
-          fen = mv.before;
-          anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
+          const frame = rewindFrame(pm, sp.back, local);
+          on = frame.count;
+          fen = frame.move.after;
+          anim = moveAnim(frame.move.before, frame.move, variant, frame.progress);
           alpha = 1 - clamp01((local - sp.back[0]) / (sp.back[1] - sp.back[0]));
         }
         const last = pm[on - 1];
         const score = scoreAt(g, m.fenAfter, m.analysis?.evalAfter);
         const evalText = formatScore(score);
         const extra = noted(P.note, fen, sp.captionAt, alpha);
+        // The newest move's badge, once it has landed (the move played keeps the game's).
+        const landed = on > 1 ? sp.moveAt[on - 2] + LINE_SLIDE : -1;
         v.board = {
           i: s.i,
           fen,
@@ -809,6 +848,7 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           lastMove: last && [last.from, last.to],
           check: checkSquare(fen),
           engine: true,
+          ...(!anim && local < sp.back[0] && { badge: badgeOf(last, sp.verdicts[on - 1], landed) }),
           marks: drawn(extra.arrows, extra.rings),
           evalW: r3(score ? winPercentWhite(score) : prep.graph[s.i + 1]),
           evalText,
@@ -830,16 +870,13 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
         const k = s.moveAt.filter((t) => t <= local).length;
         const mv = sl.moves[k - 1];
         let anim = slide(sl.moves, s.moveAt, k);
-        if (!k && s.line === "instead" && !sp && local < LINE_SLIDE) {
-          // The move played slides back off before the line starts.
-          const a = moveAnim(m.fenBefore, m, variant, local / LINE_SLIDE);
-          anim = { from: a.to, to: a.from, p: a.p, rook: a.rook && [a.rook[1], a.rook[0]] };
-        }
         const prev = g.moves[real];
         const score = scoreAt(g, sl.fen);
         const evalText = formatScore(score);
         const fen = mv ? mv.after : sl.fen;
-        const extra = noted(L.note, fen, s.captionAt, 1);
+        const said = beatDrawn(fen);
+        const noteMarks = noted(L.note, fen, s.captionAt, 1);
+        const extra = { arrows: [...noteMarks.arrows, ...said.arrows], rings: [...noteMarks.rings, ...said.rings] };
         v.board = {
           i: real,
           fen,
@@ -847,22 +884,66 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           lastMove: mv ? [mv.from, mv.to] : prev && [prev.from, prev.to],
           check: L.check[k],
           engine: true,
+          ...(!anim && k > 0 && { badge: badgeOf(mv, s.verdicts[k - 1], s.moveAt[k - 1] + LINE_SLIDE) }),
           marks: drawn(extra.arrows, extra.rings),
           evalW: r3(score ? winPercentWhite(score) : prep.graph[real + 1]),
           evalText,
         };
         v.material = L.material[k];
         v.clocks = prep.clocks[real + 1];
-        v.callout = whatIf(evalText, false);
+        v.callout = whatIf(evalText, false, k > 0);
         const compareAt = s.captionAt + 0.3;
         v.engine = {
-          open: unfold(sp && P ? sp.back[1] : 0, s.dur),
+          open: unfold(sp && P ? sp.back[1] : 0, s.restoreEnd),
           under,
-          ply: s.i + 1,
+          // Played first, the move isn't in the list yet: the variation hangs from the move before it.
+          ply: s.first ? s.i : s.i + 1,
           current: false,
           moves: track(L.labels, k),
-          caption: caption(L.note, s.captionAt, 1),
-          ...(L.compare && local >= compareAt && { compare: { ...L.compare, o: r3(fade(compareAt) * unfold(0, s.dur)) } }),
+          caption: comment(s.captionAt, said.lit),
+          ...(L.compare && !s.first && local >= compareAt && { compare: { ...L.compare, o: r3(fade(compareAt) * unfold(0, s.dur)) } }),
+        };
+      }
+      const transition = lineTransition(s, m, sl, local);
+      if (transition) {
+        const { phase, fen, count } = transition;
+        const engine = phase === "enter" || phase === "rewind";
+        const mv = "move" in transition ? transition.move : undefined;
+        const before = mv && ("before" in mv ? mv.before : mv.fenBefore);
+        const anim = mv && before ? moveAnim(before, mv, variant, transition.progress!) : undefined;
+        const actual = !s.first && !engine;
+        const score = scoreAt(g, fen, actual ? m.analysis?.evalAfter : undefined);
+        const prev = g.moves[s.i - 1];
+        const landed = phase === "hold" || phase === "done";
+        const last = phase === "rewind" ? sl.moves[count - 1] : actual ? m : prev;
+        const marks = phase === "hold" ? beatDrawn(fen) : undefined;
+        v.board = {
+          i: actual ? s.i : real,
+          fen,
+          anim,
+          engine,
+          lastMove: last && [last.from, last.to],
+          check: landed ? checkSquare(fen) : undefined,
+          badge: actual && landed && a ? { sq: m.to, c: a.classification, s: 1 } : undefined,
+          arrow: actual && landed && bad ? [a!.bestUci!.slice(0, 2), a!.bestUci!.slice(2, 4)] : undefined,
+          marks: marks && drawn(marks.arrows, marks.rings),
+          evalW: r3(score ? winPercentWhite(score) : prep.graph[(actual ? s.i : real) + 1]),
+          evalText: formatScore(score),
+        };
+        v.material = phase === "rewind" ? L.material[count] : prep.material[(actual ? s.i : real) + 1];
+        v.clocks = prep.clocks[(s.first ? s.i - 1 : s.i) + 1];
+        v.focus = actual ? { i: s.i, label: telling(prep.belief[s.i]) } : undefined;
+        v.callout = engine ? whatIf(v.board.evalText, false, phase === "rewind") : actual
+          ? { label, cls: a?.classification, evalText: v.board.evalText, bestWas: bad ? a!.bestSan : undefined, took: took(m.thinkMs) }
+          : { label: `${sideName(g, m.color)} to move`, status: true, evalText: v.board.evalText };
+        v.line = actual ? verdictLine(g, prep, s.i, bad, telling(prep.belief[s.i])) : undefined;
+        v.engine = {
+          open: phase === "hold" ? unfold(0, s.dur) : phase === "enter" ? 1 : 1 - fade(s.back[0], s.back[1] - s.back[0]),
+          under: phase === "hold" || !engine ? 1 : under,
+          ply: s.first ? s.i : s.i + 1,
+          current: !engine,
+          moves: phase === "rewind" ? track(L.labels, count) : [],
+          caption: comment(s.captionAt, marks?.lit),
         };
       }
     }
@@ -878,7 +959,11 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
     const wb = before ? winPercentWhite(before) : 50;
     const wa = after ? winPercentWhite(after) : wb;
     const settled = local >= s.anim;
-    const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification);
+    // An `instead` line the narrator reveals after this move: its answer isn't given away as the move lands (no
+    // best-move arrow, no "best was"), unless the director kept them.
+    const ask = g.video?.moments.find((x) => x.ply === m.ply)?.line;
+    const spoiler = !!ask && ask.kind === "instead" && !ask.first && !ask.showBest;
+    const bad = !!a?.bestUci && a.bestUci !== m.uci && SHOW_BEST.includes(a.classification) && !spoiler;
     const showBest = settled && bad;
 
     const anim = p < 1 ? moveAnim(m.fenBefore, m, variantOf(g), p) : undefined;
@@ -2026,6 +2111,22 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   };
   const [reload, setReload] = useState(0);
   const keyRef = useRef("");
+  const livePlan = useRef<string | undefined>(undefined);
+
+  // The director works in T3 Code; each saved plan arrives over the existing game stream.
+  // Export frames use a fixed snapshot, while the preview keeps its current playback position.
+  useEffect(() => {
+    if (render) return;
+    livePlan.current = undefined;
+    const events = new EventSource(`/api/games/${id}/stream`);
+    events.onmessage = e => {
+      const next = JSON.parse(e.data) as Game;
+      const signature = JSON.stringify(next.video ?? null);
+      if (livePlan.current !== undefined && livePlan.current !== signature) setReload(n => n + 1);
+      livePlan.current = signature;
+    };
+    return () => events.close();
+  }, [id, render]);
 
   useEffect(() => {
     api<Game>(`/api/games/${id}`)
@@ -2165,6 +2266,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   useEffect(() => {
     if (render) return;
     const on = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select, button, [contenteditable]")) return;
       if (e.key === " ") {
         e.preventDefault();
         setPlaying((p) => !p);
@@ -2215,7 +2317,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
         <a href={`#/game/${id}`}>Back to game</a>
       </div>
       </div>
-      {panel && <RenderPanel gameId={id} onPlan={() => setReload((n) => n + 1)} />}
+      {panel && <RenderPanel key={id} gameId={id} onPlan={() => setReload((n) => n + 1)} context={{ time: t, format, ...(v.board && game!.moves[v.board.i] && { ply: game!.moves[v.board.i].ply }) }} />}
     </div>
   );
 }

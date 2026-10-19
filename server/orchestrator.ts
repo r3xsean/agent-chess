@@ -6,6 +6,7 @@ import { ActionError, boardsOf, claimSeats, createGame, seatClaimed, startablePa
 import { directorLaunch, launchSpec } from "./prompts";
 import { publishLaunch } from "./publish";
 import { summonAvailable } from "./summon";
+import { directorThreadLaunch } from "./directorThread";
 import { fullName, humanSide } from "../shared/naming";
 
 /*
@@ -14,7 +15,7 @@ import { fullName, humanSide } from "../shared/naming";
  * with the tasks it's to delegate already in it, and the steps live here, next to the agents' own prompts.
  */
 
-export const ORCHESTRATOR_ACTIONS = ["start-game", "tournament-next", "direct-video", "publish"] as const;
+export const ORCHESTRATOR_ACTIONS = ["start-game", "tournament-next", "direct-video", "director-thread", "publish"] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
 /** Who asked: a webhook run settles its own thread at the end; a chat run leaves the user's thread alone. */
 export type BriefSource = "webhook" | "chat";
@@ -194,7 +195,7 @@ function directVideo(g: Game, source: BriefSource) {
     taskBlock(task, `POST ${API}/api/games/${g.id}/launched with JSON {"seat":"d"} (admin)`),
     "",
     "## 2. When it finishes",
-    `GET ${API}/api/games/${g.id}/agents: \`director.done: true\` means the plan is saved, and the website starts the render by itself. If not, continue it once with \`t3_thread_send\` ("Your task isn't done: run \`brief\` and carry on until \`confirm\` prints DONE."); if it can't be continued, delegate its task again with clientRequestId \`${task.clientRequestId}-r2\` (a model's safety filter occasionally refuses a long brief; a second try usually works).`,
+    `GET ${API}/api/games/${g.id}/agents: \`director.done: true\` means the plan is saved, and the user reviews and approves it before rendering. If not, continue it once with \`t3_thread_send\` ("Your task isn't done: run \`brief\` and carry on until \`confirm\` prints DONE."); if it can't be continued, delegate its task again with clientRequestId \`${task.clientRequestId}-r2\` (a model's safety filter occasionally refuses a long brief; a second try usually works).`,
     "",
     finish(source, "the director is done"),
   ].join("\n");
@@ -241,5 +242,14 @@ export function orchestratorBrief(action: string, ids: { gameId?: string; tourna
   if (!g) throw new ActionError(`No such game: ${ids.gameId ?? "(none given)"}`);
   if (action === "start-game") return startGame(g, source);
   if (action === "direct-video") return directVideo(g, source);
+  if (action === "director-thread") {
+    const task = directorThreadLaunch(g);
+    if (!task) return nothing("This director thread is already being opened or is ready.", source);
+    return [header("The user asked to open a persistent director conversation in T3 Code."),
+      `Create an ordinary top-level thread using t3_thread_launch, workspaceStrategy {"type":"root"}, the title/model below and prompt as its message. This is the user's conversation, not a delegated worker. Do not settle that new thread.`,
+      JSON.stringify(task, null, 2),
+      "After launch, run bindCommand with the returned threadId. This connects the video tab's button to that exact conversation. Never render or approve the plan.",
+      source === "webhook" ? `Then ${SETTLE_OWN}` : "Tell the user their director thread is ready."].join("\n\n");
+  }
   return publish(g, source);
 }

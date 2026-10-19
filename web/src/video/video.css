@@ -1647,6 +1647,9 @@
 }
 
 /* The preview on a phone or tablet: the video on top, the controls wrapped under it, the render panel below. */
+.director-thread { display: flex; flex-direction: column; gap: 10px; }
+.director-thread p { margin: 0; }
+.director-thread a.rp-go { display: block; text-align: center; text-decoration: none; }
 @media (max-width: 899px) {
   body:has(.v-preview) {
     overflow: auto;

@@ -191,7 +191,19 @@ export function directorPrompt(g: Game): string {
 Run every command as:  ${cli} <command> --key ${key}
 1. Run \`brief\`. It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews, and how to write the plan.
 2. Write your plan as JSON in ${agentDir(g.id, "d")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
-3. \`confirm\` prints DONE once the plan is saved: your task is complete.`;
+3. \`confirm\` saves the plan. If it has engine lines, it then asks for their narration: run \`narrate-brief\`, write what the narrator says over each line, and submit it with \`narrate <narration.json>\`. Each submission is saved and read back to you; fix and resubmit until it's right.
+4. DONE is printed once the plan (and its narration, if it has lines) is saved: your task is complete.`;
+}
+
+/** A narrator only: rewrite what's said over a saved plan's engine lines, leaving the rest of the plan as it is. */
+export function narratorPrompt(g: Game): string {
+  const key = directorKey(g.id);
+  const cli = `node "${CLI}"`;
+  return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The replay video of game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is planned. Your job now is only the narration over its engine lines.
+
+Run every command as:  ${cli} <command> --key ${key}
+1. Run \`narrate-brief\`. It prints the lines, everything about them, and how to write the narration.
+2. Write it as JSON in ${agentDir(g.id, "d")} and submit it with \`narrate <narration.json>\`. It's saved and read back to you with how it will play; fix and resubmit until it's right. DONE is printed with each saved narration: stop once you're happy with it.`;
 }
 
 /** A director for new titles, captions and thumbnails only, on a game whose plan is saved. */

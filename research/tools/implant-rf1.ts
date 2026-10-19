@@ -1,0 +1,12 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { shownLine } from "../../shared/engineLine";
+const file = "data/games/g0x3ixb84e.json";
+const g = JSON.parse(readFileSync(file, "utf8"));
+const x = g.video.moments.find((m: any) => m.ply === 81);
+const i = g.moves.findIndex((m: any) => m.ply === 81);
+const sl = shownLine(g, i, "instead");
+if (!x || !sl) throw new Error("no moment or no line at ply 81");
+if (x.line) throw new Error("ply 81 already has a line");
+x.line = { kind: "instead", deep: true, first: true };
+writeFileSync(file, JSON.stringify(g, null, 2));
+console.log(`ply 81 ${g.moves[i].san}: line ${sl.moves.map((m) => m.san).join(" ")} (${sl.fact}); punish: ${sl.punish ? "yes" : "no"}`);

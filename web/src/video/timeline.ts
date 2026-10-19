@@ -1,8 +1,8 @@
 import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
 import { markColors, pointsAt, quoteWords, sentenceEnd, spokenWord } from "../../../shared/thoughtMarks";
-import { interviewText, lineSig, videoLines, voiceOf } from "../../../shared/videoLines";
-import { shownLine, type LineKind } from "../../../shared/engineLine";
+import { beatId, interviewText, lineSig, lineVoice, videoLines } from "../../../shared/videoLines";
+import { lineVerdicts, planLine, shownLine, type LineKind } from "../../../shared/engineLine";
 
 export type Format = "landscape" | "portrait";
 export const FRAME: Record<Format, { w: number; h: number }> = {
@@ -29,7 +29,31 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
    * what the move played allowed, its moves after the one played (`sans`) each at `moveAt`, a pause on its
    * caption at `captionAt` once `at` of them are on the board, then the board winds back over `back`.
    */
-  | { kind: "line"; i: number; line: LineKind; caption: string; sans: string[]; moveAt: number[]; captionAt: number; punish?: LinePunishScene }
+  /**
+   * `verdicts`: each move's badge (see lineVerdicts). `beats`: the narrator's lines, each shown from `at` to
+   * `end` (seconds into the scene; spoken as narration cues). `first`: an `instead` line played before its
+   * move (the move isn't on the board yet, and comes after it).
+   */
+  | {
+      kind: "line";
+      i: number;
+      line: LineKind;
+      caption: string;
+      sans: string[];
+      moveAt: number[];
+      captionAt: number;
+      /** Word-cued engine entry; quick undo of the real move ends at `readyAt`. */
+      enterAt: number;
+      readyAt: number;
+      /** Undo every variation move, then (for an after-the-move alternative) replay the real move. */
+      back: [number, number];
+      restoreEnd: number;
+      verdicts: (Classification | undefined)[];
+      /** `draws`: what each beat draws on its words, `at` seconds into the beat. */
+      beats?: { at: number; end: number; text: string; draws?: { word: number; last?: number; at: number; from?: string; to?: string; ring?: string }[] }[];
+      first?: boolean;
+      punish?: LinePunishScene;
+    }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
   /** A draw offer made with move i, and what the opponent did about it. */
@@ -42,6 +66,8 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
 export interface LinePunishScene {
   sans: string[];
   moveAt: number[];
+  /** The badge on each of its moves (the move played first). */
+  verdicts: (Classification | undefined)[];
   at: number;
   captionAt: number;
   caption: string;
@@ -50,6 +76,13 @@ export interface LinePunishScene {
 
 /** How long a line's move takes to slide in; the pause before its caption fades in. */
 export const LINE_SLIDE = 0.3;
+export const LINE_RESTORE = 0.22;
+/** Keep a full rewind brisk, including long mating lines. */
+export const lineRewindDuration = (moves: number) => Math.min(1.2, moves * 0.18);
+/** How much longer a line holds on its hard move (great: the only move; brilliant: the sacrifice), badge and all. */
+const LINE_STRONG_HOLD = 0.9;
+/** How far apart the moves a narrator's cue brings on land, the last on its word. */
+const LINE_BURST = 0.35;
 const LINE_SETTLE = 0.15;
 
 /**
@@ -104,6 +137,8 @@ export interface AsideCue {
   i: number;
   text: string;
   voice?: { url: string; rate: number };
+  /** The narrator over an engine line (shown as the line's comment, not in the move list). */
+  narrator?: boolean;
 }
 
 /**
@@ -176,7 +211,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   const clipOf = (id: string) => {
     const line = lines.get(id);
     const clip = opts.voice?.clips[id];
-    const voiceId = line && voiceOf(g, line.color);
+    const voiceId = line && lineVoice(g, line);
     return line && clip && voiceId && clip.sig === lineSig(voiceId, line) ? clip : undefined;
   };
   const voiced = (id: string, dur: number, r = rate) => {
@@ -339,11 +374,132 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     return v.dur;
   };
 
+  // An engine line after (or, `first`, before) move i: what the move played allowed first, when the director
+  // explains it, then the line itself, each move held a little longer when it's the hard one to find (great,
+  // brilliant) and quicker when it's forced; the narrator's beats come as the board reaches them, and the
+  // board waits for each.
+  const lineScene = (i: number, ask: NonNullable<NonNullable<typeof plan>["moments"][number]["line"]>, first = false) => {
+    const ln = planLine(g, i, ask);
+    if (!ln) return;
+    const per = (wide ? 0.8 : 0.65) / pace;
+    const step = (v: Classification | undefined) => (v === "forced" ? per * 0.6 : per) + (v === "great" || v === "brilliant" ? LINE_STRONG_HOLD / pace : 0);
+    const said: AsideCue[] = [];
+    let at = 0;
+    // What the move played allowed, when the director explains it: played out, a pause on the move its
+    // caption is about, the rest, then the board winds back to before the move.
+    let punish: LinePunishScene | undefined;
+    if (ask.punish && ln.punish) {
+      const verdicts = lineVerdicts(g, ln.punish.moves);
+      const sans = ln.punish.moves.slice(1).map((mv) => mv.san);
+      const k = ask.punish.at - 1;
+      const moveAt: number[] = [];
+      let captionAt = 0;
+      at = 0.5 / pace;
+      sans.forEach((_, j) => {
+        moveAt.push(at);
+        at += step(verdicts[j + 1]);
+        if (j + 1 === k) {
+          captionAt = moveAt[j] + LINE_SLIDE + LINE_SETTLE;
+          at = captionAt + Math.max(1.8, 0.6 + read(ask.punish!.caption));
+        }
+      });
+      if (k < sans.length) at += 0.6;
+      const back: [number, number] = [at, at + lineRewindDuration(sans.length + 1)];
+      punish = { sans, moveAt, verdicts, at: k, captionAt, caption: ask.punish.caption, back };
+      at = back[1] + 0.25;
+    } else at = 0.8 / pace;
+    const verdicts = lineVerdicts(g, ln.moves);
+    const beats = (ask.beats ?? []).map((b, n) => ({ ...b, n })).sort((a, b) => a.at - b.at || a.n - b.n);
+    const shown: NonNullable<Extract<Scene, { kind: "line" }>["beats"]> = [];
+    const ply = g.moves[i].ply;
+    const n = ln.moves.length;
+    const moveAt: number[] = [];
+    let enterAt = 0;
+    let readyAt = !punish && ln.kind === "instead" && !first ? LINE_RESTORE : 0;
+    // The line's moves up to k, one after another at their pace, from now.
+    const playTo = (k: number) => {
+      while (moveAt.length < Math.min(k, n)) {
+        moveAt.push(at);
+        at += step(verdicts[moveAt.length - 1]);
+      }
+      if (moveAt.length) at = Math.max(at, moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE);
+    };
+    for (const b of beats) {
+      playTo(b.at);
+      const id = beatId(ply, b.n);
+      const v = voiced(id, 0.3 + read(b.text));
+      const from = at;
+      // When word k of the beat is said: by the recording's word timings, else spread over it, else at reading speed.
+      const clip = clipOf(id);
+      const total = Math.max(1, spokenWord(b.text, Infinity));
+      const wordAt = (k: number) => {
+        if (!clip) return from + 0.3 + k / (WORDS_PER_SECOND * pace);
+        const w = spokenWord(b.text, k);
+        return from + VOICE_AT + (clip.words?.length ? clip.words[Math.min(w, clip.words.length - 1)] : (w / total) * clip.dur) / rate;
+      };
+      if (b.enter !== undefined && b.n === 0 && b.at === 0 && !punish) {
+        enterAt = wordAt(b.enter);
+        readyAt = enterAt + (ln.kind === "instead" && !first ? LINE_RESTORE : 0);
+      }
+      // The board moves on the words: a cued move lands as its word is said, the ones before it just ahead, quickly.
+      for (const c of b.cues ?? []) {
+        const k = Math.min(c.moves, n);
+        const count = k - moveAt.length;
+        if (count <= 0) continue;
+        const gap = LINE_BURST / pace;
+        const land = wordAt(c.word) - LINE_SLIDE;
+        const prev = moveAt.length ? moveAt[moveAt.length - 1] + gap : Math.max(from, readyAt + LINE_SETTLE);
+        const first = Math.max(prev, land - (count - 1) * gap);
+        for (let j = 0; j < count; j++) moveAt.push(first + j * gap);
+      }
+      const end = from + v.dur;
+      said.push({ start: from, dur: v.dur, i, text: b.text, narrator: true, ...(v.voice && { voice: v.voice }) });
+      shown.push({ at: from, end, text: b.text, draws: (b.draw ?? []).map((d) => ({ ...d, at: wordAt(d.word) - from })) });
+      at = Math.max(end, readyAt + LINE_SETTLE, moveAt.length ? moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE : end);
+    }
+    playTo(n);
+    const settled = moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE;
+    const captionAt = Math.max(settled, at);
+    // With the narrator telling it, the line ends on the last thing said unless the director also wrote a caption.
+    const caption = ask.caption ?? (beats.length ? "" : ln.caption);
+    const backAt = captionAt + (caption ? Math.max(2.6, 0.8 + read(caption)) : 0.2);
+    const back: [number, number] = [backAt, backAt + lineRewindDuration(n)];
+    const restoreEnd = back[1] + (ln.kind === "instead" && !first ? LINE_RESTORE : 0);
+    const start = t;
+    push({
+      kind: "line",
+      i,
+      line: ln.kind,
+      caption,
+      sans: ln.moves.map((mv) => mv.san),
+      moveAt,
+      captionAt,
+      enterAt,
+      readyAt,
+      back,
+      restoreEnd,
+      verdicts,
+      ...(shown.length && { beats: shown }),
+      ...(first && { first: true }),
+      ...(punish && { punish }),
+      dur: restoreEnd + 0.15,
+    });
+    for (const c of said) asides.push({ ...c, start: start + c.start });
+  };
+
   g.moves.forEach((m, i) => {
     const last = i === g.moves.length - 1;
     const picked = moment(m.ply);
     const key = keys[i];
     const aside = !key && asideOf.has(m.ply);
+    const ask = picked?.line;
+    // An `instead` line the director plays first: the position they faced, what was there, and only then
+    // their thinking and the move they really played.
+    const lineFirst = !!ask?.first && ask.kind === "instead" && !ask.punish;
+    if (ask && lineFirst) {
+      waitTalk();
+      lineScene(i, ask, true);
+    }
 
     // In the order it happened: any illegal attempts, then (on key moments) the thinking that went with the
     // move that was finally played, which often owns up to the attempt, then the move. An aside on the move
@@ -370,39 +526,9 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const clock = !!next && !keys[i + 1] && !next.illegalAttempts.length;
     push({ kind: "move", i, anim, key, dur: anim + hold(i) + (last ? 1 : 0), ...(carry && { carry }), ...(clock && { clock }) });
 
-    // The engine line the director asked for: what didn't happen, played out, then why it's better.
-    const ask = picked?.line;
-    const ln = ask && shownLine(g, i, ask.kind);
-    if (ask && ln) {
-      const caption = ask.caption ?? ln.caption;
-      const per = (wide ? 0.8 : 0.65) / pace;
-      let at = 0;
-      // What the move played allowed, when the director explains it: played out, a pause on the move its
-      // caption is about, the rest, then the board winds back to before the move.
-      let punish: LinePunishScene | undefined;
-      if (ask.punish && ln.punish) {
-        const sans = ln.punish.moves.slice(1).map((mv) => mv.san);
-        const k = ask.punish.at - 1;
-        const moveAt: number[] = [];
-        let captionAt = 0;
-        at = 0.5 / pace;
-        sans.forEach((_, j) => {
-          moveAt.push(at);
-          at += per;
-          if (j + 1 === k) {
-            captionAt = moveAt[j] + LINE_SLIDE + LINE_SETTLE;
-            at = captionAt + Math.max(1.8, 0.6 + read(ask.punish!.caption));
-          }
-        });
-        if (k < sans.length) at += 0.6;
-        const back: [number, number] = [at, at + 0.18 * (sans.length + 1) + 0.15];
-        punish = { sans, moveAt, at: k, captionAt, caption: ask.punish.caption, back };
-        at = back[1] + 0.25;
-      } else at = 0.8 / pace;
-      const moveAt = ln.moves.map((_, j) => at + j * per);
-      const captionAt = moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE;
-      push({ kind: "line", i, line: ln.kind, caption, sans: ln.moves.map((mv) => mv.san), moveAt, captionAt, ...(punish && { punish }), dur: captionAt + Math.max(2.6, 0.8 + read(caption)) });
-    }
+    // The engine line the director asked for: what didn't happen, played out, then why it's better (one
+    // played before the move came first, above).
+    if (ask && !lineFirst) lineScene(i, ask);
 
     // Draw offers get their own beat, with the answer: declined if the game went on.
     if (m.offeredDraw) {
@@ -490,12 +616,26 @@ export function sfxCues(tl: Timeline, g: Game): SfxCue[] {
     else if (s.kind === "line") {
       // An engine line: a scene change, then quieter board sounds for its moves (each as it lands), with
       // the punishment first and a softer change as the board winds back from it.
-      at(s.start, "transition", 0.5);
+      at(s.start + s.enterAt, "transition", 0.5);
+      at(s.start + s.back[0], "transition", 0.3);
+      if (s.restoreEnd > s.back[1]) at(s.start + s.restoreEnd, "move", 0.4);
+      // The line's hard moves get their verdict's sting, as a game move would.
+      const sting = (land: number, v: Classification | undefined) => {
+        if (v === "great" || v === "brilliant") at(land + 0.1, STINGS[v]![0], STINGS[v]![1] * 0.8);
+      };
       if (s.punish) {
-        s.punish.sans.forEach((san, k) => board(s.start + s.punish!.moveAt[k] + LINE_SLIDE - 0.02, san, 0.5));
+        s.punish.sans.forEach((san, k) => {
+          const land = s.start + s.punish!.moveAt[k] + LINE_SLIDE - 0.02;
+          board(land, san, 0.5);
+          sting(land, s.punish!.verdicts[k + 1]);
+        });
         at(s.start + s.punish.back[0], "transition", 0.35);
       }
-      s.sans.forEach((san, k) => board(s.start + s.moveAt[k] + LINE_SLIDE - 0.02, san, 0.5));
+      s.sans.forEach((san, k) => {
+        const land = s.start + s.moveAt[k] + LINE_SLIDE - 0.02;
+        board(land, san, 0.5);
+        sting(land, s.verdicts[k]);
+      });
     } else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
     else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
     else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);

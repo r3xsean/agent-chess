@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pick the narrator's voice</title>
+<style>
+  :root { --bg:#111317; --card:#1a1d23; --line:#2a2f38; --text:#e7e9ee; --muted:#9aa3b2; --accent:#e0b456; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 20px 60px; }
+  h1 { font-size: 30px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .note, .script { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
+  .note { color: var(--muted); font-size: 14px; }
+  .note b { color: var(--text); }
+  .script h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .script p { margin: 0; font-size: 17px; }
+  .tag { color: var(--accent); font-style: italic; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; margin-top: 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .card h3 { margin: 0; font-size: 20px; }
+  .card .full { color: var(--muted); font-size: 13px; margin-top: -6px; }
+  .labels { display: flex; flex-wrap: wrap; gap: 6px; }
+  .labels span { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: #252a33; border: 1px solid var(--line); color: #c9cfda; }
+  .desc { font-size: 14px; color: #c5cad4; margin: 0; }
+  .why { font-size: 13px; color: var(--muted); margin: 0; }
+  .id { display: flex; align-items: center; gap: 8px; font: 13px ui-monospace, Consolas, monospace; color: var(--muted); }
+  .id code { background: #0d0f12; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line); }
+  button { background: #252a33; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  audio { width: 100%; margin-top: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pick the narrator's voice</h1>
+  <p class="sub">Seven ElevenLabs voices, all reading the same line with the <code>eleven_v4</code> model, so the [bracketed] tags shape the delivery.</p>
+
+  <div class="note">
+    <b>Not included:</b> the voices the players already use: George (JBFqnCBsd6RMkjVDRZzb), Lily (pFZP5JQG7iQjIQuC4Bku), Eric (cjVigY5qzO86Huf0OWal), Laura (FGY2WhTYpPnrIDTdsKH5), Harry (SOYHLrjzK2X1ezoPC6cr), Callum (N2lVS1w4EtoT3dr4eOWO), Charlie (IKne3meq5aSn9XLyUdCD).
+  </div>
+
+  <div class="script">
+    <h2>Sample script</h2>
+    <p><span class="tag">[wry]</span> Fable's calling this calm. Plus zero point four. But look at the Black king's house: the knight that stood guard on f6 has just wandered off, and the front door on h7 is wide open. <span class="tag">[building]</span> So the bishop walks straight in. It's not there to survive. It's there to drag the king out of bed. <span class="tag">[excited]</span> Cornered in the hallway. Checkmate.</p>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+<script>
+const voices = [
+  { name: "Chris Brift", full: "Chris Brift", id: "UEKYgullGqaF0keqT8Bu", file: "chris-brift.mp3",
+    labels: ["British", "male", "middle aged", "classy", "informative / educational", "professional voice"],
+    desc: "English male mature, educated, well-spoken authoritative, trustworthy smooth, soft voice with a hint of humour.",
+    why: "The dry-wit pick." },
+  { name: "Bill", full: "Bill - Wise, Mature, Balanced", id: "pqHfZKP75CvOlQylNhV4", file: "bill.mp3",
+    labels: ["American", "male", "old", "crisp", "advertisement", "premade"],
+    desc: "Friendly and comforting voice ready to narrate your stories.",
+    why: "An older storyteller, like a grandfather telling chess stories by the fire." },
+  { name: "Brian", full: "Brian - Deep, Resonant and Comforting", id: "nPczCjzI2devNBz1zQrb", file: "brian.mp3",
+    labels: ["American", "male", "middle aged", "classy", "social media", "premade"],
+    desc: "Middle-aged man with a resonant and comforting tone. Great for narrations and advertisements.",
+    why: "Deep documentary weight." },
+  { name: "Alice", full: "Alice - Clear, Engaging Educator", id: "Xb7hH8MSUJpSbSDYk0k2", file: "alice.mp3",
+    labels: ["British", "female", "middle aged", "professional", "informative / educational", "premade"],
+    desc: "Clear and engaging, friendly woman with a British accent suitable for e-learning.",
+    why: "The patient teacher who has seen this blunder before." },
+  { name: "Shelby", full: "Shelby - Conversational", id: "rfkTsdZrVWEVhDycUYn9", file: "shelby.mp3",
+    labels: ["British", "female", "young", "pleasant", "conversational", "professional voice"],
+    desc: "A pleasantly clear British female voice. Perfect for social media, audiobooks, training videos etc.",
+    why: "A lighter, brighter British read." },
+  { name: "Sarah", full: "Sarah - Mature, Reassuring, Confident", id: "EXAVITQu4vr4xnSDxMaL", file: "sarah.mp3",
+    labels: ["American", "female", "young", "professional", "entertainment / TV", "premade"],
+    desc: "Young adult woman with a confident and warm, mature quality and a reassuring, professional tone.",
+    why: "Warm presenter energy." },
+  { name: "River", full: "River - Relaxed, Neutral, Informative", id: "SAz9YHcvj6GT2YYXdXww", file: "river.mp3",
+    labels: ["American", "neutral", "middle aged", "calm", "conversational", "premade"],
+    desc: "A relaxed, neutral voice ready for narrations or conversational projects.",
+    why: "Calm, understated wit." },
+];
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+document.getElementById("grid").innerHTML = voices.map((v) => `
+  <article class="card">
+    <h3>${esc(v.name)}</h3>
+    <div class="full">${esc(v.full)}</div>
+    <div class="labels">${v.labels.map((l) => `<span>${esc(l)}</span>`).join("")}</div>
+    <p class="desc">${esc(v.desc)}</p>
+    <p class="why">${esc(v.why)}</p>
+    <div class="id"><code>${v.id}</code><button data-id="${v.id}">Copy</button></div>
+    <audio controls preload="none" src="${v.file}"></audio>
+  </article>`).join("");
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-id]");
+  if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.id); }
+  catch { const t = document.createElement("textarea"); t.value = b.dataset.id; document.body.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+  b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
+});
+// Pause the others when one starts playing.
+document.addEventListener("play", (e) => {
+  document.querySelectorAll("audio").forEach((a) => { if (a !== e.target) a.pause(); });
+}, true);
+</script>
+</body>
+</html>

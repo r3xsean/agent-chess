@@ -1,5 +1,5 @@
 import type { Color, Game } from "./types";
-import { VOICES, voiceFamily } from "./voices";
+import { NARRATOR, VOICES, voiceFamily } from "./voices";
 import { speakable } from "./speech";
 
 /*
@@ -9,11 +9,14 @@ import { speakable } from "./speech";
  */
 
 export interface VideoLine {
-  /** "moment:<ply>", "aside:<ply>", "hook" or "interview:<pre|post>:<w|b>". */
+  /** "moment:<ply>", "aside:<ply>", "hook", "interview:<pre|post>:<w|b>" or "beat:<ply>:<n>" (the narrator's). */
   id: string;
+  /** Whose line it is (the narrator's beats carry the side of the move their line is about). */
   color: Color;
   text: string;
   delivery?: string;
+  /** Said by the narrator over an engine line, not by a player. */
+  narrator?: boolean;
 }
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
@@ -60,6 +63,7 @@ export function videoLines(g: Game): VideoLine[] {
   for (const m of plan.moments) {
     const c = colorOf(m.ply);
     if (c && m.thought) out.push({ id: `moment:${m.ply}`, color: c, text: m.thought, delivery: m.delivery });
+    if (c) (m.line?.beats ?? []).forEach((b, n) => out.push({ id: beatId(m.ply, n), color: c, text: b.text, delivery: b.delivery, narrator: true }));
   }
   for (const a of plan.asides ?? []) {
     const c = colorOf(a.ply);
@@ -77,6 +81,9 @@ export function videoLines(g: Game): VideoLine[] {
   return out;
 }
 
+/** The id of the narrator's nth beat over the line of the moment at ply. */
+export const beatId = (ply: number, n: number) => `beat:${ply}:${n}`;
+
 /** The voice a side speaks in, or null (a human, or a model without one). */
 export function voiceOf(g: Game, c: Color): string | null {
   const ref = c === "w" ? g.white : g.black;
@@ -84,6 +91,9 @@ export function voiceOf(g: Game, c: Color): string | null {
   const fam = voiceFamily(ref.model);
   return fam ? VOICES[fam].voiceId : null;
 }
+
+/** The voice a line is said in: the narrator's for a beat, else its side's (null: not voiced). */
+export const lineVoice = (g: Game, l: VideoLine): string | null => (l.narrator ? NARRATOR.voiceId : voiceOf(g, l.color));
 
 /**
  * What a recording was made from: voice, delivery and words. A clip is used only while this still

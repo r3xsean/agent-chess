@@ -1,0 +1,163 @@
+VIDEO NARRATOR — write what the narrator says over this video's engine lines.
+
+The replay video is planned. Over its engine lines (the "what if" lines and "what this allowed" lines), and only there, it has a narrator: a third voice apart from the two players, an older storyteller who has seen the whole game. Everywhere else the players speak for themselves, in their own words. Here, you speak. This is the part of the video where the viewer finds out what was really on the board, so it has to be the part they remember.
+
+## The voice
+Think of the best chess commentator you've heard: someone who makes a position exciting and makes it make sense. They talk to the viewer ("you might be wondering…"), they ask the question the position raises and then answer it with the line, they sound genuinely amazed by a move that's hard to find and genuinely pained by the one the player missed, and they build to one payoff that they say with real energy. They explain the idea in plain chess words (what it takes, what it hits, what it stops, why the reply is forced), never by reading moves out one by one. They say moves the way people do ("rook takes e2", "knight to d5"). They mix short punchy sentences with one longer one that explains. A word or two in capitals tells the voice where to hit hard. And they hand back to the game with the contrast, because what really happened is the punchline.
+Bring the players into it: what they believed (their self-eval), how long they thought, what they said, who they are. Be specific to this game, with a point of view, never a template.
+A few lines to show the energy (each from a different game; write your own, never reuse these):
+- "Everything loses here except one quiet little move. King to h1. It looks like nothing, and it saves the whole game, because now the check on g2 simply doesn't exist."
+- "The engine's first choice here is a queen move nobody would ever find in a game. Back to b8, into the corner, and somehow it holds absolutely everything."
+- "That was the save, right there. Of course, that's not what happened."
+- "Wait. The bishop just throws itself onto h7? It does, and that's the whole point: the king has to take, and now the knight jumps in with CHECK. Two moves ago this looked calm. It is NOT calm."
+
+## Giving the hard move room
+A great or brilliant move is the moment the line exists for. It lands with its badge and a sting, and the viewer needs a beat to see it. Shape your words around it: name it, let it land, and say something about it (or stop for breath) before the next move comes in. Never let the next move land a word or two after it. The readback tells you how long each move has the board to itself, and flags a hard move that's gone too soon.
+
+## The chess
+The chess is the engine's. Say only what the board and the facts below show: no fork that isn't one, no "only move" unless it's badged great, no "winning" when the line ends level. The facts listed with each move (check, what it takes, what it hits, a fork, the defender it removes) are worked out from the board, so lean on them.
+
+Matchup: White Fable 5.1 (high effort, rating 1560) vs Black GPT-6.1 Sol (high effort, rating 1704). Result: 0-1 (White resigned).
+
+## The players
+Fable 5.1 (White): plays as itself, with no personality.
+  Its record over 19 rated games (this one included): 10W 1D 8L, rated 1553, recent form DWLWWWWLLW (newest last); plays like 1525 Elo at 76% accuracy; 5.1 blunders and 2.4 illegal tries per 100 moves; its own eval is off from the engine's by 8 points of win% on average (too optimistic on 4% of moves, too pessimistic on 1%); resigned 6 times, 0 too early.
+GPT-6.1 Sol (Black): plays as itself, with no personality.
+  Its record over 23 rated games (this one included): 15W 2D 6L, rated 1744, recent form WDWWWWDWWW (newest last); plays like 1900 Elo at 81% accuracy; 4.1 blunders and 0.5 illegal tries per 100 moves; its own eval is off from the engine's by 11 points of win% on average (too optimistic on 8% of moves, too pessimistic on 3%); resigned 6 times, 0 too early.
+
+## The video's story
+ply 38 — 19… Nxh2 by GPT-6.1 Sol (blunder): Sol sacrifices the knight on h2 instead of Bxh2+, the first big swing (50 to 71) They say: "The bishop on f2 prevents the immediate ...Qh4 idea because it could capture the queen. I take h2 instead, attacking the f1 rook and keeping ...Nf3+ available."
+ply 39 — 20. Rfe1 by Fable 5.1 (good): Fable tries to take the knight with the king, but the move is illegal: it calculated through Black's bishop They say: "it's illegal, because his bishop on d6 defends h2 along the d6-e5-f4-g3-h2 diagonal. So the knight is not a gift, it's an attacker of my f1 rook, and I have to move the rook."
+ply 52 — 26… Rae8 by GPT-6.1 Sol (blunder): Sol doubles rooks and leaves the f5 pawn, the queen and the e3 rook open to a knight fork (50 to 94) They say: "I double on the e-file. The knight on e2 is holding the position together, so increasing pressure there gives my attack another target."
+ply 53 — 27. Kf1 by Fable 5.1 (blunder): Fable misses Nxf5, a free pawn that forks queen and rook, and plays Kf1, which walks into a discovered attack (94 to 24) They say: "Kf1 keeps everything simple: the king itself recaptures on e2, there is no back-rank mate, and his queen's diagonal to f2 and e1 is blocked by my own g3 knight. Checked square by square this time."
+ply 54 — 27… Nh2+ by GPT-6.1 Sol (excellent): The punishment: the knight check unmasks Sol's queen on White's undefended queen They say: "This check opens the fourth rank between the queens. White must move the king before resolving that tension."
+ply 55 — 28. Kf2 by Fable 5.1 (mistake): Fable's reaction: it sees the trick, but Kf2 walks into Rxe2+ and the loss of the queen (18 to 2) They say: "Good move by Sol. The knight check unmasks his queen's attack on mine along the fourth rank, and because I'm in check I can't take his queen first, even though it's undefended."
+ply 56 — 28… Qxf4+ by GPT-6.1 Sol (miss): Sol misses Rxe2+, which removes the queen's guard and wins the queen outright, and just trades queens (2 to 50) They say: "The queen exchange now comes with check."
+ply 60 — 30… Rxg3 by GPT-6.1 Sol (blunder): Sol takes the g3 knight with the rook that was guarding e8, believing it's equal, and hangs a whole rook (50 to 95) They say: "I recover the knight on g3. The forcing sequence has left equal major and minor pieces, with two extra pawns for me."
+ply 61 — 31. Rxe8+ by Fable 5.1 (best): Fable spots that the e8 rook lost its only defender and counts the e-file square by square They say: "But the rook that took it was also the only defender of his rook on e8, and the e-file between my e1 rook and e8 is empty: e2, e3, e4, e5, e6, e7, all checked one by one."
+ply 62 — 31… Kg7 by GPT-6.1 Sol (forced): Sol's reaction: it called it a rook exchange, and it was a rook lost They say: "Rxe8+ exposes a mistake in my conversion calculation: this is a rook lost, not a rook exchange, because I have no recapture on e8."
+ply 67 — 34. Nf4 by Fable 5.1 (inaccuracy): Sol's rook on h3 just hangs to gxh3, and Fable attacks it with the knight instead of taking it They say: "The rook on h3 is the knight's only defender (h3-g3-f3-e3 along the third rank), so I attack the rook."
+ply 80 — 40… h3 by GPT-6.1 Sol (best): The setup: Sol pushes the h-pawn and names ...h2+ as the threat, a move before Fable allows it They say: "I push the passed pawn while the rook supports it. White can exchange it with gxh3, but leaving it alive risks ...h2+ and promotion threats."
+ply 81 — 41. Nf4 by Fable 5.1 (blunder): A full rook up, Fable moves the knight off e2 to hit the pawn, and the h-pawn promotes with check (95 to 0) They say: "Now ...h3 wants to crack g2. Nf4 attacks the h3 pawn directly and keeps everything tidy"
+ply 82 — 41… h2+ by GPT-6.1 Sol (best): The punishment: Sol sees the whole line, ...h2+, ...h1=Q+ and Qxb1 along the first rank, or Nf2 mate They say: "White’s knight has left e2, and the pawn can now force a decisive promotion. Kf1 allows ...h1=Q+; after Ke2 the queen takes b1 along the first rank. Kh1 instead allows ...Nf2 mate."
+ply 83 — 42. Kf1 by Fable 5.1 (best): Fable's reaction: it sees the mistake, but not yet that the new queen will take the b1 rook They say: "That was a serious mistake on my part: 41.Nf4 allowed ...h2+, and now Kh1 walks into ...Nf2 mate (g1 is covered by the pawn, h2 by his rook)"
+ply 87 — 44. Nd3 by Fable 5.1 (excellent): Fable finally sees what the king step to e2 gave away: the first rank to b1 They say: "That is the end of the story, really: when my king stepped from f1 to e2 it opened the first rank and his new queen simply took my b1 rook. I saw the h1 queen's diagonal to g2 and not its rank to b1."
+
+## The line at ply 53: what Fable 5.1 could have played instead of 27. Kf1
+The director's note: Fable misses Nxf5, a free pawn that forks queen and rook, and plays Kf1, which walks into a discovered attack (94 to 24)
+27. Kf1 by Fable 5.1: blunder; eval after it -3.1; Fable 5.1's own eval +1.5; thought for 1 min 41 s.
+What Fable 5.1 says on it (spoken in their voice, right after your line): "Kf1 keeps everything simple: the king itself recaptures on e2, there is no back-rank mate, and his queen's diagonal to f2 and e1 is blocked by my own g3 knight. Checked square by square this time."
+The position where the line starts (Fable 5.1 to move, eval +7.5):
+    a b c d e f g h
+  +-----------------+
+8 | . . . . r . k . | 8
+7 | p p . . . p . p | 7
+6 | . . p . . . . . | 6
+5 | . . . . . p . . | 5
+4 | . P . P . Q n q | 4
+3 | . . . . r . N . | 3
+2 | P . . . N . P . | 2
+1 | . R . . R . K . | 1
+  +-----------------+
+    a b c d e f g h
+The line (4 moves; what it shows: Fable 5.1 wins a rook and a pawn for a knight (+3)):
+    1. Nxf5 (takes the pawn on f5, and nothing can take back; hits the queen on h4 and the rook on e3: a fork), eval +7.2
+    2. Qh5, eval +7.3
+    3. Nxe3 (takes the rook on e3), eval +7.4
+    4. Rxe3 (takes the knight on e3), eval +7.6
+What happened next in the game: 27… Nh2+ (excellent), 28. Kf2 (mistake), 28… Qxf4+ (miss).
+It can play before Kf1 ("first": true): the board holds on the position Fable 5.1 faced, you show what was there, then their words and the move they really played land. It's set to now.
+What the narrator says now (rewrite it freely):
+    "Sol has just doubled rooks on the e-file, and Fable thinks for a minute and forty seconds. But look at the pawn on f5. Nothing guards it."
+    "Nxf5 takes it for free, and the knight lands hitting the queen on h4 AND the rook on e3. A fork."
+    "The queen runs, the knight takes the rook, and after the recapture White is a rook up for a pawn."
+    "Fable checked every square on the board. Except that one."
+
+## The line at ply 56: what GPT-6.1 Sol could have played instead of 28… Qxf4+
+The director's note: Sol misses Rxe2+, which removes the queen's guard and wins the queen outright, and just trades queens (2 to 50)
+28… Qxf4+ by GPT-6.1 Sol: miss; eval after it 0.0; GPT-6.1 Sol's own eval -2.0; thought for 27 s.
+What GPT-6.1 Sol says on it (spoken in their voice, right after your line): "The queen exchange now comes with check."
+The position where the line starts (GPT-6.1 Sol to move, eval -11):
+    a b c d e f g h
+  +-----------------+
+8 | . . . . r . k . | 8
+7 | p p . . . p . p | 7
+6 | . . p . . . . . | 6
+5 | . . . . . p . . | 5
+4 | . P . P . Q . q | 4
+3 | . . . . r . N . | 3
+2 | P . . . N K P n | 2
+1 | . R . . R . . . | 1
+  +-----------------+
+    a b c d e f g h
+The line (15 moves; what it shows: GPT-6.1 Sol wins the queen and a pawn (+10)):
+    1. Rxe2+ (brilliant; check; takes the knight on e2; hits the pawn on a2: a fork; removes the defender of the queen on f4), eval -10
+    2. Rxe2 (takes the rook on e2; hits the rook on e8; removes the defender of the rook on e8), eval -11
+    3. Qxf4+ (check; takes the queen on f4, and nothing can take back; hits the pawn on d4: a fork; removes the defender of the pawn on d4), eval -11
+    4. Kg1 (hits the knight on h2), eval -12
+    5. Rxe2 (takes the rook on e2; hits the pawn on a2; removes the defender of the pawn on a2), eval -12
+    6. Nxe2 (takes the rook on e2, and nothing can take back; hits the queen on f4), eval -12
+    7. Qe4 (hits the rook on b1 and the knight on e2: a fork), eval -12
+    8. Ng3 (hits the queen on e4), eval -12
+    9. Qxb1+ (check; takes the rook on b1, and nothing can take back; hits the pawn on a2 and the pawn on b4: a fork; removes the defender of the pawn on b4), eval -12
+    10. Kxh2 (takes the knight on h2, and nothing can take back), eval -12
+    11. Qc1, eval -12
+    12. Ne2 (hits the queen on c1), eval -13
+    13. Qe3 (hits the knight on e2), eval -13
+    14. Ng1, eval -13
+    15. Qxd4 (takes the pawn on d4, and nothing can take back; hits the pawn on b4), eval -14
+What happened next in the game: 29. Nxf4 (best), 29… Ng4+ (excellent), 30. Kf1 (best).
+It can play before Qxf4+ ("first": true): the board holds on the position GPT-6.1 Sol faced, you show what was there, then their words and the move they really played land. It's set to now.
+What the narrator says now (rewrite it freely):
+    "Fable's king has stepped to f2. Now the only thing guarding White's queen is the knight on e2."
+    "So take the knight first, with check. Rxe2+. The rook takes back, and NOW the queen falls, with nothing left to recapture."
+    "Sol saw the queen trade. It just didn't see the move order."
+
+## Your answer
+Write a JSON file in your working folder and submit it with `narrate <file.json>`. Shape:
+```json
+{
+  "lines": [
+    {
+      "ply": 53,
+      "first": true,
+      "end": 4,
+      "beats": [
+        {
+          "at": "start",
+          "text": "…before the line plays…"
+        },
+        {
+          "at": "start",
+          "text": "…the move named here lands as it's said…",
+          "delivery": "building",
+          "cues": [
+            {
+              "words": "…the words naming it…",
+              "moves": 1
+            }
+          ],
+          "draw": [
+            {
+              "words": "the queen on h4",
+              "reach": "f5>h4"
+            }
+          ]
+        },
+        {
+          "at": 1,
+          "text": "…room for it, then on…"
+        }
+      ]
+    }
+  ]
+}
+```
+- lines: one entry per line you narrate (a line you leave out keeps what it has). `ply` is the moment's ply.
+- beats: what the narrator says, in order, up to 8 per line, each at most 60 words. `at`: where the board is when it starts ("start", a count of the line's moves on the board, or one of its moves in SAN, said once it has landed; a move that comes twice is given as a count). `delivery` (optional): how it's said, in at most 6 words ("building", "amazed", "wincing").
+- cues (optional): the board follows your words. Each says: by these words of the text, this many of the line's moves (or up to this move) are on the board. The move lands as its words are said, and moves before it come in just ahead, quickly, so forced recaptures can fly by under one phrase. Without cues, a beat is said with the board standing still. The board only goes forward.
+- draw (optional): a piece's reach ("from>to", an attack or a defence) or a circled `square`, on the board as it is when its words are said. `words` is the whole phrase that names what it points at ("the queen on h4", not just "queen"): all of it lights up in that piece's colour, and the drawing appears as its first word is said.
+- end (optional): how many of the line's moves are shown (a count, or the move it ends on). Cut it once the point is made; without it the whole line plays. A line cut down to a plain capture the move's best-move arrow already shows is refused.
+- first (optional, an `instead` line without a punishment): play the line before the move. Leave room for the player's own words, which come right after it.
+- Everything spoken in the video, your beats included, must stay under 11000 characters; the server tells you if it doesn't.
+Each submission is checked, saved and read back to you with how it will play. Fix anything that's off and submit again; when you're happy with it, you're done.

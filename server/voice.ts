@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Game } from "../shared/types";
 import { speakable } from "../shared/speech";
 import { TTS_MODEL, type VoiceManifest } from "../shared/voices";
-import { lineSig, videoLines, voiceOf } from "../shared/videoLines";
+import { lineSig, lineVoice, videoLines } from "../shared/videoLines";
 import { DATA } from "./paths";
 
 /*
@@ -22,9 +22,10 @@ const API = "https://api.elevenlabs.io/v1";
  * A typical plan's moments, hook and interviews come to about 2,500, and its asides (the opening's
  * conversation, and what keeps the quiet stretches talking) to as much again. The director's plan is checked
  * against this when it's submitted, so a plan that passed always gets its voices; the recorder's own cap is a
- * backstop with room for interview lines that arrive after the plan.
+ * backstop with room for interview lines that arrive after the plan. The narrator's beats over the engine lines
+ * come on top, about 2,000 more in a well-narrated plan.
  */
-export const VOICE_BUDGET = 8000;
+export const VOICE_BUDGET = 11000;
 const MAX_CHARS_PER_GAME = VOICE_BUDGET + 2000;
 
 let savedKey: string | undefined;
@@ -180,11 +181,11 @@ export interface VoiceResult {
  * left, over the cap) or one fails, the result says how many lines are missing and why; whatever was
  * recorded is kept, so a retry pays only for the rest.
  */
-export async function voiceGame(g: Game, onLine?: (done: number, total: number) => void): Promise<VoiceResult> {
+export async function voiceGame(g: Game, onLine?: (done: number, total: number) => void, only?: (id: string) => boolean): Promise<VoiceResult> {
   if (!safeId(g.id)) throw new Error("Bad game id.");
   const dir = path.join(VOICE_DIR, g.id);
   const jobs = videoLines(g).flatMap((l) => {
-    const voiceId = voiceOf(g, l.color);
+    const voiceId = lineVoice(g, l);
     if (!voiceId) return [];
     const spoken = spokenText(l.text, l.delivery);
     const hash = createHash("sha1").update([TTS_MODEL, voiceId, spoken].join("\n")).digest("hex").slice(0, 16);
@@ -220,7 +221,9 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
     publish();
     result.cached = jobs.filter((j) => clips.get(j.hash)!.dur !== undefined).length;
 
-    const missing = [...clips.values()].filter((c) => c.dur === undefined);
+    // `only`: record just these lines (a listening test); the rest are published if already recorded, and stay silent if not.
+    const wanted = only ? new Set(jobs.filter((j) => only(j.id)).map((j) => j.hash)) : null;
+    const missing = [...clips.entries()].filter(([h, c]) => c.dur === undefined && (!wanted || wanted.has(h))).map(([, c]) => c);
     const needed = missing.reduce((n, c) => n + c.spoken.length, 0);
     let allowance = 0;
     if (needed) {

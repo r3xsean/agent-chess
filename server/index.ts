@@ -41,8 +41,11 @@ import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
 import { launchGame, startTournament, watch } from "./launcher";
-import { directorBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
-import { directorDone, dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { applyNarration, directorBrief, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
+import { deepenLines, linesProgress, linesReady } from "./lineDepth";
+import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { directorThreadBusy, directorThreadCommand, directorThreadState, isDirectorThreadKey, openDirectorThread } from "./directorThread";
+import { videoApproved, videoRevision } from "./videoApproval";
 import { rivalry } from "./rivalry";
 import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
 import { VOICE_DIR, voiceManifest } from "./voice";
@@ -113,7 +116,7 @@ if (PUBLIC_MODE) {
 // Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
-const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/packaging-launch$/,/\/publish-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/packaging-launch$/,/\/publish-launch$/, /\/render$/, /\/voice$/, /\/director-thread$/, /^\/api\/music/];
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
@@ -982,6 +985,8 @@ const SEAT_COMMANDS: Record<SeatRole, string> = {
   d: `  brief                print the video director brief
   direct <plan.json>   submit your video plan; it's read back to you
   confirm              save the plan once its readback is right
+  narrate-brief        once the plan is saved: the brief for the narration over its engine lines
+  narrate <file>       submit the narration; it's saved and read back to you
   packaging-brief      once the plan is saved: the brief for new titles, captions and thumbnails
   packaging <file>     submit them; they're saved for the user to pick from`,
 };
@@ -1005,6 +1010,8 @@ app.post(
   localOnly,
   handle(async (req, res) => {
     const cmd = String(req.params.cmd);
+    const key = String(req.body?.key ?? "");
+    if (isDirectorThreadKey(key)) return res.type("text/plain").send(await directorThreadCommand(key, cmd, req.body, videoEditBlocked));
     const { g, role } = seat(String(req.body?.key ?? ""));
     const text = (t: string) => res.type("text/plain").send(t);
     // Each seat sees only its own commands.
@@ -1017,14 +1024,30 @@ app.post(
     }
     const unknown = () => new ActionError(`Unknown command: ${cmd}. Yours are:\n${SEAT_COMMANDS[role]}`);
     if (role === "d") {
+      if (["direct", "confirm", "narrate", "packaging"].includes(cmd) && (videoEditBlocked(g) || directorThreadBusy(g))) throw new ActionError("A video edit or render is already in progress. Wait for it to finish.");
       if (cmd === "brief") {
         if (g.video && !planDrafts.has(g.id)) return text("DONE — this game's video plan is saved. Your task is complete; you can stop now.");
         if (g.phase !== "finished" || !needsDirection(g)) throw new ActionError("This game isn't ready for its video plan yet (it needs to be finished and reviewed).");
+        // The lines the video can show are followed move by move first (once per game), so the brief lists
+        // them whole, every move with its verdict.
+        if (!linesReady(g)) {
+          const ready = await Promise.race([deepenLines(g), new Promise<"slow">((r) => setTimeout(() => r("slow"), 270_000))]);
+          if (ready !== true) {
+            const p = linesProgress(g);
+            return text(
+              ready === "slow"
+                ? `WAITING — the engine is still working out this game's lines move by move${p ? ` (${p.done} of ${p.total} starting positions done)` : ""}. Run \`brief\` again.`
+                : "WAITING — the engine failed on some of this game's lines; run `brief` again to retry them.",
+            );
+          }
+        }
         return text(directorBrief(g));
       }
       if (cmd === "direct") {
         if (g.phase !== "finished") throw new ActionError("The video plan comes after the game.");
         if (g.video) throw new ActionError("This game's video plan is already saved.");
+        // A plan is checked against the lines as the brief listed them, so only once they're all worked out.
+        if (!linesReady(g)) throw new ActionError("This game's engine lines aren't worked out yet: run `brief` first, and plan from what it prints.");
         // A plan that passes the checks is read back before it's final: what each quote will draw and light
         // up, and in which colour, for the director to confirm or fix.
         const plan = validatePlan(g, req.body?.plan);
@@ -1044,8 +1067,30 @@ app.post(
         saveGameNow(g);
         touch(g);
         dropThumbOptions(g.id);
-        directorDone(g.id);
+        const lined = plan.moments.filter((x) => x.line).length;
+        if (lined)
+          return text(
+            `OK — video plan saved (${plan.moments.length} moments). One step left: the narration over its ${lined} engine line${lined === 1 ? "" : "s"}. Run \`narrate-brief\`, write it, and submit it with \`narrate <narration.json>\`.`,
+          );
         return text(`OK — video plan saved (${plan.moments.length} moments).\n\nDONE — your task is complete; you can stop now.`);
+      }
+      // The narration over a saved plan's engine lines, in its own step: a focused brief, then each submission
+      // checked, saved and read back with how it will play.
+      if (cmd === "narrate-brief") {
+        if (!g.video) throw new ActionError("This game's video plan isn't saved yet: the narration comes after it (run `brief`).");
+        return text(narrateBrief(g));
+      }
+      if (cmd === "narrate") {
+        if (!g.video) throw new ActionError("This game's video plan isn't saved yet: the narration comes after it (run `brief`).");
+        const next = applyNarration(g, req.body?.narration);
+        g.video = next;
+        saveGameNow(g);
+        touch(g);
+        const back = narratedReadback(g, next);
+        return text(
+          `OK — narration saved. Here's how it will play (timed by an estimate of the voices):\n\n${back.join("\n") || "(no narrated lines)"}\n` +
+            `Read each line as the narrator would say it. Does each hard move get its room (no ⚠)? Is the payoff the line's loudest moment? Does every word fit what's on the board as it's said? If anything's off, fix it and submit again with \`narrate\`.\n\nDONE — the narration is saved; once you're happy with it, your task is complete.`,
+        );
       }
       // New titles, captions and thumbnails for a saved plan, leaving the rest of it as it is.
       if (cmd === "packaging-brief") {
@@ -1204,11 +1249,32 @@ const renderState = (id: string) => {
     packagingOptions: g.video?.packagingOptions ?? null,
     music: musicTracks(),
     directed: !!g.video,
+    approved: videoApproved(g),
+    revision: videoRevision(g),
     summonAvailable: summonAvailable(),
     ...publishState(g),
   };
 };
 app.get("/api/games/:id/render", handle((req) => renderState(String(req.params.id))));
+function videoEditBlocked(g: Game) {
+  return jobsFor(g.id).some(j => !["done", "failed"].includes(j.status)) || g.publish?.status === "requested";
+}
+app.get("/api/games/:id/director-thread", localOnly, handle(req => directorThreadState(getGame(String(req.params.id)))));
+app.post("/api/games/:id/director-thread", localOnly, handle(async req => {
+  const g = getGame(String(req.params.id));
+  if (videoEditBlocked(g)) throw new ActionError("Wait for rendering or publishing to finish before opening the director.");
+  return openDirectorThread(g, req.body);
+}));
+app.post("/api/games/:id/video-approval", localOnly, handle(req => {
+  const g = getGame(String(req.params.id));
+  if (!g.video) throw new ActionError("Run the director first.");
+  if (directorThreadBusy(g) || videoEditBlocked(g)) throw new ActionError("Wait for the current work to finish before approving.");
+  const revision = videoRevision(g);
+  if (req.body?.revision !== revision) throw new ActionError("The plan changed. Review the updated preview before approving.");
+  g.videoApproval = { revision, at: Date.now() };
+  saveGameNow(g); touch(g);
+  return renderState(g.id);
+}));
 // The recorded voice lines (and their lengths, which set the video's timing).
 app.get("/api/games/:id/voice", handle((req) => voiceManifest(getGame(String(req.params.id)).id)));
 // The two models' series, for the replay's versus and result cards.
@@ -1218,10 +1284,11 @@ app.post(
   localOnly,
   handle(async (req) => {
     const id = String(req.params.id);
+    if (directorThreadBusy(getGame(id))) throw new ActionError("Wait for the director to finish, then approve the plan.");
     const want = req.body?.formats;
     const formats = (Array.isArray(want) ? want : ["landscape", "portrait"]).filter((f: string): f is RenderFormat => f === "landscape" || f === "portrait");
     if (!formats.length) throw new ActionError('formats must include "landscape" and/or "portrait".');
-    await startRender(id, formats, req.body?.music ? String(req.body.music) : null, req.body?.voices !== false, req.body?.redirect === true).catch((e) => {
+    await startRender(id, formats, req.body?.music ? String(req.body.music) : null, true, req.body?.redirect === true).catch((e) => {
       throw new ActionError(e.message);
     });
     return renderState(id);

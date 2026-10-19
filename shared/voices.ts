@@ -20,6 +20,12 @@ export const VOICES: Record<VoiceFamily, { voiceId: string; name: string }> = {
 };
 
 /**
+ * The narrator: the director's own voice, heard only over the engine lines ("what if…"), never one of the
+ * players' voices.
+ */
+export const NARRATOR = { voiceId: "pqHfZKP75CvOlQylNhV4", name: "Bill" };
+
+/**
  * How fast the recordings play in each cut. The short is a touch quicker: the same clips are
  * time-stretched (pitch kept) rather than recorded twice.
  */

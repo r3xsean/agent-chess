@@ -52,6 +52,11 @@ export interface PositionAnalysis {
   second?: Score;
   /** The engine could not analyze this position (retried on next server start). */
   failed?: boolean;
+  /**
+   * The verdict on playing `bestUci` here (best, great, brilliant, forced), once the position after it is
+   * analysed too: what an engine line's moves are badged with (see server/lineDepth.ts).
+   */
+  bestVerdict?: Classification;
 }
 
 export interface CalcLine {
@@ -174,6 +179,8 @@ export interface Game {
   /** Successful game actions only: status checks and long-poll requests are not recovery. */
   lastAgentActionAt?: Partial<Record<Color, number>>;
   analysis: Record<string, PositionAnalysis>;
+  /** Which version of the engine-line deepening (server/lineDepth.ts) has analysed this game's lines move by move. */
+  linesDepth?: number;
   opening: { eco: string; name: string } | null;
   review: Record<Color, SideReview> | null;
   ratingChange?: Record<Color, number>;
@@ -210,6 +217,8 @@ export interface Game {
   classifierVersion?: number;
   /** The broadcaster's picks for the video replay, made after the game. */
   video?: VideoPlan;
+  /** The user's approval of the exact video plan, before voices and rendering. */
+  videoApproval?: { revision: string; at: number };
   /** How many plans were thrown away for a new director (each new director is a new task). */
   videoRedos?: number;
   /** Posting the rendered videos to YouTube and TikTok (server/publish.ts). */
@@ -251,7 +260,33 @@ export interface VideoMoment {
    * `punish` (an `instead` line only): first, what the move played allowed, played out from it (see
    * ShownLine.punish) and explained in the director's words, before the board winds back for the line.
    */
-  line?: { kind: "instead" | "after"; caption?: string; refs?: LineRef[]; draw?: LineReach[]; rings?: string[]; punish?: LinePunish };
+  line?: {
+    kind: "instead" | "after";
+    caption?: string;
+    refs?: LineRef[];
+    draw?: LineReach[];
+    rings?: string[];
+    punish?: LinePunish;
+    /** What the narrator says over the line, step by step (see LineBeat). */
+    beats?: LineBeat[];
+    /** How many of the line's moves are shown (the director cuts it once its point is made); all when absent. */
+    end?: number;
+    /**
+     * Keep the move's best-move arrow (and "best was") when an `instead` line plays after it. By default they're
+     * hidden there, so the narrator's reveal isn't given away the moment the move lands.
+     */
+    showBest?: true;
+    /**
+     * Chosen from lines followed move by move (shared/engineLine.ts). Plans saved before that have none and
+     * keep their lines as they were then (read off the stored PV).
+     */
+    deep?: true;
+    /**
+     * An `instead` line (without `punish`) played before the move rather than after it: the board freezes on
+     * the position the player faced, the line plays, and then the player's quote and their real move land.
+     */
+    first?: boolean;
+  };
   /** The moves and squares the quote names, drawn on the board as it's said. */
   marks?: ThoughtMark[];
 }
@@ -298,6 +333,26 @@ export interface LineRef {
   words: [number, number];
   sqs?: string[];
   move?: number;
+}
+
+/**
+ * One thing the narrator says during an engine line, in the director's own words, spoken in the narrator's
+ * voice and shown as the line's comment: `at` is how many of the line's moves are on the board when it's
+ * said (0: before the first, while the board holds on where the line starts). The line waits for it.
+ */
+export interface LineBeat {
+  at: number;
+  text: string;
+  delivery?: string;
+  /**
+   * The board moving on the words: once the voice reaches word `word` of the text, `moves` of the line's moves
+   * are on the board (the ones before it land just ahead, quickly), so a move lands as it's named.
+   */
+  cues?: { word: number; moves: number }[];
+  /** First beat only, at 0: keep the real board until this word, then enter the tinted engine view and rewind if needed. */
+  enter?: number;
+  /** What the words point at, drawn as they're said: a piece's reach ("f5>h4", from/to) or a circled square. */
+  draw?: { word: number; last?: number; from?: string; to?: string; ring?: string }[];
 }
 
 /** A piece's attack or defence drawn with a caption ("d4>f3"), up while the piece stays on `from`. */

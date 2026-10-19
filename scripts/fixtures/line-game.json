@@ -1,0 +1,453 @@
+{
+  "id": "line-test",
+  "white": {
+    "id": "claude-fable-5-1@high:none",
+    "provider": "claudeAgent",
+    "model": "claude-fable-5-1",
+    "modelLabel": "Fable 5.1",
+    "effort": "high",
+    "personality": "none"
+  },
+  "black": {
+    "id": "gpt-6.1-sol@high:none",
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "modelLabel": "GPT-6.1 Sol",
+    "effort": "high",
+    "personality": "none"
+  },
+  "moves": [
+    {
+      "ply": 53,
+      "color": "w",
+      "san": "Kf1",
+      "uci": "g1f1",
+      "from": "g1",
+      "to": "f1",
+      "fenBefore": "4r1k1/pp3p1p/2p5/5p2/1P1P1Qnq/4r1N1/P3N1P1/1R2R1K1 w - - 4 27",
+      "fenAfter": "4r1k1/pp3p1p/2p5/5p2/1P1P1Qnq/4r1N1/P3N1P1/1R2RK2 b - - 5 27",
+      "selfEval": 1.5,
+      "selfEvalRaw": "+1.5",
+      "lines": [
+        {
+          "raw": "Kf1 R3xe2 Rxe2 Rxe2 Kxe2 Qxg2+ Kd3 Qg1 Qxf5",
+          "note": "The full exchange on e2 leaves me a rook and knight against knight, two pawns down.",
+          "san": [
+            "Kf1",
+            "Rxe2",
+            "Rxe2",
+            "Rxe2",
+            "Kxe2"
+          ],
+          "brokenAt": "Qxg2+"
+        },
+        {
+          "raw": "Kf1 Qh2 Qxf5 R3xe2 Rxe2 Rxe2 Qxg4 Re1+ Rxe1 Qh1+ Nxh1",
+          "note": "After ...Qh2, Qxf5 wins the g4 knight because the f5 pawn no longer guards it.",
+          "san": [
+            "Kf1",
+            "Qh2",
+            "Qxf5",
+            "Rxe2",
+            "Rxe2",
+            "Rxe2",
+            "Qxg4+"
+          ],
+          "brokenAt": "Re1+"
+        },
+        {
+          "raw": "Kf1 Qh2 Qxf5 Rf3+ gxf3 Qh3+ Kg1 Qxg3+ Qxg4 Qxg4+ fxg4",
+          "note": "The rook sac on f3 ends with my queen trading itself for his queen and knight.",
+          "san": [
+            "Kf1",
+            "Qh2",
+            "Qxf5",
+            "Rf3+",
+            "gxf3",
+            "Qh3+",
+            "Kg1",
+            "Qxg3+"
+          ],
+          "brokenAt": "Qxg4"
+        },
+        {
+          "raw": "Kf1 Rxg3 Nxg3 Qxg3 Qxg3",
+          "note": "...Rxg3 still hangs the queen.",
+          "san": [
+            "Kf1",
+            "Rxg3",
+            "Nxg3",
+            "Qxg3",
+            "Qxg3"
+          ]
+        },
+        {
+          "raw": "Kf1 Re4 Qd2 R4xe2 Rxe2 Rxe2 Qxe2",
+          "note": "The rook retreat with tempo doesn't win anything.",
+          "san": [
+            "Kf1"
+          ],
+          "brokenAt": "Re4"
+        },
+        {
+          "raw": "Kf1 Nf6 Qxe3",
+          "note": "The knight is still tied to the rook on e3.",
+          "san": [
+            "Kf1",
+            "Nf6",
+            "Qxe3"
+          ]
+        }
+      ],
+      "illegalAttempts": [],
+      "offeredDraw": false,
+      "thinkMs": 101259,
+      "ts": 1792343421640,
+      "analysis": {
+        "classification": "blunder",
+        "winBefore": 94.0356726303666,
+        "winAfter": 24.40875555692,
+        "accuracy": 2.8099199682868594,
+        "cpLoss": 1056,
+        "bestSan": "Nxf5",
+        "bestUci": "g3f5",
+        "evalAfter": {
+          "cp": -307
+        }
+      },
+      "commentary": ""
+    }
+  ],
+  "analysis": {
+    "4r1k1/pp3p1p/2p5/5p2/1P1P1Qnq/4r1N1/P3N1P1/1R2R1K1 w - - 4 27": {
+      "depth": 22,
+      "score": {
+        "cp": 749
+      },
+      "bestUci": "g3f5",
+      "pv": [
+        "g3f5",
+        "h4h5",
+        "f5e3",
+        "e8e3",
+        "b1b3",
+        "e3e6",
+        "b3h3",
+        "h5g6",
+        "f4b8",
+        "g8g7",
+        "b8g3",
+        "g6g5"
+      ],
+      "second": {
+        "cp": 0
+      },
+      "bestSan": "Nxf5",
+      "bestVerdict": "best"
+    },
+    "4r1k1/pp3p1p/2p5/5p2/1P1P1Qnq/4r1N1/P3N1P1/1R2RK2 b - - 5 27": {
+      "depth": 22,
+      "score": {
+        "cp": -307
+      },
+      "bestUci": "e3f3",
+      "pv": [
+        "e3f3",
+        "f4f3",
+        "g4h2",
+        "f1g1",
+        "h2f3",
+        "g2f3",
+        "f5f4",
+        "g3e4",
+        "e8e4",
+        "f3e4",
+        "f4f3",
+        "e1f1"
+      ],
+      "second": {
+        "cp": -276
+      },
+      "bestSan": "Rf3+",
+      "bestVerdict": "brilliant"
+    }
+  },
+  "interviews": {
+    "pre": {},
+    "post": {}
+  },
+  "result": "0-1",
+  "termination": "White resigned",
+  "video": {
+    "moments": [
+      {
+        "ply": 53,
+        "why": "Fable misses Nxf5, a free pawn that forks queen and rook, and plays Kf1, which walks into a discovered attack (94 to 24)",
+        "importance": 3,
+        "thought": "Kf1 keeps everything simple: the king itself recaptures on e2, there is no back-rank mate, and his queen's diagonal to f2 and e1 is blocked by my own g3 knight. Checked square by square this time.",
+        "delivery": "proud, meticulous, totally sure",
+        "chapter": "Checked square by square",
+        "line": {
+          "kind": "instead",
+          "deep": true,
+          "beats": [
+            {
+              "at": 0,
+              "text": "Square by square, it says. So why has the bar just COLLAPSED? Rewind, and look at the pawn on f5. Nothing guards it.",
+              "delivery": "stunned",
+              "draw": [
+                {
+                  "word": 16,
+                  "last": 19,
+                  "ring": "f5"
+                }
+              ]
+            },
+            {
+              "at": 0,
+              "text": "Knight takes f5!",
+              "delivery": "building",
+              "cues": [
+                {
+                  "word": 0,
+                  "moves": 1
+                }
+              ]
+            },
+            {
+              "at": 1,
+              "text": "A free pawn, and the knight lands hitting the queen on h4 and the rook on e3.",
+              "draw": [
+                {
+                  "word": 8,
+                  "last": 11,
+                  "from": "f5",
+                  "to": "h4"
+                },
+                {
+                  "word": 13,
+                  "last": 16,
+                  "from": "f5",
+                  "to": "e3"
+                }
+              ]
+            },
+            {
+              "at": 1,
+              "text": "The queen runs, the rook falls. Now watch Sol's knight…",
+              "cues": [
+                {
+                  "word": 3,
+                  "moves": 3
+                }
+              ]
+            }
+          ],
+          "end": 3
+        },
+        "marks": [
+          {
+            "at": "Kf1 keeps everything simple",
+            "word": 0,
+            "arrows": [
+              {
+                "san": "Kf1",
+                "from": "g1",
+                "to": "f1",
+                "color": "w",
+                "word": 0
+              },
+              {
+                "san": "f1>e2",
+                "from": "f1",
+                "to": "e2",
+                "color": "w",
+                "word": 7,
+                "hit": true,
+                "say": [
+                  7,
+                  9
+                ]
+              }
+            ],
+            "rings": [],
+            "refs": [
+              {
+                "words": [
+                  0,
+                  0
+                ],
+                "move": 0
+              },
+              {
+                "words": [
+                  4,
+                  5
+                ],
+                "sqs": [
+                  "f1"
+                ]
+              },
+              {
+                "words": [
+                  9,
+                  9
+                ],
+                "sqs": [
+                  "e2"
+                ]
+              }
+            ]
+          },
+          {
+            "at": "his queen's diagonal",
+            "word": 16,
+            "until": 35,
+            "arrows": [
+              {
+                "san": "h4>g3",
+                "from": "h4",
+                "to": "g3",
+                "color": "b",
+                "word": 23,
+                "hit": true,
+                "say": [
+                  23,
+                  24
+                ]
+              }
+            ],
+            "rings": [
+              {
+                "sq": "h4",
+                "word": 16,
+                "say": [
+                  16,
+                  17
+                ]
+              },
+              {
+                "sq": "f2",
+                "word": 20,
+                "say": [
+                  20,
+                  20
+                ]
+              },
+              {
+                "sq": "e1",
+                "word": 22,
+                "say": [
+                  22,
+                  22
+                ]
+              },
+              {
+                "sq": "g3",
+                "word": 28,
+                "say": [
+                  28,
+                  29
+                ]
+              }
+            ],
+            "refs": [
+              {
+                "words": [
+                  16,
+                  17
+                ],
+                "sqs": [
+                  "h4"
+                ]
+              },
+              {
+                "words": [
+                  20,
+                  20
+                ],
+                "sqs": [
+                  "f2"
+                ]
+              },
+              {
+                "words": [
+                  22,
+                  22
+                ],
+                "sqs": [
+                  "e1"
+                ]
+              },
+              {
+                "words": [
+                  28,
+                  29
+                ],
+                "sqs": [
+                  "g3"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "asides": [],
+    "interviewLines": {
+      "pre": {},
+      "post": {}
+    },
+    "interviewDelivery": {
+      "pre": {
+        "w": "earnest, very determined",
+        "b": "measured"
+      },
+      "post": {
+        "w": "rueful",
+        "b": "honest, a little sheepish"
+      }
+    },
+    "packaging": {
+      "title": "Fable 5.1 was a whole rook up against GPT-6.1 Sol… then the h-pawn moved",
+      "caption": "Fable was a whole rook up. Then one little pawn started walking 👀 #chess #ai #chesstok",
+      "thumbnail": {
+        "ply": 81,
+        "text": "EVERYTHING TIDY"
+      }
+    },
+    "packagingOptions": {
+      "titles": [
+        "Fable 5.1 was a whole rook up against GPT-6.1 Sol… then the h-pawn moved",
+        "\"Checked square by square this time\": Fable 5.1 vs GPT-6.1 Sol",
+        "Fable 5.1 vs GPT-6.1 Sol: seven blunders, three lead changes, series on the line",
+        "GPT-6.1 Sol called it a rook exchange. It was a rook blunder"
+      ],
+      "captions": [
+        "Fable was a whole rook up. Then one little pawn started walking 👀 #chess #ai #chesstok",
+        "\"Checked square by square this time\" …it did not check that square 💀 #chess #ai",
+        "Series tied 1–1. Seven blunders. One very determined h-pawn #chess #ai #chesstok",
+        "Sol thought it was an even trade. It was a free rook #chess #ai"
+      ],
+      "thumbnails": [
+        {
+          "ply": 81,
+          "text": "EVERYTHING TIDY"
+        },
+        {
+          "ply": 61,
+          "text": "A FREE ROOK"
+        },
+        {
+          "ply": 53,
+          "text": "SQUARE BY SQUARE"
+        },
+        {
+          "ply": 60,
+          "text": "EQUAL MATERIAL?"
+        }
+      ]
+    },
+    "createdAt": 1792434247513
+  }
+}

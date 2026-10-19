@@ -1,0 +1,225 @@
+[
+  {
+    "id": "CwhRBWXzGAHq8TQ4Fs17",
+    "name": "Roger - Laid-Back, Casual, Resonant",
+    "category": "premade",
+    "labels": {
+      "descriptive": "classy",
+      "language": "en",
+      "accent": "american",
+      "use_case": "conversational",
+      "gender": "male",
+      "age": "middle_aged"
+    },
+    "description": "Easy going and perfect for casual conversations."
+  },
+  {
+    "id": "EXAVITQu4vr4xnSDxMaL",
+    "name": "Sarah - Mature, Reassuring, Confident",
+    "category": "premade",
+    "labels": {
+      "descriptive": "professional",
+      "language": "en",
+      "accent": "american",
+      "use_case": "entertainment_tv",
+      "gender": "female",
+      "age": "young"
+    },
+    "description": "Young adult woman with a confident and warm, mature quality and a reassuring, professional tone."
+  },
+  {
+    "id": "SAz9YHcvj6GT2YYXdXww",
+    "name": "River - Relaxed, Neutral, Informative",
+    "category": "premade",
+    "labels": {
+      "accent": "american",
+      "language": "en",
+      "age": "middle_aged",
+      "gender": "neutral",
+      "use_case": "conversational",
+      "descriptive": "calm"
+    },
+    "description": "A relaxed, neutral voice ready for narrations or conversational projects."
+  },
+  {
+    "id": "TX3LPaxmHKxFdv7VOQHJ",
+    "name": "Liam - Energetic, Social Media Creator",
+    "category": "premade",
+    "labels": {
+      "accent": "american",
+      "language": "en",
+      "age": "young",
+      "gender": "male",
+      "use_case": "social_media",
+      "descriptive": "confident"
+    },
+    "description": "A young adult with energy and warmth - suitable for reels and shorts."
+  },
+  {
+    "id": "Xb7hH8MSUJpSbSDYk0k2",
+    "name": "Alice - Clear, Engaging Educator",
+    "category": "premade",
+    "labels": {
+      "descriptive": "professional",
+      "language": "en",
+      "accent": "british",
+      "use_case": "informative_educational",
+      "gender": "female",
+      "age": "middle_aged"
+    },
+    "description": "Clear and engaging, friendly woman with a British accent suitable for e-learning."
+  },
+  {
+    "id": "XrExE9yKIg1WjnnlVkGX",
+    "name": "Matilda - Knowledgable, Professional",
+    "category": "premade",
+    "labels": {
+      "descriptive": "upbeat",
+      "language": "en",
+      "accent": "american",
+      "use_case": "informative_educational",
+      "gender": "female",
+      "age": "middle_aged"
+    },
+    "description": "A professional woman with a pleasing alto pitch. Suitable for many use cases."
+  },
+  {
+    "id": "bIHbv24MWmeRgasZH58o",
+    "name": "Will - Relaxed Optimist",
+    "category": "premade",
+    "labels": {
+      "accent": "american",
+      "language": "en",
+      "age": "young",
+      "gender": "male",
+      "use_case": "conversational",
+      "descriptive": "chill"
+    },
+    "description": "Conversational and laid back."
+  },
+  {
+    "id": "cgSgspJ2msm6clMCkdW9",
+    "name": "Jessica - Playful, Bright, Warm",
+    "category": "premade",
+    "labels": {
+      "descriptive": "cute",
+      "language": "en",
+      "accent": "american",
+      "use_case": "conversational",
+      "gender": "female",
+      "age": "young"
+    },
+    "description": "Young and popular, this playful American female voice is perfect for trendy content."
+  },
+  {
+    "id": "hpp4J3VqNfWAUOO0d1Us",
+    "name": "Bella - Professional, Bright, Warm",
+    "category": "premade",
+    "labels": {
+      "descriptive": "professional",
+      "language": "en",
+      "accent": "american",
+      "use_case": "informative_educational",
+      "gender": "female",
+      "age": "middle_aged"
+    },
+    "description": "This voice is warm, bright, and professional, characterized by a Standard American accent and a polished, narrative quality. It features a medium-high pitch with crisp diction and a deliberate, rhythmic pace that makes it highly intelligible and engaging for long-form listening."
+  },
+  {
+    "id": "iP95p4xoKVk53GoZ742B",
+    "name": "Chris - Charming, Down-to-Earth",
+    "category": "premade",
+    "labels": {
+      "accent": "american",
+      "use_case": "conversational",
+      "gender": "male",
+      "language": "en",
+      "age": "middle_aged",
+      "descriptive": "casual"
+    },
+    "description": "Natural and real, this down-to-earth voice is great across many use-cases."
+  },
+  {
+    "id": "nPczCjzI2devNBz1zQrb",
+    "name": "Brian - Deep, Resonant and Comforting",
+    "category": "premade",
+    "labels": {
+      "descriptive": "classy",
+      "language": "en",
+      "accent": "american",
+      "use_case": "social_media",
+      "gender": "male",
+      "age": "middle_aged"
+    },
+    "description": "Middle-aged man with a resonant and comforting tone. Great for narrations and advertisements."
+  },
+  {
+    "id": "onwK4e9ZLuTAKqWW03F9",
+    "name": "Daniel - Steady Broadcaster",
+    "category": "premade",
+    "labels": {
+      "accent": "british",
+      "language": "en",
+      "use_case": "informative_educational",
+      "age": "middle_aged",
+      "gender": "male",
+      "descriptive": "formal"
+    },
+    "description": "A strong voice perfect for delivering a professional broadcast or news story."
+  },
+  {
+    "id": "pNInz6obpgDQGcFmaJgB",
+    "name": "Adam - Dominant, Firm",
+    "category": "premade",
+    "labels": {
+      "language": "en",
+      "accent": "american",
+      "use_case": "social_media",
+      "gender": "male",
+      "age": "middle_aged"
+    },
+    "description": "A bright tenor pitch that immediately cuts through. The delivery is brash and openly confident, speaking with unwavering certainty and a slightly aggressive self-assurance."
+  },
+  {
+    "id": "pqHfZKP75CvOlQylNhV4",
+    "name": "Bill - Wise, Mature, Balanced",
+    "category": "premade",
+    "labels": {
+      "accent": "american",
+      "language": "en",
+      "age": "old",
+      "gender": "male",
+      "use_case": "advertisement",
+      "descriptive": "crisp"
+    },
+    "description": "Friendly and comforting voice ready to narrate your stories."
+  },
+  {
+    "id": "rfkTsdZrVWEVhDycUYn9",
+    "name": "Shelby - Conversational",
+    "category": "professional",
+    "labels": {
+      "language": "en",
+      "use_case": "conversational",
+      "gender": "female",
+      "age": "young",
+      "accent": "british",
+      "descriptive": "pleasant"
+    },
+    "description": "A pleasantly clear British female voice. Perfect for social media, audiobooks, training videos etc."
+  },
+  {
+    "id": "UEKYgullGqaF0keqT8Bu",
+    "name": "Chris Brift",
+    "category": "professional",
+    "labels": {
+      "language": "en",
+      "use_case": "informative_educational",
+      "gender": "male",
+      "age": "middle_aged",
+      "accent": "british",
+      "descriptive": "classy"
+    },
+    "description": "English male mature, educated, well-spoken authoritative, trustworthy smooth, soft voice with a hint of humour. Suitable for informative & Educational content."
+  }
+]

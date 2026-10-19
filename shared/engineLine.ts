@@ -50,20 +50,81 @@ export interface ShownLine {
   punish?: { moves: RulesMove[]; fact: string };
 }
 
-/** A quiet line is cut after this many plies (an exchange in progress may run a few more). */
-const MAX_PLIES = 8;
-/** A mate is shown whole when it comes within this many plies (mate in 6). */
-const MAX_MATE_PLIES = 11;
+/**
+ * A quiet line is cut after `plies` (an exchange in progress may run a few more); a mate is shown whole when
+ * it comes within `mate` plies. Lines followed move by move (deep) run longer than the ones read off a single
+ * PV, which plans saved before deep lines still use (`legacy`), so a saved plan's lines never change shape.
+ */
+const CAPS = { deep: { plies: 14, mate: 21 }, legacy: { plies: 8, mate: 11 } };
 /** How much of a line without captures is shown. */
 const QUIET_PLIES = 4;
+/** How far an engine line is followed, position by position (server/lineDepth.ts analyses that far). */
+export const LINE_WALK = 24;
+
+/**
+ * The engine's line from a position: its best move there, then the best move in the position that leaves,
+ * and so on, for as long as the positions along it have been analysed (server/lineDepth.ts analyses them
+ * one by one, deeper and more reliable than one search's PV); then the rest of the last analysed position's PV.
+ */
+export function enginePath(g: Game, fen: string, max = LINE_WALK): RulesMove[] {
+  const variant = variantOf(g);
+  const out: RulesMove[] = [];
+  let pos = fen;
+  while (out.length < max) {
+    const a = g.analysis[pos];
+    if (!a || a.failed || !a.pv?.length) break;
+    const [first] = walk(pos, [a.bestUci ?? a.pv[0]], variant);
+    if (!first) break;
+    const next = g.analysis[first.after];
+    if (!next || next.failed) {
+      out.push(...walk(pos, a.pv, variant).slice(0, max - out.length));
+      break;
+    }
+    out.push(first);
+    pos = first.after;
+  }
+  return out;
+}
+
+/**
+ * The verdict on each move of an engine line (best, great: the only move, brilliant: a sound sacrifice,
+ * forced: the only legal one), where the position it's played from has been analysed that far; a move the
+ * game played keeps the game's verdict.
+ */
+export function lineVerdicts(g: Game, moves: RulesMove[]): (Classification | undefined)[] {
+  return moves.map((mv) => {
+    const played = g.moves.find((m) => m.fenBefore === mv.before && m.uci === mv.uci);
+    if (played?.analysis && !played.analysis.unavailable) return played.analysis.classification;
+    const a = g.analysis[mv.before];
+    return a && !a.failed && (a.bestUci ?? a.pv?.[0]) === mv.uci ? a.bestVerdict : undefined;
+  });
+}
+
+/**
+ * A line cut back to its payoff: the first point where it has won all it's going to win (a mate is kept
+ * whole), so the trades that follow a win don't drag on.
+ */
+function toPayoff(moves: RulesMove[], side: Color): RulesMove[] {
+  if (mates(moves)) return moves;
+  const all = tally(moves, side, true);
+  for (let k = 1; k < moves.length; k++) {
+    const mv = moves[k - 1];
+    if (!mv.captured && !mv.promotion) continue;
+    if (moves[k].captured) continue;
+    const t = tally(moves.slice(0, k), side, true);
+    if (t.net === all.net && t.promoted.length === all.promoted.length) return moves.slice(0, k);
+  }
+  return moves;
+}
 
 /** The part of an engine line worth playing: up to the mate, or to where its captures have settled, ending on the payoff. */
-function settle(all: RulesMove[]): RulesMove[] {
+function settle(all: RulesMove[], legacy = false): RulesMove[] {
+  const { plies, mate } = CAPS[legacy ? "legacy" : "deep"];
   const mateAt = all.findIndex((mv) => mv.san.endsWith("#"));
-  if (mateAt >= 0 && mateAt < MAX_MATE_PLIES) return all.slice(0, mateAt + 1);
-  let k = Math.min(all.length, MAX_PLIES);
+  if (mateAt >= 0 && mateAt < mate) return all.slice(0, mateAt + 1);
+  let k = Math.min(all.length, plies);
   // An exchange still going at the cut is played to its end (a few plies more at most), or left out.
-  while (k < all.length && k < MAX_PLIES + 4 && all[k].captured) k++;
+  while (k < all.length && k < plies + 4 && all[k].captured) k++;
   if (k < all.length && all[k].captured) while (k > 0 && all[k - 1].captured) k--;
   // It ends on the payoff: the last capture or promotion. A line with neither (a quiet move that just
   // keeps everything, say) shows its first few moves.
@@ -104,8 +165,35 @@ function standing(win: number): string {
   return "drawing chances";
 }
 
-/** The line of a kind for move i, or null when there's none worth showing. */
-export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null {
+/**
+ * The line of a kind for move i, or null when there's none worth showing. `legacy`: read off the stored PV
+ * alone, as plans saved before deep lines were validated (see CAPS), so they keep exactly their lines.
+ */
+export function shownLine(g: Game, i: number, kind: LineKind, legacy = false): ShownLine | null {
+  const l = rawLine(g, i, kind, legacy);
+  return l && !legacy && obvious(g, l) ? null : l;
+}
+
+/**
+ * A line the viewer already sees from the move and its best-move arrow: its first move is a capture (or a
+ * promotion) that wins everything the line wins, with no mate and no hard move (great, brilliant) after it.
+ * A line that starts quietly always shows something: the move that holds, or sets something up.
+ */
+export function obvious(g: Game, l: ShownLine): boolean {
+  if (lineVerdicts(g, l.moves).some((v) => v === "great" || v === "brilliant")) return false;
+  const first = l.moves[0];
+  if (!first.captured && !first.promotion) return false;
+  const one = tally(l.moves.slice(0, 1), l.for, true);
+  // A first move that wins a piece or more is the whole story, even when a long mate follows (that's mopping up).
+  if (one.net >= OBVIOUS_GAIN) return true;
+  if (mates(l.moves)) return false;
+  const all = tally(l.moves, l.for, true);
+  return one.net >= all.net && one.promoted.length >= all.promoted.length;
+}
+/** What a first move has to win on its own, in pawns, for its line to be what the arrow already shows. */
+const OBVIOUS_GAIN = 3;
+
+function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine | null {
   const m = g.moves[i];
   const cls = m?.analysis?.classification;
   if (!m || !cls || m.analysis!.unavailable) return null;
@@ -115,7 +203,9 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
   const fen = kind === "instead" ? m.fenBefore : m.fenAfter;
   const a = g.analysis[fen];
   if (!a || a.failed || a.depth <= 0 || !a.pv?.length) return null;
-  const moves = settle(walk(fen, a.pv, variant));
+  const path = (from: string) => (legacy ? walk(from, g.analysis[from] && !g.analysis[from].failed ? g.analysis[from].pv : [], variant) : enginePath(g, from));
+  const trim = (ms: RulesMove[], side: Color) => (legacy ? ms : toPayoff(ms, side));
+  let moves = settle(path(fen), legacy);
   if (!moves.length) return null;
   const name = (c: Color) => sideName(g, c);
   const mated = mates(moves);
@@ -127,9 +217,9 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
   if (kind === "instead") {
     // The mover's better way. What makes it better is measured against what the move played led to: a
     // mate, material it wins, or just not losing what the move played lost (or not getting mated).
-    if (!WRONG.includes(cls) || a.pv[0] === m.uci || (mated && winner !== mover)) return null;
-    const after = g.analysis[m.fenAfter];
-    const actual = settle([...played, ...walk(m.fenAfter, after && !after.failed ? after.pv : [], variant)]);
+    if (!WRONG.includes(cls) || (a.bestUci ?? a.pv[0]) === m.uci || (mated && winner !== mover)) return null;
+    moves = trim(moves, mover);
+    const actual = trim(settle([...played, ...path(m.fenAfter)], legacy), opp);
     const actualMates = mates(actual) && actual.at(-1)!.color === mover;
     const actualMated = mates(actual) && !actualMates;
     const t = tally(moves, mover, true);
@@ -174,6 +264,7 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
     if (moves.every((mv, k) => g.moves[i + 1 + k]?.uci === mv.uci)) return null;
   } else return null;
   if (mated && winner !== side) return null;
+  moves = trim(moves, side);
   // Counted from before the move, so taking back what the move just took isn't a gain.
   const t = tally([...played, ...moves], side, true);
   if (!mated && t.net < MIN_GAIN && !t.promoted.includes(side)) {
@@ -190,6 +281,16 @@ export function shownLine(g: Game, i: number, kind: LineKind): ShownLine | null 
   const fact = `${name(side)} ${prize(t, side, "present", mate)}${mate ? "" : ` (+${t.net})`}`;
   const caption = side === opp ? `${name(opp)} could have ${prize(t, side, "past", mate)}.` : `${m.san} was set to ${prize(t, side, "bare", mate)}.`;
   return { kind, i, fen, moves, for: side, mate, net: mate ? 0 : t.net, fact, caption };
+}
+
+/**
+ * The line a plan shows for move i: the one it chose (deep, or as it was for plans from before), cut to the
+ * `end` the director gave it.
+ */
+export function planLine(g: Game, i: number, ask: { kind: LineKind; deep?: true; end?: number }): ShownLine | null {
+  const sl = shownLine(g, i, ask.kind, !ask.deep);
+  if (!sl || !ask.end || ask.end >= sl.moves.length) return sl;
+  return { ...sl, moves: sl.moves.slice(0, Math.max(1, ask.end)) };
 }
 
 /** The lines on offer for move i. */
