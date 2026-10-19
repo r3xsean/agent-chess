@@ -290,5 +290,5 @@ export function castlingNote(startFen: string): string {
   const files = "abcdefgh";
   const k = back.indexOf("K");
   const rooks = [...back].map((p, i) => (p === "R" ? files[i] : "")).filter(Boolean);
-  return `King on ${files[k]}1/${files[k]}8, rooks on ${rooks.join(" and ")}. Castling works as in normal chess once the squares between are empty and safe: O-O puts the king on g1 and the ${rooks[1]}-rook on f1; O-O-O puts the king on c1 and the ${rooks[0]}-rook on d1 (same files for Black on rank 8).`;
+  return `Starting setup: king on ${files[k]}1/${files[k]}8, rooks on the ${rooks.join(" and ")} files. O-O puts the king on g1 and the ${rooks[1]}-rook on f1; O-O-O puts the king on c1 and the ${rooks[0]}-rook on d1 (same files for Black on rank 8). Castling requires the corresponding castling right: neither the king nor that rook may have moved. Both paths to their destination squares, including the destinations, must be empty except for the participating king and rook. The king may not start in check, cross an attacked square, or end in check. The king or rook may already occupy its destination square.`;
 }

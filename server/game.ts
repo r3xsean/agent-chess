@@ -14,6 +14,7 @@ import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
 import {
   appendJournal,
+  captureGameLessons,
   freshStats,
   readLessons,
   writeLessons,
@@ -109,6 +110,7 @@ export function createGame(opts: {
     options: { pieceList: true, learning: opts.learning ?? true, rated: opts.rated ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
+  captureGameLessons(g);
   ensurePlayer(opts.white);
   ensurePlayer(opts.black);
   games.set(g.id, g);

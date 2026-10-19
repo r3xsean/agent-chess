@@ -1,3 +1,4 @@
+import type { Square } from "chess.js";
 import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { personalityById } from "../shared/personalities";
@@ -88,40 +89,75 @@ export function moveList(moves: MoveRecord[]): string {
   return parts.join(" ");
 }
 
-/** The last few full moves (from a White move), marked when earlier ones are left out. */
-export function recentMoves(moves: MoveRecord[], fullMoves = 10): string {
-  if (moves.length <= fullMoves * 2) return moveList(moves);
-  let from = moves.length - fullMoves * 2;
-  if (moves[from].color === "b") from++;
-  return `… ${moveList(moves.slice(from))}`;
+/** Display the last double pawn push, without revealing whether en passant is legal. */
+export function briefingFen(g: Game, fen: string): string {
+  const fields = fen.split(" ");
+  const last = g.moves[g.moves.length - 1];
+  // A custom starting position may carry its own en-passant target.
+  fields[3] = last ? "-" : startFenOf(g).split(" ")[3];
+  if (last && last.from[0] === last.to[0] && Math.abs(Number(last.from[1]) - Number(last.to[1])) === 2
+      && looseChess(last.fenBefore).get(last.from as Square)?.type === "p") {
+    fields[3] = `${last.from[0]}${(Number(last.from[1]) + Number(last.to[1])) / 2}`;
+  }
+  return fields.join(" ");
 }
 
 export function turnBrief(g: Game, color: Color): string {
   const c = board(g);
-  const fen = c.fen();
+  const fen = briefingFen(g, c.fen());
+  const toMove = c.turn();
   const last = g.moves[g.moves.length - 1];
-  const moveNo = Math.ceil((g.moves.length + 1) / 2);
+  const moveNo = fen.split(" ")[5];
+  const chess960 = variantOf(g) === "chess960";
   const out = [
-    `=== YOUR MOVE — move ${moveNo}, you are ${colorName(color)} ===`,
-    ...(variantOf(g) === "chess960" ? [`Variant: Chess960 (start position #${g.chess960}). ${castlingNote(startFenOf(g))}`] : []),
+    toMove === color ? "=== YOUR MOVE ===" : "=== POSITION STATUS ===",
+    `Game: ${g.id}`,
+    `Variant: ${chess960 ? `Chess960 (start position #${g.chess960})` : "Standard chess"}`,
+    `You are: ${colorName(color)}`,
+    `Side to move: ${colorName(toMove)}`,
+    `Move: ${moveNo}${toMove === "w" ? "." : "..."}`,
+    `Next ply: ${g.moves.length + 1} — ${g.moves.length} individual moves have been played.`,
     "",
-    "Board (your side at the bottom; White = UPPERCASE, Black = lowercase, '.' = empty):",
-    asciiBoard(fen, color),
+    "The CURRENT POSITION below is authoritative and supersedes earlier board snapshots. Your earlier plans and calculated variations are hypothetical unless that continuation was actually played, as recorded in ACTUAL GAME HISTORY.",
+    "",
+    "=== ACTUAL GAME HISTORY ===",
+    ...(chess960 ? [`Starting FEN: ${startFenOf(g)}`] : []),
+    "These are all moves actually played, from the starting position (SAN):",
+    moveList(g.moves),
+    "",
+    last ? `Last move: ${colorName(last.color)} played ${last.san} (${last.from} → ${last.to})` : "Last move: none — the game begins.",
+    "",
+    "=== CURRENT POSITION ===",
+    `The ${g.options?.pieceList ? "FEN, piece list, and diagram" : "FEN and diagram"} describe the same current position.`,
+    `FEN: ${fen}`,
     "",
     ...(g.options?.pieceList ? [pieceList(fen), ""] : []),
-    `FEN: ${fen}`,
-    last ? `Last move: ${colorName(last.color)} played ${last.san} (${last.from} → ${last.to})` : "Last move: none — the game begins.",
+    "Board orientation: White at the bottom, regardless of your color.",
+    `You are ${colorName(color)}; your pieces are ${color === "w" ? "UPPERCASE" : "lowercase"}.`,
+    "K/k = king; Q/q = queen; R/r = rook; B/b = bishop; N/n = knight; P/p = pawn.",
+    "White = UPPERCASE; Black = lowercase; '.' = empty.",
+    asciiBoard(fen, "w"),
+    "",
+    "=== GAME NOTICES ===",
+    ...(chess960 ? [`Chess960 castling rules (from the starting setup): ${castlingNote(startFenOf(g))}`] : []),
   ];
-  if (c.inCheck()) out.push("⚠ You are in CHECK.");
-  out.push(capturedSummary(g));
-  out.push(`Recent moves: ${recentMoves(g.moves)}`);
+  if (c.inCheck()) out.push(toMove === color ? "⚠ You are in CHECK." : `⚠ ${colorName(toMove)} is in CHECK.`);
   if (g.drawOffer === other(color)) {
-    out.push("", "🤝 Your opponent has offered a draw. Accept with `accept-draw`, or simply make a move to decline.");
+    out.push("🤝 Your opponent has offered a draw. Accept with `accept-draw`, or simply make a move to decline.");
+  } else {
+    out.push(g.drawOffer === color ? "Your draw offer is pending." : "No pending draw offer.");
   }
-  if (g.pendingIllegal[color].length) out.push(`(Rejected this turn: ${g.pendingIllegal[color].join(", ")})`);
-  const lessons = g.options?.learning ? readLessons(playerOf(g, color).model).text : "";
+  out.push(g.pendingIllegal[color].length ? `Rejected attempts this turn (not played): ${g.pendingIllegal[color].join(", ")}` : "No rejected attempts this turn.");
+  out.push(capturedSummary(g));
+  const lessons = g.options?.learning ? g.lessonsAtStart?.[color].text ?? "" : "";
   const plain = personalityById(playerOf(g, color).personality).plain;
-  if (lessons) out.push("", plain ? "Your lessons:" : "Your lessons (execution, not style or risk):", lessons);
+  if (lessons) out.push("", "=== YOUR GENERAL LESSONS ===", plain ? "From your past games:" : "From your past games (execution, not style or risk):", lessons);
+  out.push(
+    "",
+    toMove === color
+      ? "Choose your move from this position and submit it through the CLI using the required move JSON. SAN and UCI notation are both accepted."
+      : `It is ${colorName(toMove)}'s turn. Run \`wait\` for your next turn.`,
+  );
   return out.join("\n");
 }
 
@@ -206,7 +242,7 @@ export function pregameBrief(g: Game, color: Color): string {
 export function chess960Intro(g: Game): string[] {
   const fen = startFenOf(g);
   return [
-    `This game is CHESS960 (Fischer Random), start position #${g.chess960}. The pieces on the back rank are shuffled — the same for both sides, mirrored — so no opening theory applies. All other rules are normal.`,
+    `This game is CHESS960 (Fischer Random), start position #${g.chess960}. Both sides use the same back-rank arrangement on their respective home ranks. Ordinary opening sequences may not apply to this setup. All other rules are normal.`,
     "Starting position (White at the bottom):",
     asciiBoard(fen, "w"),
     castlingNote(fen),
@@ -217,9 +253,9 @@ export function chess960Intro(g: Game): string[] {
 function lessonsBlock(g: Game, color: Color): string[] {
   if (!g.options?.learning) return [];
   const model = playerOf(g, color).model;
-  const l = readLessons(model);
-  return l.text
-    ? [`Your LESSONS — your own playbook, written by you after past games (shared by every ${modelLabel(model)} player):`, l.text, ""]
+  const l = g.lessonsAtStart?.[color];
+  return l?.text
+    ? [`Your LESSONS — your own playbook, written by you after past games (a snapshot of ${modelLabel(model)}'s lessons for this game):`, l.text, ""]
     : ["You have no lessons yet. After this game you'll study your worst moves and write your first ones.", ""];
 }
 
@@ -255,7 +291,7 @@ function worstMoves(g: Game, color: Color, limit = 5): string[] {
     const after = g.analysis[m.fenAfter];
     out.push(
       `--- ${no} ${m.san} — ${a.classification.toUpperCase()} (your winning chances ${Math.round(a.winBefore)}% → ${Math.round(a.winAfter)}%)`,
-      asciiBoard(m.fenBefore, color),
+      asciiBoard(m.fenBefore, "w"),
       `FEN before your move: ${m.fenBefore}`,
       `What you thought: "${m.commentary.slice(0, 350)}${m.commentary.length > 350 ? "…" : ""}" (your eval ${m.selfEvalRaw}, engine after your move ${formatScore(a.evalAfter)})`,
       `Engine's best was ${a.bestSan ?? "?"}: ${pvSan(m.fenBefore, before?.pv, 6, variantOf(g))}`,
@@ -295,7 +331,7 @@ export function postgameBrief(g: Game, color: Color): string {
       "",
       "Note: you play for practical chances, so the engine will mark some deliberate risks as inaccuracies or mistakes. Judge a risk by whether it was a real practical chance, not by the engine's number — but a risk that simply lost material for nothing is still a mistake.",
     );
-  if (g.options?.learning) out.push("", "Your worst moves, in detail (diagrams from your side):", ...worstMoves(g, color));
+  if (g.options?.learning) out.push("", "Your worst moves, in detail (White at the bottom in every diagram):", ...worstMoves(g, color));
   if (needs.lines.length) out.push("", "Still to do:", ...needs.lines, "", postgameSubmit(needs.keys));
   return out.join("\n");
 }

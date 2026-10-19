@@ -82,11 +82,13 @@ try {
   await cli("interview", "--text", "Hi.", "--key", k2.black);
   await new Promise((r) => setTimeout(r, 1500));
   const t1 = await cli("wait", "--key", k2.white);
-  check("every move's brief shows the lessons", t1.includes("Your lessons") && t1.includes("f7 square"));
+  check("every move's brief shows the lessons", t1.includes("=== YOUR GENERAL LESSONS ===") && t1.includes("f7 square"));
   check("every move's brief shows the piece list", t1.includes("Pieces — White: Ke1"));
 
   const reset = await post(`/api/lessons/${MODEL}/reset`);
   check("reset empties the active lessons but keeps history", reset.text === "" && reset.history.length === 3);
+  const afterReset = await cli("wait", "--key", k2.white);
+  check("reset does not replace a running game's lesson snapshot", afterReset.includes("f7 square"));
   await post(`/api/games/${g2.id}/abort`);
 } finally {
   // Let the server's debounced saves land first, or it re-creates the files we delete.

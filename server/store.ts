@@ -42,7 +42,11 @@ export function loadAll() {
   for (const f of readdirSync(path.join(DATA, "games"))) {
     if (!f.endsWith(".json")) continue;
     const g = readJson<Game | null>(path.join(DATA, "games", f), null);
-    if (g) games.set(g.id, g);
+    if (g) {
+      // Older active games have no snapshot; freeze once now and persist across later restarts.
+      if (!g.result && captureGameLessons(g)) saveGameNow(g);
+      games.set(g.id, g);
+    }
   }
   for (const f of readdirSync(path.join(DATA, "tournaments"))) {
     if (!f.endsWith(".json")) continue;
@@ -136,6 +140,16 @@ export function appendJournal(playerId: string, entry: JournalEntry) {
 const lessonsFile = (model: string) => path.join(DATA, "lessons", `${safe(model)}.json`);
 export const readLessons = (model: string): Lessons =>
   readJson(lessonsFile(model), { model, version: 0, text: "", updatedAt: null, history: [] } as Lessons);
+/** Capture even an empty playbook, so later updates cannot enter a running game. */
+export function captureGameLessons(g: Game): boolean {
+  if (!g.options?.learning || g.lessonsAtStart) return false;
+  const snapshot = (model: string) => {
+    const { version, text } = readLessons(model);
+    return { version, text };
+  };
+  g.lessonsAtStart = { w: snapshot(g.white.model), b: snapshot(g.black.model) };
+  return true;
+}
 /** Goes up with every lessons write, here or arriving at the mirror, so readers can cache lessons files. */
 export let lessonsRevision = 0;
 export function writeLessons(model: string, text: string, gameId: string | null) {

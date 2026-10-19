@@ -62,7 +62,7 @@ export function renderPlayerPrompt(o: {
   const variant = o.chess960
     ? `
 ## Chess960
-This game is Chess960 (Fischer Random), start position #${o.chess960.n}: the back-rank pieces are shuffled (mirrored for Black), so there is no opening theory to lean on. All other rules are normal. ${castlingNote(o.chess960.fen)} Castle by sending "O-O" or "O-O-O".
+This game is Chess960 (Fischer Random), start position #${o.chess960.n}: both sides use the same back-rank arrangement on their respective home ranks. Ordinary opening sequences may not apply to this setup. All other rules are normal. ${castlingNote(o.chess960.fen)} Castle by sending "O-O" or "O-O-O".
 `
     : "";
   return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move and a broadcaster commentating.
@@ -71,7 +71,7 @@ This game is Chess960 (Fischer Random), start position #${o.chess960.n}: the bac
 ${identity(color, o.personality, opponent)}
 ${variant}
 ## Fair play (strict)
-- You see the game the way a human sees a chess.com board: the board, the last move, whether you're in check, captured pieces and the move list. Nothing else.
+- You see the game the way a human sees a chess.com board: the current position (FEN, a White-at-bottom text diagram, and a piece list when enabled), the complete actual move history, the last move, whether you're in check, captured pieces and material count, and draw offers. No legal-move list or engine analysis.
 - Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines. Do not read any project files other than files you write yourself. All chess thinking happens in your own head.
 - Interact with the game only through the CLI below. Never query the game server directly (no HTTP requests, no browser) and never read the project's data folder outside your own scratch folder — those contain engine analysis and your opponent's private thoughts, and using them is cheating.
 - An illegal move is rejected with just "Illegal move." — work out why yourself. Illegal attempts are visible to the audience.
@@ -122,8 +122,8 @@ EOF
 
 ## The loop — keep going until the CLI prints DONE
 1. Run \`wait\` once, to start.
-2. Every reply ends with one of: PRE-GAME (answer with \`interview\`), YOUR MOVE (think, then \`move\`), GAME OVER (\`postgame\`), WAITING (run \`wait\`), DONE (you are finished).
-3. Act on it with one command; its reply ends with the next one. Repeat.
+2. Find the status heading in each reply: PRE-GAME (answer with \`interview\`), YOUR MOVE (think, then \`move\`), GAME OVER (\`postgame\`), WAITING or POSITION STATUS (run \`wait\`), DONE (you are finished).
+3. Act on it with one command; its reply includes the next status. Repeat.
 Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it. If your shell times out while a command is waiting, what you sent already went through: run \`wait\`, don't send it again.
 If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). Run \`status\`, re-read the board and the piece list square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
 
@@ -143,7 +143,7 @@ export function broadcasterPrompt(g: Game): string {
     : `The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}") — the personality is just the style each one is playing in tonight, good for colour ("Opus, in full Magician mode…").`;
   const variant =
     variantOf(g) === "chess960"
-      ? `\nThis is a CHESS960 game (start position #${g.chess960}): the back rank is shuffled, so there's no opening theory and both players are on their own from move one — make that part of the story.`
+      ? `\nThis is a CHESS960 game (start position #${g.chess960}): ordinary opening sequences may not apply to this back-rank arrangement — make the starting setup part of the story.`
       : "";
   return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words appear live on screen, in the Studio feed next to the board, as ${human ? "a human takes on an AI agent" : "two AI agents play chess"}.
 

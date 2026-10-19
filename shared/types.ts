@@ -184,6 +184,8 @@ export interface Game {
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
   options?: { pieceList?: boolean; learning?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
   lessonsDone?: Partial<Record<Color, boolean>>;
+  /** Playbook text and version frozen at creation (legacy active games snapshot on first load). */
+  lessonsAtStart?: Record<Color, Pick<Lessons, "version" | "text">>;
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<SeatRole, number>>;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */

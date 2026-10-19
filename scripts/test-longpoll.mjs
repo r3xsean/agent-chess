@@ -24,6 +24,7 @@ const cli = (args, input) =>
 const turn = (move, extra = {}) => JSON.stringify({ move, commentary: `I play ${move} — it's natural.`, eval: "+0.2", ...extra });
 const first = (s) => s.split("\n").filter(Boolean)[0];
 const after = (s) => s.split("\n\n")[1]?.split("\n")[0];
+const isTurn = (s, move, color) => after(s) === "=== YOUR MOVE ===" && s.includes(`Move: ${move}${color === "White" ? "." : "..."}\n`) && s.includes(`Side to move: ${color}\n`) && s.includes(`You are: ${color}\n`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
 const check = (label, cond, detail = "") => {
@@ -48,8 +49,8 @@ const bcIntro = await cli(["bc-wait", ...k("broadcaster")]);
 check("bc-wait woke on interviews", bcIntro.includes("PRE-GAME INTERVIEW"));
 const bcAfterIntro = cli(["say", "-", ...k("broadcaster")], "Welcome everyone — here we go.");
 const w1 = await wInterview;
-check("interview waits on to YOUR MOVE", first(w1) === "OK — interview recorded." && after(w1)?.startsWith("=== YOUR MOVE — move 1"), after(w1));
-check("brief has FEN, recent moves, no board image", w1.includes("FEN:") && w1.includes("Recent moves:") && !w1.includes("board.png") && !w1.includes("Opponent:"));
+check("interview waits on to YOUR MOVE", first(w1) === "OK — interview recorded." && isTurn(w1, 1, "White"), after(w1));
+check("brief has FEN, actual history, current position, no board image", w1.includes("FEN:") && w1.includes("=== ACTUAL GAME HISTORY ===") && w1.includes("=== CURRENT POSITION ===") && !w1.includes("board.png") && !w1.includes("Opponent:"));
 check("say waits on to the next events", (await bcAfterIntro).includes("[GAME STARTED]"));
 
 // White's move blocks until Black replies; an identical retry meanwhile isn't played again.
@@ -57,19 +58,19 @@ const wMove = cli(["move", "-", ...k("white")], turn("e4"));
 await sleep(500);
 const wRetry = cli(["move", "-", ...k("white")], turn("e4"));
 const b1 = await bInterview;
-check("Black's interview waits on to its move", after(b1)?.startsWith("=== YOUR MOVE — move 1, you are Black"), after(b1));
+check("Black's interview waits on to its move", isTurn(b1, 1, "Black"), after(b1));
 const bcBatch = cli(["say", "--text", "And we're underway.", ...k("broadcaster")]);
 await sleep(2000);
 const bMove = cli(["move", "-", ...k("black")], turn("e5", { eval: "0.0" }));
 const [w2, w2retry] = await Promise.all([wMove, wRetry]);
-check("move waits on to the next YOUR MOVE", first(w2).startsWith("OK — played e4") && after(w2)?.startsWith("=== YOUR MOVE — move 2"), first(w2));
-check("identical retry not played again", first(w2retry).includes("already played e4") && after(w2retry)?.startsWith("=== YOUR MOVE — move 2"), first(w2retry));
+check("move waits on to the next YOUR MOVE", first(w2).startsWith("OK — played e4") && isTurn(w2, 2, "White"), first(w2));
+check("identical retry not played again", first(w2retry).includes("already played e4") && isTurn(w2retry, 2, "White"), first(w2retry));
 const bcEarly = await Promise.race([bcBatch, sleep(4000).then(() => null)]);
 check("two quiet moves are held for a third", bcEarly === null, bcEarly ? first(bcEarly) : "still waiting");
 
 const wMove2 = cli(["move", "-", ...k("white")], turn("Nf3"));
 const b2 = await bMove;
-check("Black's move waits on too", after(b2)?.startsWith("=== YOUR MOVE — move 2, you are Black"));
+check("Black's move waits on too", isTurn(b2, 2, "Black"));
 const batch = await bcBatch;
 check("third move releases the batch", ["[MOVE 1. e4]", "[MOVE 1... e5]", "[MOVE 2. Nf3]"].every((m) => batch.includes(m)), batch.split("\n").filter((l) => l.startsWith("[MOVE")).map((l) => l.split("]")[0] + "]").join(" "));
 
