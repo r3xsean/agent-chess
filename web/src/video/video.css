@@ -620,6 +620,7 @@
   padding: 14px 24px;
   border-radius: 0 12px 12px 0;
   background: rgba(0, 0, 0, 0.28);
+  overflow: hidden;
 }
 .v-variation.compact .v-var-comment {
   font-size: 38px;

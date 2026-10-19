@@ -1468,20 +1468,39 @@ function LitText({ text, lit, tint = true }: { text: string; lit: Lit[]; tint?: 
  * type, the newest highlighted and the ones to come faint, and the director's caption under it as a
  * comment (its room kept from the start, so nothing moves when it fades in).
  */
+/** The short's narrator line: its size, and the smallest it steps down to when a long one has to fit its box. */
+const COMPACT_COMMENT_PX = 38;
+const COMPACT_COMMENT_MIN_PX = 24;
+
 function Variation({ e, compact = false }: { e: NonNullable<View["engine"]>; compact?: boolean }) {
   // In the move list it opens to its height as it comes (and closes as it goes), so the rows above rise and
   // settle smoothly. Its height depends on how the caption wraps, so it's measured. In the short it has its
   // own box above the board, and just fades in and out.
   const fold = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const comment = useRef<HTMLDivElement>(null);
+  const variation = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (compact || !fold.current || !body.current) return;
-    fold.current.style.height = `${body.current.offsetHeight * e.open}px`;
+    if (!compact) {
+      if (fold.current && body.current) fold.current.style.height = `${body.current.offsetHeight * e.open}px`;
+      return;
+    }
+    // In the short its box has a fixed height: a long narrator line steps its type down until it fits,
+    // rather than spilling over the player's card below.
+    const box = variation.current;
+    const c = comment.current;
+    if (!box || !c) return;
+    let px = COMPACT_COMMENT_PX;
+    c.style.fontSize = `${px}px`;
+    while (px > COMPACT_COMMENT_MIN_PX && box.scrollHeight > box.clientHeight + 1) {
+      px -= 2;
+      c.style.fontSize = `${px}px`;
+    }
   });
   return (
     <div ref={fold} className={compact ? "v-var-box" : "v-var-fold"} style={{ opacity: e.open }}>
       <div ref={body} className="v-var-body">
-        <div className={`v-variation ${e.punish ? "punish" : ""} ${compact ? "compact" : ""}`}>
+        <div ref={variation} className={`v-variation ${e.punish ? "punish" : ""} ${compact ? "compact" : ""}`}>
           <div className="v-var-moves">
             {e.moves.map((mv, j) => (
               <span key={j} className={`v-var-move ${mv.state}`}>
@@ -1489,7 +1508,7 @@ function Variation({ e, compact = false }: { e: NonNullable<View["engine"]>; com
               </span>
             ))}
           </div>
-          <div className="v-var-comment" style={{ opacity: e.caption?.o ?? 0 }}>
+          <div ref={comment} className="v-var-comment" style={{ opacity: e.caption?.o ?? 0 }}>
             {/* The lit words' colour alone: a tint behind them would run into the next line of the big caption. */}
             {e.caption && <LitText text={e.caption.text} lit={e.caption.lit} tint={false} />}
           </div>
