@@ -489,6 +489,11 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     for (const c of said) asides.push({ ...c, start: start + c.start });
   };
 
+  // An `instead` line the director plays before its move rather than after.
+  const playsFirst = (j: number) => {
+    const a = g.moves[j] && moment(g.moves[j].ply)?.line;
+    return !!a?.first && a.kind === "instead" && !a.punish;
+  };
   g.moves.forEach((m, i) => {
     const last = i === g.moves.length - 1;
     const picked = moment(m.ply);
@@ -497,7 +502,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const ask = picked?.line;
     // An `instead` line the director plays first: the position they faced, what was there, and only then
     // their thinking and the move they really played.
-    const lineFirst = !!ask?.first && ask.kind === "instead" && !ask.punish;
+    const lineFirst = playsFirst(i);
     if (ask && lineFirst) {
       waitTalk();
       lineScene(i, ask, true);
@@ -526,9 +531,10 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     if (aside && !m.illegalAttempts.length) sayAside(i);
     const next = g.moves[i + 1];
     const clock = !!next && !keys[i + 1] && !next.illegalAttempts.length;
-    // A move with its engine line to follow only pauses long enough for its badge to land: the line takes
-    // over from there (its own lead-in is the rest of the wait), so it isn't held like a moment on its own.
-    const lineNext = !!ask && !lineFirst && !!planLine(g, i, ask);
+    // A move with an engine line to follow (its own, or the next move's played before it) only pauses long
+    // enough for its badge to land: the line takes over from there (its own lead-in is the rest of the wait),
+    // so it isn't held like a moment on its own.
+    const lineNext = (!!ask && !lineFirst && !!planLine(g, i, ask)) || (!!next && playsFirst(i + 1) && !!planLine(g, i + 1, moment(next.ply)!.line!));
     push({ kind: "move", i, anim, key, dur: anim + (lineNext ? LINE_AFTER_MOVE : hold(i)) + (last ? 1 : 0), ...(carry && { carry }), ...(clock && { clock }) });
 
     // The engine line the director asked for: what didn't happen, played out, then why it's better (one
