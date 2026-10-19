@@ -5,10 +5,49 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Color, Game } from "../shared/types";
 import { pauseGame } from "./pauses";
+import { seatKeys } from "./store";
 
 export const T3_DATABASE = process.env.T3_STATE_DB ?? path.join(homedir(), ".t3", "userdata", "statev2.sqlite");
 
 interface UsageFailure { id: string; at: number; resetAt?: number }
+
+/** A seat an orchestrator delegated: its task's clientRequestId is <game>-<seat>, with -r<n> for replacement tasks. */
+function delegatedThread(db: DatabaseSync, g: Game, color: Color) {
+  const player = color === "w" ? g.white : g.black;
+  // Exact decoded matching avoids mistaking another game's thread or an arbitrary title for this seat.
+  const threads = db.prepare(`SELECT thread_id FROM orchestration_v2_projection_threads
+    WHERE provider_instance_id = ? AND created_at >= ? AND thread_id LIKE ? ORDER BY created_at DESC`).all(
+    player.provider, new Date(g.createdAt).toISOString(), `%${g.id}-${color}%`,
+  ) as { thread_id: string }[];
+  const suffix = new RegExp(`:delegate-task:${g.id}-${color}(?:-r\\d+)?$`);
+  return threads.find((t) => {
+    try { return suffix.test(decodeURIComponent(t.thread_id)); } catch { return false; }
+  });
+}
+
+/** Threads found for webhook deliveries, so each is looked up once. */
+const byDelivery = new Map<string, string>();
+
+/**
+ * A seat the server started in its own thread: the thread whose first message came from the seat key's
+ * webhook delivery, among the threads made around its launch.
+ */
+function directThread(db: DatabaseSync, g: Game, color: Color) {
+  const launch = g.directLaunch?.[color];
+  const key = Object.entries(seatKeys).find(([, v]) => v.gameId === g.id && v.role === color)?.[0];
+  const delivery = key ? seatKeys[key].delivery : undefined;
+  if (!launch || !delivery) return undefined;
+  const known = byDelivery.get(delivery);
+  if (known) return { thread_id: known };
+  const threads = db.prepare(`SELECT thread_id FROM orchestration_v2_projection_threads WHERE created_at >= ? AND created_at <= ?`).all(
+    new Date(launch.at - 60_000).toISOString(), new Date(launch.at + 10 * 60_000).toISOString(),
+  ) as { thread_id: string }[];
+  const first = db.prepare(`SELECT turn_item_id FROM orchestration_v2_projection_turn_items
+    WHERE thread_id = ? AND type = 'user_message' ORDER BY ordinal LIMIT 1`);
+  const thread = threads.find((t) => ((first.get(t.thread_id) as { turn_item_id: string } | undefined)?.turn_item_id ?? "").includes(delivery.replace(/^delivery:relay:/, "")));
+  if (thread) byDelivery.set(delivery, thread.thread_id);
+  return thread;
+}
 
 /** T3's SQLite schema is internal. Keep its read-only adapter isolated and fail without pausing. */
 function readFailure(db: DatabaseSync, g: Game, color: Color): UsageFailure | null {
@@ -16,16 +55,7 @@ function readFailure(db: DatabaseSync, g: Game, color: Color): UsageFailure | nu
   if (player.provider === "human") return null;
   if (g.phase === "pregame" && g.interviews.pre[color]) return null;
   if (g.phase === "postgame" && g.interviews.post[color] && g.journalDone[color] && (!g.options?.learning || g.lessonsDone?.[color])) return null;
-  // Delegate clientRequestId is <game>-<seat>, with -r<n> for replacement tasks.
-  // Exact decoded matching avoids mistaking another game's thread or an arbitrary title for this seat.
-  const threads = db.prepare(`SELECT thread_id FROM orchestration_v2_projection_threads
-    WHERE provider_instance_id = ? AND created_at >= ? AND thread_id LIKE ? ORDER BY created_at DESC`).all(
-    player.provider, new Date(g.createdAt).toISOString(), `%${g.id}-${color}%`,
-  ) as { thread_id: string }[];
-  const suffix = new RegExp(`:delegate-task:${g.id}-${color}(?:-r\\d+)?$`);
-  const thread = threads.find((t) => {
-    try { return suffix.test(decodeURIComponent(t.thread_id)); } catch { return false; }
-  });
+  const thread = directThread(db, g, color) ?? delegatedThread(db, g, color);
   if (!thread) return null;
   const row = db.prepare(`SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
     WHERE thread_id = ? AND type = 'error' AND status = 'failed' AND parent_item_id IS NULL

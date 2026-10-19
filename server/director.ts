@@ -1,4 +1,4 @@
-import type { Classification, Color, Game, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoAside, VideoHook, VideoMoment, VideoPackaging, VideoPlan } from "../shared/types";
+import type { Classification, Color, Game, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoAside, VideoHook, VideoMoment, VideoPackaging, VideoPackagingOptions, VideoPlan } from "../shared/types";
 import type { VoiceManifest } from "../shared/voices";
 import { speakable } from "../shared/speech";
 import { triesOf } from "../shared/explain";
@@ -46,6 +46,30 @@ function names(commentary: string, san: string): boolean {
 
 /** A finished game still waiting for its video plan. */
 export const needsDirection = (g: Game) => !g.video && !!g.review && g.moves.length > 0;
+
+/** How many of each title, caption and thumbnail the director offers the user. */
+const PACKAGING_OPTIONS = { min: 3, max: 5 };
+
+const PACKAGING_EXAMPLE = {
+  titles: [
+    "GPT-6 Astra traps Sonnet's rook… and Sonnet doesn't notice for 10 moves",
+    "Sonnet called its rook \"totally safe\". GPT-6 Astra disagreed",
+    "Sonnet vs GPT-6 Astra: the rook that had nowhere to go",
+  ],
+  captions: ["Sonnet was SO sure that rook was safe 💀 #chess #ai", "POV: your rook is \"totally safe\" #chess #ai #chesstok", "Count how long it takes Sonnet to notice 👀 #chess #ai"],
+  thumbnails: [
+    { ply: 54, text: "TOTALLY SAFE" },
+    { ply: 56, text: "NOWHERE TO GO" },
+    { ply: 50, text: "SONNET IS WINNING" },
+  ],
+};
+
+/** How to write the packaging (the full plan's brief and the packaging-only one share it); the first line follows "packaging:". */
+const PACKAGING_RULES = [
+  `options for the user to pick from, your favourite first. \`titles\`: ${PACKAGING_OPTIONS.min}–${PACKAGING_OPTIONS.max} YouTube titles (each at most 80 characters, the story not the notation, names the models). \`captions\`: ${PACKAGING_OPTIONS.min}–${PACKAGING_OPTIONS.max} TikTok captions (each at most 150 characters, may end with a few hashtags). \`thumbnails\`: ${PACKAGING_OPTIONS.min}–${PACKAGING_OPTIONS.max}, each the move whose position makes it (\`ply\`) and at most 4 words of big text (\`text\`).`,
+  "- Make them real alternatives, not rewordings of one idea: give each title, caption and thumbnail its own angle on the story (the stakes, the twist, a player's own words or false confidence, the rivalry, the absurdity). The user sees them side by side and picks one title, one caption and one thumbnail, so near-twins waste the choice. Every option must follow every rule here: none is a throwaway.",
+  "- Selling the video without spoiling it: the title, thumbnail and caption are what people see before they click. They may name the twist (the blunder, the trap, the comeback), because the viewer still wants to see how it happened, but never the ending: who won, that it was drawn, or that someone escaped. A title and a thumbnail should make a pair that never says the same thing twice: make your favourite title and favourite thumbnail one, and give every other thumbnail at least one of your titles it pairs with. One sets up the stakes (who was winning, how sure they were) and the other delivers the turn. The thumbnail shows the position after its move with that move's engine verdict icon (a blunder's ?? already says something went wrong). When the title names the twist, the thumbnail sells the stakes instead of showing the punishment again: the winning side's last strong move before the turn (\"MATE IN 24…\"), or the blunder with the mover's false confidence (\"TOTALLY SAFE\"). When the title only sets things up, the punishment itself can be the thumbnail.",
+];
 
 export function directorBrief(g: Game): string {
   const name = (c: Color) => sideName(g, c);
@@ -188,11 +212,7 @@ export function directorBrief(g: Game): string {
         interviewLines: { pre: { w: "…", b: "…" }, post: { w: "…", b: "…" } },
         interviewDelivery: { pre: { w: "cocky", b: "measured" }, post: { w: "rueful", b: "gracious" } },
         hook: { ply: 55, quote: "…exact sentences from ply 55's commentary…", delivery: "breezy, totally sure", caption: "Black thinks the rook is safe. It's already lost." },
-        packaging: {
-          title: "GPT-6 Astra traps Sonnet's rook… and Sonnet doesn't notice for 10 moves",
-          caption: "Sonnet was SO sure that rook was safe 💀 #chess #ai",
-          thumbnail: { ply: 54, text: "TOTALLY SAFE" },
-        },
+        packaging: PACKAGING_EXAMPLE,
       },
       null,
       2,
@@ -233,8 +253,7 @@ export function directorBrief(g: Game): string {
     `  - The video shouldn't go quiet for long: from the first move to the result, at most ${MAX_SILENCE.landscape} seconds in the YouTube cut (${MAX_SILENCE.portrait} in the short) may pass with nothing said (no quote, aside or engine line on screen). The server works out the video's timing and sends the plan back with every silent stretch, by ply: fill each with an aside that holds, or a moment where one belongs. Where nothing said in a stretch holds beyond its own move, don't force one in: list a ply from that stretch in \`quiet\` (\"quiet\": [57, 92]) and the stretch is left as it is.`,
     "- interviewLines: for each interview, quote one to three consecutive sentences exactly, at most 40 words.",
     "- hook (required): the cold open. Both videos start on this moment before rewinding to the start, so it's what decides whether a viewer keeps watching. Pick the most shocking payoff, and fit it to the kind of game: for a built attack, the shot with the attacker's calculation (not the defender's mistake); for a swindle, the winning side's most confident line just before it turns; for a thrown-away win, the leader's line on the move that throws it; otherwise usually the blunder with the mover's most confident line, or the reaction after it. `quote` comes from that move's commentary like any quote (at most 40 words; leave it out on a human's move). `caption` is on-screen text of at most 12 words that makes the viewer need to see how it happened, without notation: \"Sonnet thinks it's winning. It's getting mated in one.\"",
-    "- packaging (required): `title` for YouTube (at most 80 characters, the story not the notation, names the models); `caption` for TikTok (at most 150 characters, may end with a few hashtags); `thumbnail`: the move whose position makes the thumbnail and at most 4 words of big text.",
-    "- Selling the video without spoiling it: the title, thumbnail and caption are what people see before they click. They may name the twist (the blunder, the trap, the comeback), because the viewer still wants to see how it happened, but never the ending: who won, that it was drawn, or that someone escaped. Make the title and thumbnail a pair that never says the same thing twice. One sets up the stakes (who was winning, how sure they were) and the other delivers the turn. The thumbnail shows the position after its move with that move's engine verdict icon (a blunder's ?? already says something went wrong). When the title names the twist, the thumbnail sells the stakes instead of showing the punishment again: the winning side's last strong move before the turn (\"MATE IN 24…\"), or the blunder with the mover's false confidence (\"TOTALLY SAFE\"). When the title only sets things up, the punishment itself can be the thumbnail.",
+    ...PACKAGING_RULES.map((l, n) => (n ? l : `- packaging (required): ${l}`)),
     `- Everything spoken (quotes, asides, hook, interview lines) is voiced, and together it must stay under ${VOICE_BUDGET} characters. Plans that follow the limits above fit easily.`,
     "If the server rejects the plan it says why; fix it and submit again. Once it passes, it's read back to you: every quote with its lit words, every drawing and ref with what it points at on the board and its colour, and when each aside is said. Check each line against what the player meant (and that the asides read in order as a conversation), then run `confirm` to save it, or fix the plan and submit it again. Saving it completes your task.",
   );
@@ -440,22 +459,15 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
   };
   if (words(hook.caption) > 14) throw new ActionError(`hook.caption is ${words(hook.caption)} words; keep it to at most 12.`);
 
-  // Titles, caption and thumbnail.
-  const pk = p.packaging;
-  if (!pk || typeof pk !== "object") throw new ActionError("The plan needs `packaging`: title, caption and thumbnail.");
-  const thumbText = text(pk.thumbnail?.text, "packaging.thumbnail.text", 40, true)!;
-  if (words(thumbText) > 5) throw new ActionError(`packaging.thumbnail.text is ${words(thumbText)} words; keep it to at most 4.`);
-  const packaging: VideoPackaging = {
-    title: text(pk.title, "packaging.title", 100, true)!,
-    caption: text(pk.caption, "packaging.caption", 220, true)!,
-    thumbnail: { ply: moveAt(g, pk.thumbnail?.ply, "packaging.thumbnail").ply, text: thumbText },
-  };
+  // Titles, captions and thumbnails to pick from; the favourites are used until the user picks.
+  const packagingOptions = packagingChoices(g, p.packaging);
+  const packaging = favourites(packagingOptions);
 
   const asides = asideList(g, p.asides, moments);
   if (p.quiet !== undefined && p.quiet !== null && !Array.isArray(p.quiet)) throw new ActionError("`quiet` must be a list of plies.");
   const quiet = [...new Set(((p.quiet ?? []) as unknown[]).map((x, n) => moveAt(g, x, `quiet[${n}]`).ply))].sort((a, b) => a - b);
   if (quiet.length > MAX_QUIET) throw new ActionError(`${quiet.length} plies in \`quiet\`; keep it to at most ${MAX_QUIET}, one per stretch.`);
-  const plan: VideoPlan = { moments, ...(asides && { asides }), ...(quiet.length && { quiet }), interviewLines, interviewDelivery, hook, packaging, createdAt: Date.now() };
+  const plan: VideoPlan = { moments, ...(asides && { asides }), ...(quiet.length && { quiet }), interviewLines, interviewDelivery, hook, packaging, packagingOptions, createdAt: Date.now() };
 
   // Every line is spoken in the player's voice, which is paid by the character: a plan that passes here
   // always gets its voices, so the limit is enforced now, while the director can still trim.
@@ -484,6 +496,119 @@ export function validatePlan(g: Game, raw: unknown): VideoPlan {
       `The TikTok cut goes more than ${MAX_SILENCE.portrait} s with nothing said here:\n${silentShort.map((q) => `- ${q}`).join("\n")}\nFill each by marking an aside from the plies in it \`"short": true\` (or adding one that holds), so the short says it too. If nothing said there holds beyond its own move, list a ply from the stretch in \`quiet\` instead.`,
     );
   return plan;
+}
+
+/** The director's titles, captions and thumbnails: 3–5 of each, all different, each within its limits. */
+export function packagingChoices(g: Game, raw: unknown): VideoPackagingOptions {
+  const pk = raw as any;
+  const shape = `{ "titles": [...], "captions": [...], "thumbnails": [{ "ply": 54, "text": "..." }, ...] }`;
+  if (!pk || typeof pk !== "object") throw new ActionError(`The plan needs \`packaging\`: ${shape}.`);
+  if (!Array.isArray(pk.titles) && (pk.title || pk.thumbnail)) throw new ActionError(`\`packaging\` takes several options of each now, your favourite first: ${shape}.`);
+  const list = <T>(key: string, one: (x: unknown, where: string) => T, sig: (x: T) => string): T[] => {
+    const xs = pk[key];
+    const { min, max } = PACKAGING_OPTIONS;
+    if (!Array.isArray(xs) || xs.length < min || xs.length > max) throw new ActionError(`packaging.${key}: give ${min}–${max} of them, your favourite first${Array.isArray(xs) ? ` (you gave ${xs.length})` : ""}.`);
+    const out = xs.map((x, n) => one(x, `packaging.${key}[${n}]`));
+    const seen = new Map<string, number>();
+    out.forEach((x, n) => {
+      const k = sig(x);
+      if (seen.has(k)) throw new ActionError(`packaging.${key}[${n}] is the same as packaging.${key}[${seen.get(k)}]: make each one different.`);
+      seen.set(k, n);
+    });
+    return out;
+  };
+  const lower = (s: string) => s.toLowerCase();
+  return {
+    titles: list(
+      "titles",
+      (x, where) => {
+        const t = text(x, where, 100, true)!;
+        if (/[<>]/.test(t)) throw new ActionError(`${where}: YouTube doesn't allow < or > in a title.`);
+        return t;
+      },
+      lower,
+    ),
+    captions: list("captions", (x, where) => text(x, where, 220, true)!, lower),
+    thumbnails: list(
+      "thumbnails",
+      (x: any, where) => {
+        const t = text(x?.text, `${where}.text`, 40, true)!;
+        if (words(t) > 5) throw new ActionError(`${where}.text is ${words(t)} words; keep it to at most 4.`);
+        return { ply: moveAt(g, x?.ply, where).ply, text: t };
+      },
+      (x) => `${x.ply}|${lower(x.text)}`,
+    ),
+  };
+}
+
+/** The director's favourite of each: what the upload uses until the user picks. */
+export const favourites = (o: VideoPackagingOptions): VideoPackaging => ({ title: o.titles[0], caption: o.captions[0], thumbnail: o.thumbnails[0] });
+
+/** The options as the director gave them, for it to check (and for the packaging command's answer). */
+export function packagingReadback(g: Game, o: VideoPackagingOptions): string {
+  const move = (ply: number) => {
+    const m = g.moves.find((x) => x.ply === ply)!;
+    return `after ${moveNo(ply)} ${m.san} by ${sideName(g, m.color)}${m.analysis?.classification ? ` (${m.analysis.classification})` : ""}`;
+  };
+  return [
+    "YouTube titles:",
+    ...o.titles.map((t, n) => `  ${n + 1}. ${t}  (${t.length} characters)`),
+    "TikTok captions:",
+    ...o.captions.map((t, n) => `  ${n + 1}. ${t}  (${t.length} characters)`),
+    "Thumbnails:",
+    ...o.thumbnails.map((t, n) => `  ${n + 1}. "${t.text}", ${move(t.ply)}`),
+  ].join("\n");
+}
+
+/**
+ * The brief for new titles, captions and thumbnails on a game whose plan is already made: the game's
+ * shape, the plan's story (its cold open and moments) and the options it has now, without re-planning anything.
+ */
+export function packagingBrief(g: Game): string {
+  const plan = g.video!;
+  const name = (c: Color) => sideName(g, c);
+  const verdict = (m: MoveRecord) => `${m.analysis?.classification ?? "unrated"}; eval ${formatScore(m.analysis?.evalAfter)}`;
+  const at = (ply: number) => g.moves.find((m) => m.ply === ply);
+  const out: string[] = [
+    "VIDEO PACKAGING — new titles, captions and thumbnails for this game's replay video.",
+    "",
+    "The video itself is planned and stays as it is. What's being redone is what people see before they click: the YouTube title, the TikTok caption and the thumbnail. You give several options of each, and the user picks one of each.",
+    "",
+    `Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.`,
+    `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
+    ...historyLines(g),
+    "",
+    ...shapeLines(g),
+    "",
+    "## The video's story",
+    "(the plan's cold open and moments; `why` is the director's note on why each matters)",
+  ];
+  if (plan.hook) {
+    const m = at(plan.hook.ply);
+    out.push(`Cold open: ply ${plan.hook.ply}${m ? `, ${moveNo(m.ply)} ${m.san} by ${name(m.color)} (${verdict(m)})` : ""}. On screen: "${plan.hook.caption}"${plan.hook.quote ? ` Said: "${plan.hook.quote}"` : ""}`);
+  }
+  for (const x of plan.moments) {
+    const m = at(x.ply);
+    if (!m) continue;
+    out.push(`ply ${x.ply} — ${moveNo(m.ply)} ${m.san} by ${name(m.color)}: ${verdict(m)}; importance ${x.importance}. ${x.why}${x.thought ? `\n  said: "${x.thought}"` : ""}`);
+  }
+  // Big verdicts the plan didn't make moments of can still make a thumbnail.
+  const big = g.moves.filter((m) => !plan.moments.some((x) => x.ply === m.ply) && ["brilliant", "great", "miss", "mistake", "blunder"].includes(m.analysis?.classification ?? ""));
+  if (big.length) out.push("", "Other moves with a big verdict:", ...big.map((m) => `ply ${m.ply} — ${moveNo(m.ply)} ${m.san} by ${name(m.color)}: ${verdict(m)}`));
+  const now = plan.packagingOptions ?? { titles: plan.packaging ? [plan.packaging.title] : [], captions: plan.packaging ? [plan.packaging.caption] : [], thumbnails: plan.packaging ? [plan.packaging.thumbnail] : [] };
+  if (now.titles.length) out.push("", "## What it has now (keep any that are good, and make the rest new)", packagingReadback(g, now));
+  out.push(
+    "",
+    "## Your answer",
+    "Write a JSON file in your working folder and submit it with `packaging <file.json>`. Shape:",
+    "```json",
+    JSON.stringify(PACKAGING_EXAMPLE, null, 2),
+    "```",
+    ...PACKAGING_RULES.map((l, n) => (n ? l : `- ${l}`)),
+    "- A thumbnail's `ply` can be any move of the game, not only the ones listed above.",
+    "If the server rejects them it says why; fix them and submit again. Once they pass they're saved for the user to pick from, and your task is complete.",
+  );
+  return out.join("\n");
 }
 
 /** How long each cut may go with nothing said, from the first move to the result: the short, quicker, sooner. */
@@ -1022,6 +1147,7 @@ export function planReadback(g: Game, plan: VideoPlan): string {
     }
     out.push("");
   }
+  if (plan.packagingOptions) out.push("Packaging, for the user to pick from (each one must be good enough to be picked):", packagingReadback(g, plan.packagingOptions), "");
   return out.join("\n");
 }
 

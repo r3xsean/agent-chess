@@ -67,6 +67,10 @@ export function gameVideoDir(gameId: string, make = false): string {
 
 export const videoPath = (gameId: string, f: VideoFile) => path.join(gameVideoDir(gameId), fileName(gameId, f));
 export const videoUrl = (gameId: string, f: VideoFile) => `/videos/${encodeURIComponent(gameFolder(gameId))}/${fileName(gameId, f)}`;
+/** The thumbnail of the director's option n (from 0) to pick from, "<id>-thumb-<n + 1>.png", made with the YouTube render's thumbnail. */
+const thumbOptionName = (gameId: string, n: number) => `${gameId}-thumb-${n + 1}.png`;
+export const thumbOptionPath = (gameId: string, n: number) => path.join(gameVideoDir(gameId), thumbOptionName(gameId, n));
+export const thumbOptionUrl = (gameId: string, n: number) => `/videos/${encodeURIComponent(gameFolder(gameId))}/${thumbOptionName(gameId, n)}`;
 
 /**
  * Move videos from the old flat layout (all games' files side by side in data/videos) into each game's

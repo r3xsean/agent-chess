@@ -1,26 +1,109 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { PublishPlatform, PublishState, PublishVisibility, VideoPackaging } from "../../../shared/types";
+import type { PublishPlatform, PublishState, PublishVisibility, VideoPackaging, VideoPackagingOptions } from "../../../shared/types";
 
 const PLATFORMS: PublishPlatform[] = ["youtube", "tiktok"];
 
-/** A labelled block of text with a copy button. */
-function Copyable({ label, text, multiline }: { label: string; text: string; multiline?: boolean }) {
+/**
+ * A labelled block of text with copy and edit buttons. `onSave` stores an edit (rejecting with the
+ * reason it can't); `onReset`, when given, offers to go back to the generated text.
+ */
+function EditableText({
+  label,
+  text,
+  limit,
+  multiline,
+  locked,
+  onSave,
+  onReset,
+}: {
+  label: string;
+  text: string;
+  limit: number;
+  multiline?: boolean;
+  /** Why it can't be edited right now. */
+  locked?: string;
+  onSave: (text: string) => Promise<void>;
+  onReset?: () => Promise<void>;
+}) {
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const copy = () =>
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     });
+  const run = async (f: () => Promise<void>) => {
+    setSaving(true);
+    setError("");
+    try {
+      await f();
+      setDraft(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const save = () => run(() => (draft!.trim() === text.trim() ? Promise.resolve() : onSave(draft!)));
+  const reset = () => onReset && confirm(`Throw away your ${label.toLowerCase()} and go back to the generated one?`) && run(onReset);
+
+  if (draft !== null) {
+    const over = draft.trim().length > limit;
+    return (
+      <div className="rp-copy">
+        <div className="rp-copy-head">
+          <span className="rp-label">{label}</span>
+          <span className={over ? "rp-error" : "rp-muted"}>
+            {draft.trim().length}/{limit}
+          </span>
+        </div>
+        {multiline ? (
+          <textarea className="rp-copy-text rp-edit" rows={10} value={draft} onChange={(e) => setDraft(e.target.value)} disabled={saving} autoFocus />
+        ) : (
+          <input
+            className="rp-copy-text rp-edit"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => (e.key === "Enter" ? save() : e.key === "Escape" && setDraft(null))}
+            disabled={saving}
+            autoFocus
+          />
+        )}
+        <div className="rp-row">
+          <button className="rp-small" onClick={save} disabled={saving || over || (!onReset && !draft.trim())}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button className="rp-small" onClick={() => (setDraft(null), setError(""))} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+        {error && <div className="rp-error">{error}</div>}
+      </div>
+    );
+  }
   return (
     <div className="rp-copy">
       <div className="rp-copy-head">
         <span className="rp-label">{label}</span>
-        <button className="rp-small" onClick={copy}>
-          {copied ? "Copied" : "Copy"}
-        </button>
+        <span className="rp-row">
+          {onReset && (
+            <button className="rp-small" onClick={reset} disabled={saving || !!locked} title="Your edit is in use: go back to the generated text">
+              Use generated
+            </button>
+          )}
+          <button className="rp-small" onClick={() => setDraft(text)} disabled={!!locked} title={locked}>
+            Edit
+          </button>
+          <button className="rp-small" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </span>
       </div>
       {multiline ? <pre className="rp-copy-text">{text}</pre> : <div className="rp-copy-text">{text}</div>}
+      {error && <div className="rp-error">{error}</div>}
     </div>
   );
 }
@@ -39,13 +122,18 @@ interface RenderJob {
   format?: Format;
   error?: string;
   note?: string;
+  /** Only the thumbnails and upload text. */
+  packageOnly?: boolean;
 }
 
 interface RenderState {
   jobs: RenderJob[];
   videos: { kind: "youtube" | "tiktok"; url: string; bytes: number; at: number }[];
-  /** The director's title, caption and thumbnail pick; the rendered upload text and thumbnail image. */
+  /** The title, caption and thumbnail in use; the rendered upload text and thumbnail image. */
   packaging: VideoPackaging | null;
+  /** The director's options to pick from, its favourite first, and each thumbnail option's image (null: not made yet). */
+  packagingOptions: VideoPackagingOptions | null;
+  thumbOptionUrls: (string | null)[];
   description: string | null;
   thumbUrl: string | null;
   music: string[];
@@ -57,6 +145,62 @@ interface RenderState {
 }
 
 const PLATFORM_LABEL: Record<PublishPlatform, string> = { youtube: "YouTube", tiktok: "TikTok" };
+
+type Pick = { title?: number; caption?: number; thumbnail?: number };
+
+/**
+ * The director's titles, captions and thumbnails side by side, its favourite first: clicking one uses it
+ * for the upload (the fields below show what's in use, and can still be reworded by hand).
+ */
+function PackagingPicker({ state, locked, onPick }: { state: RenderState; locked?: string; onPick: (p: Pick) => Promise<void> }) {
+  const o = state.packagingOptions!;
+  const pk = state.packaging!;
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const choose = async (p: Pick) => {
+    setSaving(true);
+    setError("");
+    try {
+      await onPick(p);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const texts = (label: string, key: "title" | "caption", list: string[], current: string) => (
+    <div className="rp-pick">
+      <span className="rp-label">{label}</span>
+      {list.map((t, n) => (
+        <button key={n} className={`rp-pick-text${t === current ? " on" : ""}`} onClick={() => t !== current && choose({ [key]: n })} disabled={saving || !!locked} title={locked}>
+          <span className="rp-pick-n">{n + 1}</span>
+          <span>{t}</span>
+          {n === 0 && <span className="rp-pick-fav">director's favourite</span>}
+        </button>
+      ))}
+    </div>
+  );
+  const isThumb = (t: { ply: number; text: string }) => t.ply === pk.thumbnail.ply && t.text === pk.thumbnail.text;
+  return (
+    <div className="rp-picker">
+      <div className="rp-muted">The director's options, its favourite first. Click one to use it; until you do, the favourites are used.</div>
+      {texts("YouTube title", "title", o.titles, pk.title)}
+      {texts("TikTok caption", "caption", o.captions, pk.caption)}
+      <div className="rp-pick">
+        <span className="rp-label">Thumbnail</span>
+        <div className="rp-pick-thumbs">
+          {o.thumbnails.map((t, n) => (
+            <button key={n} className={`rp-pick-thumb${isThumb(t) ? " on" : ""}`} onClick={() => !isThumb(t) && choose({ thumbnail: n })} disabled={saving || !!locked} title={locked ?? `"${t.text}", after ply ${t.ply}`}>
+              {state.thumbOptionUrls[n] ? <img src={state.thumbOptionUrls[n]!} alt={t.text} /> : <span className="rp-pick-thumb-wait">{t.text}<br /><small>ply {t.ply}: picture not made yet</small></span>}
+              <span className="rp-pick-n">{n + 1}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {error && <div className="rp-error">{error}</div>}
+    </div>
+  );
+}
 
 /**
  * Post the videos from the user's own browser: the click summons a publisher agent (through the T3
@@ -234,6 +378,12 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
 
   const toggle = (f: Format) => setFormats((cur) => (cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f]));
 
+  /** Store an edit to the upload text (the publisher posts with it); throws the server's reason it can't. */
+  const editText = async (edits: { title?: string; description?: string; caption?: string }) => take(await api<RenderState>(`/api/games/${gameId}/upload-text`, edits));
+  const editLock = state?.publish?.status === "requested" ? "A publisher is posting these videos right now" : undefined;
+  /** Use one of the director's options; throws the server's reason it can't. */
+  const pick = async (picks: Pick) => take(await api<RenderState>(`/api/games/${gameId}/packaging/pick`, picks));
+
   return (
     <div className="render-panel">
       <h3>🎬 Render MP4</h3>
@@ -279,7 +429,7 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
       </div>
 
       <button className="rp-go" onClick={() => render()} disabled={busy || !formats.length}>
-        {busy ? "Rendering…" : state?.videos.length ? "Render again (same plan)" : "Render"}
+        {busy ? (job!.packageOnly ? "Making the thumbnails…" : "Rendering…") : state?.videos.length ? "Render again (same plan)" : "Render"}
       </button>
       {/* The whole process again from the director's plan: to re-cut a video, or get a plan with newer features. */}
       {state?.directed && state.summonAvailable && (
@@ -323,9 +473,20 @@ export function RenderPanel({ gameId, onPlan }: { gameId: string; onPlan: () => 
       {state?.packaging && (
         <div className="rp-packaging">
           <h3>📦 For the upload</h3>
-          <Copyable label="YouTube title" text={state.packaging.title} />
-          {state.description && <Copyable label="YouTube description" text={descriptionBody(state.description)} multiline />}
-          <Copyable label="TikTok caption" text={state.packaging.caption} />
+          {state.packagingOptions && <PackagingPicker state={state} locked={editLock} onPick={pick} />}
+          <EditableText label="YouTube title" text={state.packaging.title} limit={100} locked={editLock} onSave={(t) => editText({ title: t })} />
+          {(state.packaging.description ?? state.description) && (
+            <EditableText
+              label="YouTube description"
+              text={state.packaging.description ?? descriptionBody(state.description!)}
+              limit={5000}
+              multiline
+              locked={editLock}
+              onSave={(t) => editText({ description: t })}
+              onReset={state.packaging.description && state.description ? () => editText({ description: "" }) : undefined}
+            />
+          )}
+          <EditableText label="TikTok caption" text={state.packaging.caption} limit={2200} multiline locked={editLock} onSave={(t) => editText({ caption: t })} />
           {state.thumbUrl ? (
             <div className="rp-copy">
               <div className="rp-copy-head">

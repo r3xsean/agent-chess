@@ -375,6 +375,8 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
     { model: "gpt-6.1-sol", effort: "high", personality: "streamer" },
   ]);
   const [double, setDouble] = useState(false);
+  const [boards, setBoards] = useState(0);
+  const [breakHours, setBreakHours] = useState(0);
   const [learning, setLearning] = useState(true);
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
@@ -418,6 +420,16 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
               </span>
             </div>
             <Chess960Toggle value={c960} onChange={setC960} tournament />
+            <label className="field">Boards
+              <select value={boards} onChange={(e) => setBoards(Number(e.target.value))}>
+                <option value={0}>Automatic (as many as players fill)</option>
+                {Array.from({ length: Math.max(1, Math.floor(n / 2)) }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+              </select>
+            </label>
+            <label className="field">Break between games (hours)
+              <input type="number" min="0" max="8760" step="0.25" value={breakHours} onChange={(e) => setBreakHours(Number(e.target.value))} />
+              <small>After all active boards finish. Set to 0 for no break.</small>
+            </label>
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
             <LearningToggle value={learning} onChange={setLearning} />
             <RatedToggle value={rated} onChange={setRated} tournament />
@@ -433,7 +445,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, rated, chess960: c960.on });
+                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, rated, chess960: c960.on, boards: boards || undefined, breakHours });
                     setCreated(t.id);
                   } catch (e) {
                     setErr(String(e));

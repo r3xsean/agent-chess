@@ -1,4 +1,4 @@
-import type { Color, Game } from "../shared/types";
+import type { Color, Game, SeatRole } from "../shared/types";
 import { personalityById, RISK_LABEL, riskRule } from "../shared/personalities";
 import { CLI } from "./paths";
 import { agentDir } from "./store";
@@ -194,6 +194,36 @@ Run every command as:  ${cli} <command> --key ${key}
 3. \`confirm\` prints DONE once the plan is saved: your task is complete.`;
 }
 
+/** A director for new titles, captions and thumbnails only, on a game whose plan is saved. */
+export function packagingPrompt(g: Game): string {
+  const key = directorKey(g.id);
+  const cli = `node "${CLI}"`;
+  return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The replay video of game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is planned. Your job is only what people see before they click: several YouTube titles, TikTok captions and thumbnails for the user to pick from.
+
+Run every command as:  ${cli} <command> --key ${key}
+1. Run \`packaging-brief\`. It prints the game's shape, the video's story, what it has now and how to write them.
+2. Write them as JSON in ${agentDir(g.id, "d")} and submit with \`packaging <file.json>\`. If they're rejected, read why, fix them and resubmit.
+3. \`packaging\` prints DONE once they're saved: your task is complete. Don't run \`brief\`, \`direct\` or \`confirm\`: the rest of the plan stays as it is.`;
+}
+
+/** The task for packagingPrompt, for the orchestrator to delegate. */
+export function packagingLaunch(g: Game) {
+  const who = DEFAULT_DIRECTOR;
+  return {
+    gameId: g.id,
+    tasks: [
+      {
+        role: "director",
+        seat: "d",
+        title: `🎬 Titles & thumbnails — ${g.id}`,
+        clientRequestId: `${g.id}-packaging${(g.video?.packagingRedos ?? 0) + 1}`,
+        target: { providerInstanceId: who.provider, model: who.model, options: effortOption(who.provider, who.effort) },
+        prompt: packagingPrompt(g),
+      },
+    ],
+  };
+}
+
 /** How long a launched director is left to finish before another run may launch one. */
 const DIRECTOR_STALE_MS = 45 * 60_000;
 
@@ -208,8 +238,7 @@ export function directorLaunch(g: Game, effort?: string) {
   if (!needsDirection(g)) return none(g.video ? "The video plan is already made." : "There's nothing to plan: the game has no moves or no engine review yet.");
   const since = g.launched?.d ? Date.now() - g.launched.d : Infinity;
   if (since < DIRECTOR_STALE_MS) return none(`Another run launched this game's director ${Math.round(since / 60_000)} min ago; leave it to that run.`);
-  const base = g.broadcaster?.enabled && !g.videoRedos ? g.broadcaster : DEFAULT_DIRECTOR;
-  const who = { ...base, effort: effort ?? base.effort };
+  const who = directorWho(g, effort);
   claimSeats(g, ["d"]);
   return {
     gameId: g.id,
@@ -227,8 +256,24 @@ export function directorLaunch(g: Game, effort?: string) {
   };
 }
 
+/** Who directs a game's video: its broadcaster's model for a broadcast game's first plan, otherwise the default director. */
+export function directorWho(g: Game, effort?: string) {
+  const base = g.broadcaster?.enabled && !g.videoRedos ? g.broadcaster : DEFAULT_DIRECTOR;
+  return { provider: base.provider, model: base.model, effort: effort ?? base.effort };
+}
+
 const effortOption = (provider: string, effort: string) =>
   provider === "codex" ? { reasoningEffort: effort } : { effort };
+
+/**
+ * What an agent the server launched itself is told by `start`: its thread's title, then its task. The
+ * director's seat does whichever job the game is at: the plan, or (once it's saved) new packaging.
+ */
+export function seatTask(g: Game, role: SeatRole): { title: string; prompt: string } {
+  if (role === "w" || role === "b") return { title: `♟ ${colorName(role)}: ${fullName(role === "w" ? g.white : g.black)} — ${g.id}`, prompt: playerPrompt(g, role) };
+  if (role === "x") return { title: `🎙 Broadcaster — ${g.id}`, prompt: broadcasterPrompt(g) };
+  return g.video ? { title: `🎬 Titles & thumbnails — ${g.id}`, prompt: packagingPrompt(g) } : { title: `🎬 Video director — ${g.id}`, prompt: directorPrompt(g) };
+}
 
 export function launchSpec(g: Game) {
   // A human seat plays from the website: only the agents are launched.

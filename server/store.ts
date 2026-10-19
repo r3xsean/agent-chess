@@ -30,7 +30,8 @@ export const games = new Map<string, Game>();
 export const tournaments = new Map<string, Tournament>();
 export let players: Record<string, PlayerStats> = {};
 /** Secret per seat, so the CLI can only act for the seat it was given (w, b, the broadcaster x, the video director d). */
-export let seatKeys: Record<string, { gameId: string; role: SeatRole }> = {};
+/** Seat keys, local only. `delivery`: the T3 webhook delivery that started the seat's own thread (it finds that thread). */
+export let seatKeys: Record<string, { gameId: string; role: SeatRole; delivery?: string }> = {};
 
 /** Orchestrator credential for endpoints that reveal seat keys (launch specs). Stored in data/admin-token.txt. */
 export let adminToken = "";

@@ -7,6 +7,7 @@ import path from "node:path";
 import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { checkUsageLimits } from "../server/usageLimits";
+import { seatKeys } from "../server/store";
 import { currentThinkMs } from "../shared/thinkingClock";
 import type { Game } from "../shared/types";
 
@@ -115,6 +116,18 @@ try {
   fail("unrelated-error", Date.now(), "usage_limit", unrelated);
   checkUsageLimits([detached], database, () => {});
   assert.equal(detached.clockPause, undefined, "matching substrings cannot associate another task");
+  // A seat the server started in its own thread is found by the webhook delivery that started it.
+  const direct = JSON.parse(JSON.stringify(detached));
+  direct.directLaunch = { b: { at: Date.now(), relaunches: 0 } };
+  seatKeys["direct-b-key"] = { gameId: id, role: "b", delivery: "delivery:relay:test-delivery-1" };
+  const own = "thread:project:test:direct-run-1";
+  db.prepare("INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?)").run(own, "codex", new Date().toISOString());
+  db.prepare("INSERT INTO orchestration_v2_projection_turn_items VALUES (?, ?, 'user_message', 'completed', NULL, ?, 0, '{}')")
+    .run("turn-item:message:scheduled-task-message%3Awebhook%3Adelivery%3Arelay%3Atest-delivery-1", own, new Date().toISOString());
+  await sleep(25);
+  fail("direct-usage", Date.now(), "usage_limit", own);
+  checkUsageLimits([direct], database, () => {});
+  assert.deepEqual(direct.clockPause?.seats, ["b"], "a directly launched seat's usage limit pauses it");
   const illegal = { turn: { move: "a1a8", commentary: "A rejected attempt.", eval: "0" } };
   assert.equal((await action("b", "move", illegal)).status, 400);
   assert.equal((await action("b", "move", { turn: { move: "h1h8", commentary: "Another rejected attempt.", eval: "0" } })).status, 400);

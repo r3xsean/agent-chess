@@ -9,7 +9,6 @@ import { lookupOpening } from "./openings";
 import { glickoUpdate } from "./glicko";
 import { mirrorChanged } from "./mirror";
 import { scoresChanged } from "./predictions";
-import { triggerOrchestrator } from "./summon";
 import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
 import {
@@ -136,6 +135,17 @@ export const seatKeysFor = (gameId: string) =>
       .map(([k, v]) => [v.role, k]),
   ) as Record<SeatRole, string>;
 
+/**
+ * A new key for a seat, the old one dropped: a relaunched agent takes the seat over, and the agent it
+ * replaces (gone quiet, but maybe not gone) can't act for it any more.
+ */
+export function rotateSeatKey(gameId: string, role: SeatRole) {
+  for (const [k, v] of Object.entries(seatKeys)) if (v.gameId === gameId && v.role === role) delete seatKeys[k];
+  const key = addSeatKey(gameId, role);
+  saveSeatsNow();
+  return key;
+}
+
 /** A seat handed to an orchestrator whose agent never shows up is free again after this long. */
 const CLAIM_MS = 10 * 60_000;
 
@@ -261,8 +271,19 @@ export const boardsOf = (t: Tournament) => {
  * (with more than one board) no model that is already in a rated game anywhere. An unrated
  * tournament's games don't hold their models up either, so a model can be in several of them at once.
  */
-export function startablePairings(t: Tournament) {
+export function tournamentBreakUntil(t: Tournament): number {
+  if (!(t.breakHours && t.breakHours > 0)) return 0;
+  let last = 0;
+  for (const p of t.pairings) {
+    const g = p.gameId ? games.get(p.gameId) : undefined;
+    if (g?.phase === "finished") last = Math.max(last, g.finishedAt ?? g.endedAt ?? g.createdAt);
+  }
+  return last ? last + t.breakHours * 3_600_000 : 0;
+}
+
+export function startablePairings(t: Tournament, now = Date.now()) {
   const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished").length;
+  if ((t.breakHours ?? 0) > 0 && (live > 0 || now < tournamentBreakUntil(t))) return [];
   const boards = boardsOf(t);
   if (boards === 1) return live ? [] : t.pairings.filter((p) => !p.gameId).slice(0, 1);
   const byId = new Map(t.players.map((p) => [p.id, p]));
@@ -279,20 +300,7 @@ export function startablePairings(t: Tournament) {
   return out;
 }
 
-const KICK_COOLDOWN_MS = 5 * 60_000;
-
-/** Ask T3 for an orchestrator run that starts this tournament's next pairings (never for a run with nothing to start). */
-function kickTournament(t: Tournament, onFail?: () => void) {
-  if (!startablePairings(t).length) return;
-  t.lastKickAt = Date.now();
-  saveTournament(t);
-  triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
-    console.error("[summon] tournament-next failed (retrying in 60s):", e.message);
-    onFail?.();
-  });
-}
-
-/** Periodic housekeeping: phase gates that depend on time. */
+/** Periodic housekeeping: phase gates that depend on time (launching agents is server/launcher.ts's watch). */
 export function tick() {
   const now = Date.now();
   for (const g of games.values()) {
@@ -314,26 +322,12 @@ export function tick() {
         const bcWrapped = g.broadcast.some((l) => l.ts >= lastPlayerTs);
         if (!g.broadcaster?.enabled || bcWrapped || g.broadcasterDone || now - lastPlayerTs > BROADCAST_GATE_MS) {
           g.phase = "finished";
+          g.finishedAt = now;
+          saveGameNow(g);
           touch(g);
         }
       }
     }
-    // Auto-run tournaments: once a game is fully over, ask T3 to start the next pairing.
-    if (g.phase === "finished" && g.tournamentId && !g.nextTriggered) {
-      const t = tournaments.get(g.tournamentId);
-      if (t?.autoRun && t.status === "running") {
-        g.nextTriggered = true;
-        saveGameNow(g);
-        kickTournament(t, () => setTimeout(() => (g.nextTriggered = false), 60_000));
-      }
-    }
-  }
-  // Multi-board tournaments can also be held up by games outside them (a model was busy elsewhere):
-  // when a board is free and a pairing could start, ask again.
-  for (const t of tournaments.values()) {
-    if (!t.autoRun || t.status !== "running" || boardsOf(t) <= 1) continue;
-    if (now - (t.lastKickAt ?? 0) < KICK_COOLDOWN_MS || !startablePairings(t).length) continue;
-    kickTournament(t, () => (t.lastKickAt = Date.now() - KICK_COOLDOWN_MS + 60_000));
   }
 }
 

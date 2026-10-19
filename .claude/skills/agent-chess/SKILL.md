@@ -19,6 +19,6 @@ The website (http://127.0.0.1:5170) is the referee. You are the orchestrator: th
 
 ## 3. Get your brief and follow it
 
-`POST /api/orchestrator/brief` with `{ "action": "start-game", "gameId": "<id>", "source": "chat" }`, or `{ "action": "tournament-next", "tournamentId": "<id>", "source": "chat" }` for a tournament. It returns plain text with the tasks to delegate and every step after: launching, supervising, the video director after each broadcast game, and when you're done. Do exactly what it says.
+`POST /api/orchestrator/brief` with `{ "action": "start-game", "gameId": "<id>", "source": "chat" }`, or `{ "action": "tournament-next", "tournamentId": "<id>", "source": "chat" }` for a tournament. It returns plain text with the tasks to delegate and every step after: launching, supervising, the video director after each broadcast game (unless the server summons it itself), and when you're done. Do exactly what it says.
 
 For a tournament, the brief says how to carry on to the next games, whether the website runs it by itself or you call `tournament-next` again.

@@ -11,7 +11,7 @@
 // timeline (sfxCues in web/src/video/timeline.ts, read from the page), over a music bed that dips under them. With no --music it uses the first
 // audio file in vendor/music/, if any. --audio-only redoes just the sound of an existing render.
 // --stills writes PNGs at the given seconds instead of a video (for checking the layout).
-// --package redoes just the YouTube upload text and thumbnail, each cut's subtitles and the TikTok cover (after a change to the plan's packaging or chapters).
+// --package redoes just the YouTube upload text and thumbnails (the one in use and each of the director's options), each cut's subtitles and the TikTok cover (after a change to the plan's packaging or chapters).
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -252,24 +252,36 @@ function description(g, scenes, duration) {
   return lines.join("\n") + "\n";
 }
 
-/** With the YouTube cut come its upload text (chapters need its timeline) and the thumbnail. */
+/** A thumbnail as a PNG: the one in use, or the director's option n (from 0) to pick from. */
+async function writeThumb(file, n) {
+  const tp = await browser.newPage();
+  await tp.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+  await tp.goto(`${SERVER}/#/video/${gameId}?render=1&thumb=1${n === undefined ? "" : `&opt=${n}`}`, { waitUntil: "load" });
+  // Once its text has been sized to fit (see Thumbnail in VideoPage.tsx).
+  await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
+  const th = n === undefined ? game.video.packaging.thumbnail : game.video.packagingOptions.thumbnails[n];
+  if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${th.text}" doesn't fit, so part of it may be cut off.`);
+  await tp.evaluate(() => document.fonts.ready);
+  await tp.screenshot({ path: file });
+  await tp.close();
+  if (packageOnly) console.log(file);
+}
+
+/** With the YouTube cut come its upload text (chapters need its timeline), the thumbnail and each thumbnail option's. */
 async function writePackaging(scenes, duration) {
   if (!game.video) return;
   const txt = join(outDir, FILES.uploadText);
   writeFileSync(txt, description(game, scenes, duration));
   if (packageOnly) console.log(txt);
   if (!game.video.packaging) return;
-  const tp = await browser.newPage();
-  await tp.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
-  await tp.goto(`${SERVER}/#/video/${gameId}?render=1&thumb=1`, { waitUntil: "load" });
-  // Once its text has been sized to fit (see Thumbnail in VideoPage.tsx).
-  await tp.waitForSelector(".v-thumb[data-fit]", { timeout: 60_000 });
-  if ((await tp.$eval(".v-thumb", (el) => el.dataset.fit)) !== "1") console.error(`Thumbnail: the text "${game.video.packaging.thumbnail.text}" doesn't fit, so part of it may be cut off.`);
-  await tp.evaluate(() => document.fonts.ready);
-  const thumb = join(outDir, FILES.thumbnail);
-  await tp.screenshot({ path: thumb });
-  await tp.close();
-  if (packageOnly) console.log(thumb);
+  await writeThumb(join(outDir, FILES.thumbnail));
+  // "<id>-thumb-1.png" and on (server/videoFiles.ts thumbOptionPath), none left over from earlier options.
+  const options = game.video.packagingOptions?.thumbnails ?? [];
+  for (let n = 0; n < 10; n++) {
+    const file = join(outDir, `${gameId}-thumb-${n + 1}.png`);
+    if (n < options.length) await writeThumb(file, n);
+    else rmSync(file, { force: true });
+  }
 }
 
 /* ------------------------------ subtitles ------------------------------ */

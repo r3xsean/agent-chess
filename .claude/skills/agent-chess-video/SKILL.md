@@ -1,6 +1,6 @@
 ---
 name: agent-chess-video
-description: Get a finished Agent Chess game's replay video planned (its video director), or its videos published to YouTube/TikTok, from chat, as the orchestrator. Use when the user says "direct the video for game <id>", "redo game <id>'s video plan", "publish game <id>", or similar about Agent Chess (C:\Users\User\agent-chess) videos. Not for a director or publisher agent already at work: they follow only their own prompt.
+description: Get a finished Agent Chess game's replay video planned (its video director), or its videos published to YouTube/TikTok, from chat, as the orchestrator. Use when the user says "direct the video for game <id>", "redo game <id>'s video plan", "new titles/thumbnails for game <id>", "publish game <id>", or similar about Agent Chess (C:\Users\User\agent-chess) videos. Not for a director or publisher agent already at work: they follow only their own prompt.
 ---
 
 # Agent Chess: video director and publishing from chat
@@ -10,6 +10,8 @@ The website (http://127.0.0.1:5170) writes your brief for each job: the agent to
 ## The video director
 
 For a finished game with no video plan: `POST /api/orchestrator/brief` with `{ "action": "direct-video", "gameId": "<id>", "source": "chat" }` and follow it. To replace an existing plan, first throw it away with `GET /api/games/<id>/director-launch?redo=1`, then get the brief. Once the plan is saved, the user renders the video from the game's video page.
+
+The plan comes with several YouTube titles, TikTok captions and thumbnails, which the user picks from on the video page. For new ones on a planned game, leaving the rest of the plan as it is, `GET /api/games/<id>/packaging-launch` and delegate its one task with `delegate_task` (its `title`, `clientRequestId` and `target` exactly as given, `prompt` as `task`, `mode: "async"`, `role: "general"`). When it's done, its options are on the video page and their thumbnails are made by themselves.
 
 ## Publishing
 

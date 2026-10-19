@@ -181,6 +181,8 @@ export interface Game {
   ratingBefore?: Record<Color, number>;
   playStartedAt: number | null;
   endedAt?: number;
+  /** All post-game duties completed; used for tournament breaks. */
+  finishedAt?: number;
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
   options?: { pieceList?: boolean; learning?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
   lessonsDone?: Partial<Record<Color, boolean>>;
@@ -188,6 +190,10 @@ export interface Game {
   lessonsAtStart?: Record<Color, Pick<Lessons, "version" | "text">>;
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<SeatRole, number>>;
+  /** Seats the server launched itself, each in its own T3 thread (the server watches these; an orchestrator watches the rest). */
+  directLaunch?: Partial<Record<SeatRole, { at: number; relaunches: number }>>;
+  /** When the server summoned this broadcast game's video director, once the game was over. */
+  directorSummonedAt?: number;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
   lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
   /** A replayed illegal submission is not evidence that the agent recovered. */
@@ -333,8 +339,17 @@ export interface VideoPackaging {
   title: string;
   /** TikTok caption, hashtags included. */
   caption: string;
+  /** YouTube description written by the user, in place of the one made with the YouTube render. */
+  description?: string;
   /** The thumbnail: the position after this move, with a few words of big text. */
   thumbnail: { ply: number; text: string };
+}
+
+/** The director's choices for the upload, its favourite first: the user picks one of each (VideoPlan.packaging holds the picks). */
+export interface VideoPackagingOptions {
+  titles: string[];
+  captions: string[];
+  thumbnails: VideoPackaging["thumbnail"][];
 }
 
 export type PublishPlatform = "youtube" | "tiktok";
@@ -391,7 +406,12 @@ export interface VideoPlan {
   /** How each interview line is spoken (see VideoMoment.delivery). */
   interviewDelivery?: { pre: Partial<Record<Color, string>>; post: Partial<Record<Color, string>> };
   hook?: VideoHook;
+  /** What the upload uses: the user's pick of each option (the director's favourite until they pick), or their own wording. */
   packaging?: VideoPackaging;
+  /** The director's titles, captions and thumbnails to pick from (none on plans from before there were several). */
+  packagingOptions?: VideoPackagingOptions;
+  /** How many times a director has given new options for this plan since it was made (each one is a new task). */
+  packagingRedos?: number;
   createdAt: number;
 }
 
@@ -437,6 +457,8 @@ export interface Tournament {
   status: "running" | "finished";
   /** Games played at once (default: as many as the players fill, half of them). Above 1, no model is ever in two rated games at the same time, in or out of the tournament; unrated games don't count. */
   boards?: number;
+  /** Hours between batches of games, starting when all active boards finish. Default: 0. */
+  breakHours?: number;
   /** Last time the server asked T3 to start more pairings (so it doesn't ask twice in a row). */
   lastKickAt?: number;
 }

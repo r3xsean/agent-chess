@@ -54,7 +54,7 @@ function readInput() {
 }
 
 const body = { key, ...(flags["no-wait"] ? { noWait: true } : {}) };
-const JSON_BODY = { move: "turn", direct: "plan", postgame: "postgame" };
+const JSON_BODY = { move: "turn", direct: "plan", packaging: "packaging", postgame: "postgame" };
 if (cmd in JSON_BODY) {
   const raw = readInput();
   try {
@@ -92,8 +92,8 @@ function post(cmdName, payload, timeoutMs) {
 }
 
 // Waiting (and showing the position) is safe to repeat; anything that acts may already have gone through.
-const repeatable = ["wait", "bc-wait", "status", "brief", "help"].includes(cmd);
-const resume = cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : "wait";
+const repeatable = ["start", "wait", "bc-wait", "status", "brief", "packaging-brief", "help"].includes(cmd);
+const resume = cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : "wait";
 const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 
 async function main() {

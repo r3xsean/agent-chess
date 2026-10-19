@@ -39,16 +39,17 @@ import {
 } from "./game";
 import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
-import { directorLaunch, launchSpec } from "./prompts";
-import { directorBrief, needsDirection, planReadback, validatePlan } from "./director";
-import { directorDone, jobsFor, MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
+import { launchGame, startTournament, watch } from "./launcher";
+import { directorBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
+import { directorDone, dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
 import { rivalry } from "./rivalry";
 import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
 import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
-import { summonAvailable, triggerOrchestrator } from "./summon";
+import { summonAvailable } from "./summon";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
-import { publishLaunch, publishState, recordPublished, requestPublish } from "./publish";
+import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, setPackagingOptions } from "./publish";
 import { gameToPgn } from "./pgn";
 import { analyticsRows, modelAnalytics } from "./analytics";
 import type { AnalyticsScope } from "../shared/analytics";
@@ -93,6 +94,7 @@ function startLocal() {
     if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
   setInterval(tick, 1000);
+  setInterval(watch, 5000);
   startUsageLimitWatcher(() => games.values(), (g) => { saveGameNow(g); touch(g); });
   startMirror();
 }
@@ -111,7 +113,7 @@ if (PUBLIC_MODE) {
 // Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
-const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/publish-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/packaging-launch$/,/\/publish-launch$/, /\/render$/, /\/voice$/, /^\/api\/music/];
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
@@ -452,7 +454,7 @@ app.post(
 
 const SUMMON_COOLDOWN_MS = 10 * 60_000;
 
-// The website's "Summon agents" button: wakes a T3 orchestrator thread via the webhook.
+// The website's "Summon agents" button: starts the game's agents through the T3 webhooks.
 app.post(
   "/api/games/:id/summon",
   localOnly,
@@ -461,7 +463,7 @@ app.post(
     if (g.phase === "finished") throw new ActionError("This game is already over.");
     const recently = g.summonRequestedAt && Date.now() - g.summonRequestedAt < SUMMON_COOLDOWN_MS;
     if (recently && !req.body?.force) return { ok: true, already: true, requestedAt: g.summonRequestedAt };
-    await triggerOrchestrator({ action: "start-game", gameId: g.id }).catch((e) => {
+    await launchGame(g).catch((e) => {
       throw new ActionError(e.message);
     });
     g.summonRequestedAt = Date.now();
@@ -500,9 +502,8 @@ app.post(
     bus.emit("lobby");
     // Several boards: start whatever can go now; anything blocked starts as boards and models free up.
     if (boardsOf(t) > 1 && !startablePairings(t).length) return { ok: true, waiting: true };
-    if (boardsOf(t) > 1) t.lastKickAt = Date.now();
-    else if (live) return { ok: true, alreadyRunning: live.gameId };
-    await triggerOrchestrator({ action: "tournament-next", tournamentId: t.id }).catch((e) => {
+    if (boardsOf(t) <= 1 && live) return { ok: true, alreadyRunning: live.gameId };
+    await startTournament(t).catch((e) => {
       throw new ActionError(e.message);
     });
     return { ok: true };
@@ -749,6 +750,7 @@ app.post(
     };
     // Left out, boards means as many games at once as the players can fill; 1 plays them one at a time.
     if (req.body.boards != null) t.boards = Math.floor(Number(req.body.boards)) || 1;
+    t.breakHours = parseBreakHours(req.body.breakHours ?? 0);
     if (req.body.chess960) {
       // Every pairing gets its own start position; in a double round-robin the return game replays it with colours swapped.
       t.chess960 = true;
@@ -760,6 +762,29 @@ app.post(
       }
     }
     tournaments.set(t.id, t);
+    saveTournamentNow(t);
+    bus.emit("lobby");
+    return t;
+  }),
+);
+function parseBreakHours(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 8760)
+    throw new ActionError("Break hours must be a number between 0 and 8760.");
+  return value;
+}
+
+app.post(
+  "/api/tournaments/:id/settings",
+  localOnly,
+  handle((req) => {
+    const t = tournaments.get(String(req.params.id));
+    if (!t) throw new ActionError("No such tournament");
+    const hours = parseBreakHours(req.body.breakHours ?? t.breakHours ?? 0);
+    const boards = req.body.boards ?? t.boards;
+    if (boards != null && (typeof boards !== "number" || !Number.isInteger(boards) || boards < 1))
+      throw new ActionError("Boards must be a positive integer.");
+    t.breakHours = hours;
+    t.boards = boards;
     saveTournamentNow(t);
     bus.emit("lobby");
     return t;
@@ -785,6 +810,7 @@ app.post(
     // Several boards: only the new games come back, so each orchestrator run launches only what it started.
     if (boardsOf(t) > 1) return { started: res.games.map((g) => ({ game: g, launch: launchSpec(g) })), running: res.running };
     const g = res.games[0];
+    if (!g) return { waiting: true, started: [], running: res.running };
     return { game: g, launch: launchSpec(g), ...(res.alreadyRunning ? { alreadyRunning: true } : {}) };
   }),
 );
@@ -837,7 +863,7 @@ const WAIT_MS = 300_000;
 
 function seat(key: string) {
   const s = seatKeys[key];
-  if (!s) throw new ActionError("Unknown --key. Use the exact key from your instructions.");
+  if (!s) throw new ActionError("Unknown --key. Use the exact key from your instructions. If it worked before, your seat was handed to a new agent after you went quiet: stop now, your task is over.");
   const g = getGame(s.gameId);
   g.seen[s.role] = Date.now();
   return { g, role: s.role };
@@ -955,7 +981,9 @@ const SEAT_COMMANDS: Record<SeatRole, string> = {
   say -                put one segment on air (text on standard input, or --text "..."), then wait for the next events`,
   d: `  brief                print the video director brief
   direct <plan.json>   submit your video plan; it's read back to you
-  confirm              save the plan once its readback is right`,
+  confirm              save the plan once its readback is right
+  packaging-brief      once the plan is saved: the brief for new titles, captions and thumbnails
+  packaging <file>     submit them; they're saved for the user to pick from`,
 };
 
 /** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
@@ -981,6 +1009,12 @@ app.post(
     const text = (t: string) => res.type("text/plain").send(t);
     // Each seat sees only its own commands.
     if (cmd === "help") return text(`Your commands (run each as: node chess.mjs <command> --key <your key>):\n${SEAT_COMMANDS[role]}`);
+    // An agent the server started in its own thread: its thread's title, then its task.
+    if (cmd === "start") {
+      if ((role === "w" || role === "b") && seatIsHuman(g, role)) throw new ActionError("This seat is played on the website.");
+      const task = seatTask(g, role);
+      return text(`${task.title}\n\n${task.prompt}`);
+    }
     const unknown = () => new ActionError(`Unknown command: ${cmd}. Yours are:\n${SEAT_COMMANDS[role]}`);
     if (role === "d") {
       if (cmd === "brief") {
@@ -1009,8 +1043,23 @@ app.post(
         g.video = { ...plan, createdAt: Date.now() };
         saveGameNow(g);
         touch(g);
+        dropThumbOptions(g.id);
         directorDone(g.id);
         return text(`OK — video plan saved (${plan.moments.length} moments).\n\nDONE — your task is complete; you can stop now.`);
+      }
+      // New titles, captions and thumbnails for a saved plan, leaving the rest of it as it is.
+      if (cmd === "packaging-brief") {
+        if (!g.video) throw new ActionError("This game's video plan isn't saved yet: the titles, captions and thumbnails come with it (run `brief`).");
+        return text(packagingBrief(g));
+      }
+      if (cmd === "packaging") {
+        if (!g.video) throw new ActionError("This game's video plan isn't saved yet: the titles, captions and thumbnails come with it (run `brief`).");
+        try {
+          setPackagingOptions(g, packagingChoices(g, req.body?.packaging));
+        } catch (e) {
+          throw e instanceof ActionError ? e : new ActionError((e as Error).message);
+        }
+        return text(`OK — saved for the user to pick from (your favourites are used until they do):\n\n${packagingReadback(g, g.video.packagingOptions!)}\n\nDONE — your task is complete; you can stop now.`);
       }
       throw unknown();
     }
@@ -1152,6 +1201,7 @@ const renderState = (id: string) => {
     folder: gameFolder(id),
     ...packagingFor(id),
     packaging: g.video?.packaging ?? null,
+    packagingOptions: g.video?.packagingOptions ?? null,
     music: musicTracks(),
     directed: !!g.video,
     summonAvailable: summonAvailable(),
@@ -1175,6 +1225,44 @@ app.post(
       throw new ActionError(e.message);
     });
     return renderState(id);
+  }),
+);
+// The upload text edited on the video page: { title?, description?, caption? } (an empty description goes back to the generated one).
+app.post(
+  "/api/games/:id/upload-text",
+  localOnly,
+  handle((req) => {
+    const g = getGame(String(req.params.id));
+    try {
+      editUploadText(g, req.body ?? {});
+    } catch (e) {
+      throw new ActionError((e as Error).message);
+    }
+    return renderState(g.id);
+  }),
+);
+// The user's pick from the director's options on the video page: { title?, caption?, thumbnail? }, each an option's index.
+app.post(
+  "/api/games/:id/packaging/pick",
+  localOnly,
+  handle((req) => {
+    const g = getGame(String(req.params.id));
+    try {
+      pickPackaging(g, req.body ?? {});
+    } catch (e) {
+      throw new ActionError((e as Error).message);
+    }
+    return renderState(g.id);
+  }),
+);
+// A director task for new titles, captions and thumbnails on a game whose plan is saved (nothing else in the plan changes).
+app.get(
+  "/api/games/:id/packaging-launch",
+  handle((req) => {
+    requireAdmin(req);
+    const g = getGame(String(req.params.id));
+    if (!g.video) throw new ActionError("The game has no video plan yet: its director makes the packaging with it.");
+    return packagingLaunch(g);
   }),
 );
 // "Publish" on the video page: summons a publisher (through the T3 webhook) to post the videos from the user's browser.

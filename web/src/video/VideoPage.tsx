@@ -1898,11 +1898,14 @@ function Frame({ g, tl, prep, v, ratings, rival }: { g: Game; tl: Timeline; prep
 
 export const THUMB = { w: 1280, h: 720 };
 
-/** The YouTube thumbnail: the director's chosen position with its verdict, a few huge words and the matchup. */
-function Thumbnail({ g, prep }: { g: Game; prep: Prep }) {
-  const pk = g.video?.packaging;
-  const words = pk?.thumbnail.text ?? "";
-  const i = Math.max(0, g.moves.findIndex((m) => m.ply === pk?.thumbnail.ply));
+/**
+ * The YouTube thumbnail: the director's chosen position with its verdict, a few huge words and the matchup.
+ * `opt`: the director's thumbnail option of that number (from 0) instead of the one in use.
+ */
+function Thumbnail({ g, prep, opt }: { g: Game; prep: Prep; opt?: number }) {
+  const th = opt === undefined ? g.video?.packaging?.thumbnail : g.video?.packagingOptions?.thumbnails[opt];
+  const words = th?.text ?? "";
+  const i = Math.max(0, g.moves.findIndex((m) => m.ply === th?.ply));
   const b = settledBoard(g, prep, i);
   const cls = g.moves[i]?.analysis?.classification;
   // The text starts as big as it can be and shrinks, measured in the real font, until no word sticks out
@@ -2175,7 +2178,10 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   if (error) return <div className="v-msg">Couldn't load game: {error}</div>;
   if (!ready || !v)
     return <div className="v-msg">Loading…</div>;
-  if (query.get("thumb") === "1") return <div className="v-render">{<Thumbnail g={game!} prep={prep!} />}</div>;
+  if (query.get("thumb") === "1") {
+    const opt = query.get("opt");
+    return <div className="v-render">{<Thumbnail g={game!} prep={prep!} opt={opt === null ? undefined : Number(opt)} />}</div>;
+  }
 
   const frame = <Frame g={game!} tl={tl!} prep={prep!} v={v} ratings={ratings!} rival={rival ?? null} />;
   if (render) return <div className="v-render">{frame}</div>;

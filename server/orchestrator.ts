@@ -2,9 +2,10 @@ import path from "node:path";
 import type { Game, SeatRole, Tournament } from "../shared/types";
 import { DATA, PORT } from "./paths";
 import { games, saveTournament, saveTournamentNow, tournaments } from "./store";
-import { ActionError, boardsOf, claimSeats, createGame, seatClaimed, startablePairings } from "./game";
+import { ActionError, boardsOf, claimSeats, createGame, seatClaimed, startablePairings, tournamentBreakUntil } from "./game";
 import { directorLaunch, launchSpec } from "./prompts";
 import { publishLaunch } from "./publish";
+import { summonAvailable } from "./summon";
 import { fullName, humanSide } from "../shared/naming";
 
 /*
@@ -37,7 +38,9 @@ export function tournamentNext(t: Tournament): { finished: true } | { games: Gam
   };
   if (boardsOf(t) <= 1) {
     if (live.length) return { games: [games.get(live[0].gameId!)!], running: [], alreadyRunning: true };
-    const g = start(t.pairings.find((p) => !p.gameId)!);
+    const next = startablePairings(t)[0];
+    if (!next) return { games: [], running: [] };
+    const g = start(next);
     saveTournamentNow(t);
     return { games: [g], running: [] };
   }
@@ -100,7 +103,8 @@ function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: strin
   if (!todo.length) return null;
   const many = todo.length > 1;
   const humans = todo.filter(({ g }) => humanSide(g));
-  const broadcast = todo.filter(({ g }) => g.broadcaster?.enabled);
+  // With a webhook, the server summons each broadcast game's director itself once the game is over.
+  const broadcast = summonAvailable() ? [] : todo.filter(({ g }) => g.broadcaster?.enabled);
   const out = [
     header(intro),
     "",
@@ -161,13 +165,16 @@ Tell the user, with the final standings from GET ${API}/api/tournaments/${t.id}.
   const intro = res.alreadyRunning
     ? `Tournament ${t.id}: its current game isn't fully launched yet.`
     : `Tournament ${t.id}: start ${res.games.length > 1 ? `its next ${res.games.length} games, one per board` : "its next game"}.`;
-  const busy = `Tournament ${t.id} can't start a game right now: every board, or a model it needs, is busy.`;
+  const until = tournamentBreakUntil(t);
+  const busy = until > Date.now()
+    ? `Tournament ${t.id} is on a break until ${new Date(until).toISOString()}.`
+    : `Tournament ${t.id} can't start a game right now: it is waiting for active boards or busy models to finish.`;
   return (
     gamesBrief(intro, res.games, source, extra) ??
     (res.games.length
       ? nothing(`Every seat of tournament ${t.id}'s current game${res.games.length > 1 ? "s" : ""} was already launched by another orchestrator run.`, source)
       : t.autoRun
-        ? nothing(`${busy} The website asks again when one frees up.`, source)
+        ? nothing(`${busy} The website asks again when the next games can start.`, source)
         : `${header(`${busy} It isn't auto-run, so nothing will ask again by itself.`)}
 
 Tell the user, and that the next games start when they ask you again (or press Start tournament on its page, which runs the rest by itself).${source === "webhook" ? ` Then ${SETTLE_OWN}` : ""}`)

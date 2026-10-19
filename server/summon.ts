@@ -5,33 +5,66 @@ import { DATA } from "./paths";
 import type { OrchestratorAction } from "./orchestrator";
 
 /**
- * The T3 webhook that wakes an orchestrator thread to launch agents with $delegate.
- * Its URL is a credential, so it lives only in data/webhook.json (git-ignored), with the optional
- * `secret` the requests are signed with (T3 checks the signature, so the URL alone can't start a run).
+ * The T3 webhooks. A T3 webhook always runs on the model and effort of the thread that made it, so there is
+ * one per model and effort an agent plays on (`agents`, keyed "<model>@<effort>"): each run is that agent,
+ * in its own thread. The orchestrator's webhook (`url`) launches the seats no agent webhook covers, with
+ * $delegate. Their URLs are credentials, so they live only in data/webhook.json (git-ignored), with the
+ * `secret` every request is signed with (T3 checks the signature, so a URL alone can't start a run).
  */
-function webhook(): { url: string; secret?: string } | null {
+interface Webhooks {
+  url?: string;
+  secret?: string;
+  agents?: Record<string, string>;
+}
+
+function webhooks(): Webhooks {
   const f = path.join(DATA, "webhook.json");
-  if (!existsSync(f)) return null;
+  if (!existsSync(f)) return {};
   try {
-    const w = JSON.parse(readFileSync(f, "utf8"));
-    return w.url ? w : null;
+    return JSON.parse(readFileSync(f, "utf8"));
   } catch {
-    return null;
+    return {};
   }
 }
 
-export const summonAvailable = () => !!webhook();
+export const comboOf = (model: string, effort: string) => `${model}@${effort}`;
+
+/** The webhook that starts an agent on this model and effort, if one is set up. */
+export const agentWebhook = (model: string, effort: string): string | undefined => webhooks().agents?.[comboOf(model, effort)];
+
+export const orchestratorAvailable = () => !!webhooks().url;
+/** Whether anything can be summoned at all: the orchestrator, or an agent directly. */
+export const summonAvailable = () => orchestratorAvailable() || Object.keys(webhooks().agents ?? {}).length > 0;
 
 /** The header T3 checks: HMAC-SHA256 of the raw body, hex, after "sha256=". */
 export const SIGNATURE_HEADER = "x-agent-chess-signature";
 
-export async function triggerOrchestrator(body: { action: OrchestratorAction; gameId?: string; tournamentId?: string }) {
-  const w = webhook();
-  if (!w) throw new Error("No T3 webhook configured (data/webhook.json).");
-  const payload = JSON.stringify({ gameId: "", tournamentId: "", ...body });
+/** POST to a webhook; T3 answers with the delivery's id. */
+async function post(url: string, body: object): Promise<string | undefined> {
+  const payload = JSON.stringify(body);
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (w.secret) headers[SIGNATURE_HEADER] = `sha256=${createHmac("sha256", w.secret).update(payload).digest("hex")}`;
-  const r = await fetch(w.url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(15_000) });
-  if (!r.ok) throw new Error(`T3 webhook answered ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const secret = webhooks().secret;
+  if (secret) headers[SIGNATURE_HEADER] = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+  const r = await fetch(url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(15_000) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`T3 webhook answered ${r.status}: ${text.slice(0, 200)}`);
+  try {
+    return JSON.parse(text).deliveryId;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function triggerOrchestrator(body: { action: OrchestratorAction; gameId?: string; tournamentId?: string }) {
+  const url = webhooks().url;
+  if (!url) throw new Error("No T3 orchestrator webhook configured (data/webhook.json).");
+  await post(url, { gameId: "", tournamentId: "", ...body });
   console.log(`[summon] ${body.action} ${body.gameId ?? body.tournamentId ?? ""}`);
+}
+
+/** Start one agent in its own thread: it only gets its seat key, and asks the server for its task with it. Returns the delivery's id. */
+export async function triggerAgent(url: string, key: string) {
+  const delivery = await post(url, { key });
+  console.log(`[summon] agent ${key.replace(/-[0-9a-f]+$/, "")}`);
+  return delivery;
 }

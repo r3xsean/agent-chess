@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { Game, PublishPlatform, PublishState, PublishVisibility } from "../shared/types";
-import { jobsFor } from "./render";
+import type { Game, PublishPlatform, PublishState, PublishVisibility, VideoPackagingOptions } from "../shared/types";
+import { dropThumbOptions, jobsFor, makeThumbnails, useThumbnailOption } from "./render";
+import { favourites } from "./director";
 import { videoPath } from "./videoFiles";
 import { saveGameNow } from "./store";
 import { touch } from "./game";
-import { summonAvailable, triggerOrchestrator } from "./summon";
+import { orchestratorAvailable, triggerOrchestrator } from "./summon";
 
 /*
  * Posting a game's rendered videos. The platforms' APIs keep an unaudited app's posts private, so
@@ -73,7 +74,7 @@ const inFlight = (s: PublishState | undefined) => s?.status === "requested" && D
  */
 export async function requestPublish(g: Game, platforms: PublishPlatform[], visibility: PublishVisibility) {
   if (!platforms.length) throw new Error("Pick YouTube and/or TikTok.");
-  if (!summonAvailable()) throw new Error("No T3 webhook configured (data/webhook.json), so no publisher can be summoned.");
+  if (!orchestratorAvailable()) throw new Error("No T3 orchestrator webhook configured (data/webhook.json), so no publisher can be summoned.");
   if (inFlight(g.publish)) throw new Error("These videos are already being published.");
   for (const p of platforms) {
     const missing = missingFor(g, p);
@@ -114,13 +115,88 @@ export function recordPublished(g: Game, results: Partial<Record<PublishPlatform
   return s;
 }
 
+/** Each field's limit on its platform. YouTube refuses titles and descriptions with < or >. */
+const LIMITS = { title: 100, description: 5000, caption: 2200 };
+
+/**
+ * The user's own wording for the upload, from the video page. Title and caption replace the director's;
+ * a description replaces the generated one (chapters included) until it's cleared with an empty one.
+ */
+export function editUploadText(g: Game, edits: { title?: unknown; description?: unknown; caption?: unknown }) {
+  const pk = g.video?.packaging;
+  if (!pk) throw new Error("There's no director's title and caption to edit yet.");
+  if (inFlight(g.publish)) throw new Error("A publisher is posting these videos right now: edit after it reports back.");
+  const field = (key: keyof typeof LIMITS, required: boolean) => {
+    const v = edits[key];
+    if (v === undefined) return undefined;
+    if (typeof v !== "string") throw new Error(`${key} must be text.`);
+    const s = v.trim();
+    if (required && !s) throw new Error(`The ${key} can't be empty.`);
+    if (s.length > LIMITS[key]) throw new Error(`The ${key} is ${s.length} characters; the limit is ${LIMITS[key]}.`);
+    if (key !== "caption" && /[<>]/.test(s)) throw new Error(`YouTube doesn't allow < or > in the ${key}.`);
+    return s;
+  };
+  const title = field("title", true);
+  const caption = field("caption", true);
+  const description = field("description", false);
+  if (title !== undefined) pk.title = title;
+  if (caption !== undefined) pk.caption = caption;
+  if (description !== undefined) {
+    if (description) pk.description = description;
+    else delete pk.description;
+  }
+  saveGameNow(g);
+  touch(g);
+}
+
+/**
+ * The director's new titles, captions and thumbnails: its favourites replace the picks (the user's own
+ * description stays), unless a publisher is posting right now, and their thumbnails are made.
+ */
+export function setPackagingOptions(g: Game, options: VideoPackagingOptions) {
+  const v = g.video;
+  if (!v) throw new Error("The game has no video plan yet.");
+  v.packagingOptions = options;
+  v.packagingRedos = (v.packagingRedos ?? 0) + 1;
+  if (!inFlight(g.publish)) v.packaging = { ...favourites(options), ...(v.packaging?.description && { description: v.packaging.description }) };
+  saveGameNow(g);
+  touch(g);
+  dropThumbOptions(g.id);
+  makeThumbnails(g.id);
+}
+
+/** The user's pick from the director's options: { title?, caption?, thumbnail? }, each an option's index. */
+export function pickPackaging(g: Game, picks: { title?: unknown; caption?: unknown; thumbnail?: unknown }) {
+  const o = g.video?.packagingOptions;
+  const pk = g.video?.packaging;
+  if (!o || !pk) throw new Error("The director hasn't given options to pick from.");
+  if (inFlight(g.publish)) throw new Error("A publisher is posting these videos right now: pick after it reports back.");
+  const index = (key: "title" | "caption" | "thumbnail", count: number) => {
+    const n = picks[key];
+    if (n === undefined) return undefined;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n >= count) throw new Error(`${key} must be an option's number, 0–${count - 1}.`);
+    return n;
+  };
+  const title = index("title", o.titles.length);
+  const caption = index("caption", o.captions.length);
+  const thumbnail = index("thumbnail", o.thumbnails.length);
+  if (title !== undefined) pk.title = o.titles[title];
+  if (caption !== undefined) pk.caption = o.captions[caption];
+  if (thumbnail !== undefined) {
+    pk.thumbnail = { ...o.thumbnails[thumbnail] };
+    useThumbnailOption(g.id, thumbnail);
+  }
+  saveGameNow(g);
+  touch(g);
+}
+
 /* ------------------------------ the publisher's brief ------------------------------ */
 
-/** The upload text's parts (scripts/render-video.mjs writes it with the YouTube render). */
-function uploadText(gameId: string) {
-  const txt = readFileSync(videoPath(gameId, "uploadText"), "utf8");
+/** The upload text's parts (scripts/render-video.mjs writes it with the YouTube render), the user's description first. */
+function uploadText(g: Game) {
+  const txt = readFileSync(videoPath(g.id, "uploadText"), "utf8");
   return {
-    description: txt.split("DESCRIPTION:\n")[1]?.trim() ?? "",
+    description: g.video?.packaging?.description ?? txt.split("DESCRIPTION:\n")[1]?.trim() ?? "",
     tags: txt.match(/^TAGS: (.*)$/m)?.[1]?.trim() ?? "",
   };
 }
@@ -135,7 +211,7 @@ function youtubeSteps(g: Game, s: PublishState): string {
   if (post)
     return `### YouTube: make the existing post ${shown}
 It was posted earlier as ${SHOWN.youtube[post.visibility]}${post.url ? ` (${post.url})` : ""}. Find that video in YouTube Studio → Content, change only its visibility to **${shown}**, save, and check the change took.`;
-  const { description, tags } = uploadText(g.id);
+  const { description, tags } = uploadText(g);
   return `### YouTube: upload
 In YouTube Studio (channel ${ACCOUNTS.youtube.name}), Create → Upload videos, and select:
 - Video: \`${f.video}\`
