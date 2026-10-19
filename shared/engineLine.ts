@@ -168,9 +168,12 @@ function standing(win: number): string {
 /**
  * The line of a kind for move i, or null when there's none worth showing. `legacy`: read off the stored PV
  * alone, as plans saved before deep lines were validated (see CAPS), so they keep exactly their lines.
+ * `asked`: a line a plan asks for by name (a what-if the user wants), shown whenever the engine has one the
+ * game didn't play, even when it wouldn't be offered (lineOptions) for winning too little. A line the move's
+ * best-move arrow already shows (obvious) still isn't.
  */
-export function shownLine(g: Game, i: number, kind: LineKind, legacy = false): ShownLine | null {
-  const l = rawLine(g, i, kind, legacy);
+export function shownLine(g: Game, i: number, kind: LineKind, legacy = false, asked = false): ShownLine | null {
+  const l = rawLine(g, i, kind, legacy, asked);
   return l && !legacy && obvious(g, l) ? null : l;
 }
 
@@ -193,7 +196,7 @@ export function obvious(g: Game, l: ShownLine): boolean {
 /** What a first move has to win on its own, in pawns, for its line to be what the arrow already shows. */
 const OBVIOUS_GAIN = 3;
 
-function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine | null {
+function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean, asked: boolean): ShownLine | null {
   const m = g.moves[i];
   const cls = m?.analysis?.classification;
   if (!m || !cls || m.analysis!.unavailable) return null;
@@ -217,7 +220,7 @@ function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine
   if (kind === "instead") {
     // The mover's better way. What makes it better is measured against what the move played led to: a
     // mate, material it wins, or just not losing what the move played lost (or not getting mated).
-    if (!WRONG.includes(cls) || (a.bestUci ?? a.pv[0]) === m.uci || (mated && winner !== mover)) return null;
+    if ((!WRONG.includes(cls) && !asked) || (a.bestUci ?? a.pv[0]) === m.uci || (mated && winner !== mover)) return null;
     moves = trim(moves, mover);
     const actual = trim(settle([...played, ...path(m.fenAfter)], legacy), opp);
     const actualMates = mates(actual) && actual.at(-1)!.color === mover;
@@ -233,19 +236,26 @@ function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine
         ? { moves: actual, fact: actualMated ? `${name(opp)} mates` : `${name(opp)} wins ${trade(tP.lost, tP.won) || "material"}` }
         : undefined;
     const line = (fact: string, caption: string, net: number, mate?: number): ShownLine => ({ kind, i, fen, moves, for: mover, mate, net, fact, caption, ...(punish && { punish }) });
+    const kept = m.analysis!.winBefore;
+    const got = m.analysis!.winAfter;
+    // Not worth offering, but asked for: the engine's way, said plainly.
+    const plain = () =>
+      !asked
+        ? null
+        : kept - got >= 1
+          ? line(`${who} keeps ${standing(kept)} (${Math.round(kept)}% instead of ${Math.round(got)}%)`, `${first} would have kept ${standing(kept)}.`, 0)
+          : line(`the engine's choice, played out`, `${first} was the engine's choice.`, 0);
     if (mated) {
-      if (actualMates && actual.length <= moves.length) return null;
+      if (actualMates && actual.length <= moves.length) return plain();
       const mate = mateIn(mover);
       return line(`${who} forces mate in ${mate}`, `${first} would have forced mate in ${mate}.`, 0, mate);
     }
-    if (actualMates) return null;
+    if (actualMates) return plain();
     if (actualMated) return line(`${who} avoids the mate ${m.san} allows`, `${first} would have avoided mate.`, 0);
     const swing = t.net - tA.net;
     if (swing < MIN_GAIN) {
       // No material in it: worth showing only when the move threw away a big share of the winning chances.
-      const kept = m.analysis!.winBefore;
-      const got = m.analysis!.winAfter;
-      if (kept - got < BIG_SWING) return null;
+      if (kept - got < BIG_SWING) return plain();
       return line(`${who} keeps ${standing(kept)} (${Math.round(kept)}% instead of ${Math.round(got)}%)`, `${first} would have kept ${standing(kept)}.`, 0);
     }
     if (t.net >= MIN_GAIN || t.promoted.includes(mover)) return line(`${who} ${prize(t, mover, "present")} (+${t.net})`, `${first} would have ${prize(t, mover, "past")}.`, swing);
@@ -255,13 +265,15 @@ function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine
 
   // "after": the opponent's punishment of a move that went wrong, when their reply went elsewhere; or the
   // point of a strong move, when the game went another way within the line.
+  // Asked for, it only has to leave the game somewhere along it.
+  const followed = (n: number) => moves.slice(0, n).every((mv, k) => g.moves[i + 1 + k]?.uci === mv.uci);
   let side: Color;
   if (WRONG.includes(cls)) {
     side = opp;
-    if (g.moves[i + 1]?.uci === moves[0].uci) return null;
-  } else if (STRONG.includes(cls)) {
-    side = mover;
-    if (moves.every((mv, k) => g.moves[i + 1 + k]?.uci === mv.uci)) return null;
+    if (followed(asked ? moves.length : 1)) return null;
+  } else if (STRONG.includes(cls) || asked) {
+    side = STRONG.includes(cls) ? mover : opp;
+    if (followed(moves.length)) return null;
   } else return null;
   if (mated && winner !== side) return null;
   moves = trim(moves, side);
@@ -270,9 +282,11 @@ function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine
   if (!mated && t.net < MIN_GAIN && !t.promoted.includes(side)) {
     // No material in it: a punishment is still worth showing when the reply let a big winning chance go.
     const reply = g.moves[i + 1]?.analysis;
-    if (side !== opp || !reply) return null;
     const could = 100 - m.analysis!.winAfter;
-    if (could - reply.winAfter < BIG_SWING) return null;
+    const plain = (): ShownLine | null =>
+      asked ? { kind, i, fen, moves, for: side, net: 0, fact: `${name(side)}'s best play from here (${standing(side === opp ? could : 100 - could)})`, caption: `${name(side)}'s best play from here.` } : null;
+    if (side !== opp || !reply) return plain();
+    if (could - reply.winAfter < BIG_SWING) return plain();
     const fact = `${name(opp)} reaches ${standing(could)} (${Math.round(could)}% instead of ${Math.round(reply.winAfter)}%)`;
     return { kind, i, fen, moves, for: side, net: 0, fact, caption: `${name(opp)} could have reached ${standing(could)}.` };
   }
@@ -288,7 +302,7 @@ function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean): ShownLine
  * `end` the director gave it.
  */
 export function planLine(g: Game, i: number, ask: { kind: LineKind; deep?: true; end?: number }): ShownLine | null {
-  const sl = shownLine(g, i, ask.kind, !ask.deep);
+  const sl = shownLine(g, i, ask.kind, !ask.deep, true);
   if (!sl || !ask.end || ask.end >= sl.moves.length) return sl;
   return { ...sl, moves: sl.moves.slice(0, Math.max(1, ask.end)) };
 }
