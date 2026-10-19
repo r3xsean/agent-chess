@@ -1761,6 +1761,9 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
       </div>
     );
 
+  // In the short the variation takes the place of the verdict's line and the chart, so they make way as it
+  // opens, including while it opens over the move just played before the board winds back.
+  const pUnder = r3(engine && !hook ? Math.min(under, engine.under, 1 - engine.open) : under);
   return (
     <div className="v-game portrait">
       <div className="v-p-title">
@@ -1781,7 +1784,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
           {/* The line under the verdict and the chart fade out for an engine line, its variation fading in over
               them in place (there's no move list here to hang it from), and back at its end. */}
           {!hook && (
-            <div className="v-p-line v-line" style={under < 1 ? { opacity: under } : undefined}>
+            <div className="v-p-line v-line" style={pUnder < 1 ? { opacity: pUnder } : undefined}>
               {line}
             </div>
           )}
@@ -1791,7 +1794,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
             </div>
           )}
           {/* How the game went so far, and how each player saw it; in the cold open, the hook caption instead. */}
-          <div className={`v-p-caption ${hook ? "hooked" : ""}`} style={{ opacity: r3((engine && !hook ? engine.under : 1) * (1 - Math.max(thoughtO, asideO))) }}>
+          <div className={`v-p-caption ${hook ? "hooked" : ""}`} style={{ opacity: r3((engine && !hook ? pUnder : 1) * (1 - Math.max(thoughtO, asideO))) }}>
             {hook ? (
               hook
             ) : (
