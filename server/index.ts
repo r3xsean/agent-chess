@@ -1277,6 +1277,12 @@ app.post("/api/games/:id/video-approval", localOnly, handle(req => {
 }));
 // The recorded voice lines (and their lengths, which set the video's timing).
 app.get("/api/games/:id/voice", handle((req) => voiceManifest(getGame(String(req.params.id)).id)));
+// The same manifest, sent again each time a line is recorded, so the video tab's preview picks voices up as they land.
+app.get("/api/games/:id/voice/stream", (req, res) => {
+  const g = games.get(String(req.params.id));
+  if (!g || PUBLIC_MODE) return void res.status(404).end();
+  sse(req, res, `voice:${g.id}`, () => voiceManifest(g.id));
+});
 // The two models' series, for the replay's versus and result cards.
 app.get("/api/games/:id/rivalry", handle((req) => ({ rivalry: rivalry(getGame(String(req.params.id))) })));
 app.post(

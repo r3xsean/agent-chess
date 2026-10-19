@@ -2150,6 +2150,17 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
     return () => events.close();
   }, [id, render]);
 
+  // Voices land one line at a time while a render records them: the preview takes each as it comes, so it
+  // can be heard (and its timing seen) without waiting for the whole recording.
+  const muted = query.get("voices") === "off";
+  useEffect(() => {
+    if (render || muted) return;
+    const events = new EventSource(`/api/games/${id}/voice/stream`);
+    // Only a manifest that differs from the one in hand rebuilds the timeline (the first is usually the same).
+    events.onmessage = (e) => setVoice((prev) => (prev && JSON.stringify(prev) === e.data ? prev : (JSON.parse(e.data) as VoiceManifest)));
+    return () => events.close();
+  }, [id, render, muted]);
+
   useEffect(() => {
     api<Game>(`/api/games/${id}`)
       .then((g) => {

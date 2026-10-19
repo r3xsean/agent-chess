@@ -7,6 +7,7 @@ import { speakable } from "../shared/speech";
 import { TTS_MODEL, type VoiceManifest } from "../shared/voices";
 import { lineSig, lineVoice, videoLines } from "../shared/videoLines";
 import { DATA } from "./paths";
+import { bus } from "./game";
 
 /*
  * Recording the replay's spoken lines with ElevenLabs before a render: every quote the director put
@@ -153,11 +154,12 @@ export function voiceManifest(gameId: string): VoiceManifest {
   }
 }
 
-/** Written whole or not at all, so a reader never sees half a manifest. */
+/** Written whole or not at all, so a reader never sees half a manifest; open previews hear of it (`voice:<id>`). */
 function writeManifest(gameId: string, m: VoiceManifest) {
   const f = manifestFile(gameId);
   writeFileSync(`${f}.tmp`, JSON.stringify(m, null, 2));
   renameSync(`${f}.tmp`, f);
+  bus.emit(`voice:${gameId}`);
 }
 
 export interface VoiceResult {
@@ -260,6 +262,8 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
         result.reason ??= "A recording came back unreadable; render again to re-record it.";
       }
       publish();
+      // Published as each line lands, so an open preview plays it while the rest are still recording.
+      writeManifest(g.id, manifest);
       onLine?.(++done, missing.length);
     }
     return result;
