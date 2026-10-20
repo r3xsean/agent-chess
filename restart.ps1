@@ -70,7 +70,9 @@ $err = Join-Path $LogDir 'data-server.err'
 $env:PORT = "$Port"
 $env:AGENT_CHESS_DATA = $DataDir
 $node = (Get-Command node).Source
-$p = Start-Process -FilePath $node -ArgumentList 'node_modules/tsx/dist/cli.mjs', 'server/index.ts' -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+# Redirected through cmd rather than Start-Process's own redirection, which hands the server this script's
+# output handles: whoever captures the script's output would then wait on it until the server exits.
+$p = Start-Process -FilePath $env:ComSpec -ArgumentList '/d', '/c', "`"`"$node`" node_modules/tsx/dist/cli.mjs server/index.ts 1>`"$out`" 2>`"$err`"`"" -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
 
 # 4. Wait until it answers.
 $until = (Get-Date).AddSeconds(120)
@@ -80,7 +82,7 @@ while ((Get-Date) -lt $until) {
     Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/meta" -UseBasicParsing -TimeoutSec 5 | Out-Null
     $listener = Get-Listener
     Set-Content -Path (Join-Path $LogDir '.server.pid') -Value $listener -Encoding ascii
-    Write-Host "Agent Chess is up on http://127.0.0.1:$Port (process $listener, under wrapper $($p.Id)). Logs: $out, $err"
+    Write-Host "Agent Chess is up on http://127.0.0.1:$Port (process $listener). Logs: $out, $err"
     exit 0
   } catch {
     Start-Sleep -Milliseconds 500
