@@ -279,7 +279,9 @@ const handle =
   (fn: (req: Request, res: Response) => unknown | Promise<unknown>) => async (req: Request, res: Response) => {
     try {
       const out = await fn(req, res);
-      if (out !== undefined && !res.headersSent) res.json(out);
+      // A handler that sent its own reply returns `res` (what res.send returns); if the client had already hung
+      // up (an agent's long poll), nothing was sent and headersSent is still false, so check for it directly.
+      if (out !== undefined && out !== res && !res.headersSent) res.json(out);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!(e instanceof ActionError)) console.error(e);
