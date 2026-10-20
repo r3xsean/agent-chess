@@ -45,7 +45,7 @@ import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts
 import { launchGame, startTournament, watch } from "./launcher";
 import { applyNarration, directorBrief, investigationNotes, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
 import { deepenLines, linesPrepared, linesProgress, linesReady } from "./lineDepth";
-import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
+import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, resumeRenders, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
 import { autoDirectorDone, directorThreadBusy, directorThreadCommand, directorThreadState, isDirectorThreadKey, openDirectorThread } from "./directorThread";
 import { videoApproved, videoRevision } from "./videoApproval";
 import { rivalry } from "./rivalry";
@@ -105,6 +105,7 @@ function startLocal() {
     }
     if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
+  resumeRenders();
   setInterval(tick, 1000);
   setInterval(watch, 5000);
   startUsageLimitWatcher(() => games.values(), (g) => { saveGameNow(g); touch(g); });

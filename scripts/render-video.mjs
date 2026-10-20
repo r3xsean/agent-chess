@@ -19,6 +19,17 @@ import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
 
 const SERVER = process.env.CHESS_SERVER ?? "http://127.0.0.1:5170";
+// Started by the server (server/render.ts): stop when it goes, which closes our standard input, so a restart can
+// render the job again without two renderers writing the same files. Chrome is closed on the way out by puppeteer.
+// (On Windows the server going takes us with it anyway.)
+if (process.env.RENDER_EXIT_WITH_SERVER === "1") {
+  const gone = () => {
+    console.error("The server stopped, so the render stopped too.");
+    process.exit(1);
+  };
+  process.stdin.on("end", gone).on("error", gone).resume();
+  process.stdin.unref?.();
+}
 const SIZES = { landscape: [1920, 1080], portrait: [1080, 1920] };
 const RATE = 48_000;
 
