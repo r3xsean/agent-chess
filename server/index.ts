@@ -39,7 +39,7 @@ import {
 import { humanSide, isHuman } from "../shared/naming";
 import { postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
-import { launchGame, startTournament, watch } from "./launcher";
+import { launchDirector, launchGame, startTournament, watch } from "./launcher";
 import { applyNarration, directorBrief, investigationNotes, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
 import { deepenLines, linesPrepared, linesProgress, linesReady } from "./lineDepth";
 import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, resumeRenders, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
@@ -53,7 +53,7 @@ import { summonAvailable } from "./summon";
 import { anyAgentCli } from "./agents";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { PROBE_COMMANDS, probeCommand } from "./probe";
-import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, resumePublishes, setPackagingOptions } from "./publish";
+import { editUploadText, isPublisherKey, pickPackaging, publisherCommand, publishLaunch, publishState, recordPublished, requestPublish, resumePublishes, setPackagingOptions } from "./publish";
 import { gameToPgn } from "./pgn";
 import { analyticsRows, modelAnalytics } from "./analytics";
 import type { AnalyticsScope } from "../shared/analytics";
@@ -542,32 +542,51 @@ app.get(
     return launchSpec(getGame(String(req.params.id)));
   }),
 );
+/** A finished game, its current plan thrown away if `redo`, so a new director can make another. */
+function directorGame(id: string, redo: unknown) {
+  const g = getGame(id);
+  if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its director plans the video at the end.");
+  if (redo && g.video) {
+    // The last director's and narrator's working files move aside (kept, under previous/), so the new ones
+    // start from their briefs, not from the old plan and narration.
+    for (const seat of ["d", "n"]) {
+      const dir = agentDir(g.id, seat);
+      const old = readdirSync(dir).filter((f) => f !== "previous");
+      if (!old.length) continue;
+      const to = path.join(dir, "previous", new Date().toISOString().replace(/[:.]/g, "-"));
+      mkdirSync(to, { recursive: true });
+      for (const f of old) renameSync(path.join(dir, f), path.join(to, f));
+    }
+    delete g.video;
+    if (g.launched) delete g.launched.d;
+    g.videoRedos = (g.videoRedos ?? 0) + 1;
+    saveGameNow(g);
+    touch(g);
+  }
+  return g;
+}
 // A finished game with no video plan yet (e.g. from before directors existed): a one-off director task.
+// ?redo=1 throws the current plan away first.
 app.get(
   "/api/games/:id/director-launch",
   handle((req) => {
     requireAdmin(req);
-    const g = getGame(String(req.params.id));
-    if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its director plans the video at the end.");
-    // ?redo=1 throws the current plan away so a new director can make another.
-    if (req.query.redo && g.video) {
-      // The last director's and narrator's working files move aside (kept, under previous/), so the new ones
-      // start from their briefs, not from the old plan and narration.
-      for (const seat of ["d", "n"]) {
-        const dir = agentDir(g.id, seat);
-        const old = readdirSync(dir).filter((f) => f !== "previous");
-        if (!old.length) continue;
-        const to = path.join(dir, "previous", new Date().toISOString().replace(/[:.]/g, "-"));
-        mkdirSync(to, { recursive: true });
-        for (const f of old) renameSync(path.join(dir, f), path.join(to, f));
-      }
-      delete g.video;
-      if (g.launched) delete g.launched.d;
-      g.videoRedos = (g.videoRedos ?? 0) + 1;
-      saveGameNow(g);
-      touch(g);
-    }
+    const g = directorGame(String(req.params.id), req.query.redo);
     return directorLaunch(g, typeof req.query.effort === "string" ? req.query.effort : undefined);
+  }),
+);
+// Start a finished game's video director (see launchDirector); { redo: true } throws the current plan away first.
+app.post(
+  "/api/games/:id/direct",
+  localOnly,
+  handle(async (req) => {
+    requireAdmin(req);
+    const g = directorGame(String(req.params.id), req.body?.redo === true);
+    g.directorResummons = 0;
+    const note = await launchDirector(g).catch((e) => {
+      throw new ActionError(`Couldn't start the director: ${(e as Error).message}`);
+    });
+    return note ? { started: false, note } : { started: true };
   }),
 );
 app.get(
@@ -949,6 +968,7 @@ app.post(
     const cmd = String(req.params.cmd);
     const key = String(req.body?.key ?? "");
     if (isDirectorThreadKey(key)) return res.type("text/plain").send(await directorThreadCommand(key, cmd, req.body, videoEditBlocked));
+    if (isPublisherKey(key)) return res.type("text/plain").send(publisherCommand(key, cmd, req.body ?? {}));
     const { g, role } = seat(String(req.body?.key ?? ""));
     const text = (t: string) => res.type("text/plain").send(t);
     // Each seat sees only its own commands.
@@ -1264,19 +1284,15 @@ app.get(
     }
   }),
 );
-// The orchestrator records what the publisher reported: { results: { youtube: { url } , tiktok: { error } } }.
+// The orchestrator records what the publisher reported: { attempt, results: { youtube: { url } , tiktok: { error } } }.
 app.post(
   "/api/games/:id/published",
   localOnly,
   handle((req) => {
     requireAdmin(req);
-    const results = req.body?.results;
-    if (!results || typeof results !== "object") throw new ActionError("Send { results: { youtube?: { url, note? } | { error }, tiktok?: … } }.");
-    try {
-      return recordPublished(getGame(String(req.params.id)), results);
-    } catch (e) {
-      throw new ActionError((e as Error).message);
-    }
+    const attempt = req.body?.attempt;
+    if (!Number.isInteger(attempt)) throw new ActionError("Send { attempt: <the request's number, from your brief>, results: { youtube?: { url, note? } | { error }, tiktok?: … } }.");
+    return recordPublished(getGame(String(req.params.id)), req.body?.results, attempt);
   }),
 );
 // Show a finished video in Explorer / Finder.

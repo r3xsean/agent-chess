@@ -21,7 +21,7 @@ const req = async (method, p, body, admin = true) => {
 const brief = (body) => req("POST", "/api/orchestrator/brief", body);
 const cli = (args, input) =>
   new Promise((resolve) => {
-    const p = spawn("node", [CLI, ...args], { env: { ...process.env, AGENT_CHESS_URL: URL } });
+    const p = spawn("node", [CLI, ...args], { windowsHide: true, env: { ...process.env, AGENT_CHESS_URL: URL } });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));

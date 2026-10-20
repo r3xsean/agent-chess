@@ -44,6 +44,7 @@ writeFileSync(path.join(DATA, "webhook.json"), JSON.stringify({ url: `${HOOK}/or
 const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
   env: { ...process.env, PORT: String(PORT), AGENT_CHESS_DATA: DATA, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", CLAUDE_BIN: "none", CODEX_BIN: "none" },
   stdio: "ignore",
+  windowsHide: true,
 });
 for (let n = 0; n < 300; n++) {
   try {
@@ -63,7 +64,7 @@ const req = async (method, p, body) => {
 };
 const cli = (args) =>
   new Promise((resolve) => {
-    const p = spawn("node", [CLI, ...args], { env: { ...process.env, AGENT_CHESS_URL: URL } });
+    const p = spawn("node", [CLI, ...args], { windowsHide: true, env: { ...process.env, AGENT_CHESS_URL: URL } });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.on("close", () => resolve(out.trim()));

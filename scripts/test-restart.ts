@@ -44,7 +44,7 @@ let output = "";
 const env = (extra: Record<string, string>) => ({ ...process.env, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", CLAUDE_BIN: "none", CODEX_BIN: "none", ...extra });
 /** One process (no tsx wrapper), so killing it is a real crash: nothing gets flushed. */
 function start(dir = data, p = port, extra: Record<string, string> = {}) {
-  const s = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], { env: env({ PORT: String(p), AGENT_CHESS_DATA: dir, ...extra }), stdio: ["ignore", "pipe", "pipe"] });
+  const s = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], { env: env({ PORT: String(p), AGENT_CHESS_DATA: dir, ...extra }), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   s.stdout!.on("data", (d) => (output += d));
   s.stderr!.on("data", (d) => (output += d));
   return s;
@@ -102,7 +102,7 @@ try {
 
   // Black waits through the restart, the way a real agent would.
   let waited = "";
-  waiter = spawn(process.execPath, ["cli/chess.mjs", "wait", "--key", live.keys.b], { env: { ...process.env, AGENT_CHESS_URL: url }, stdio: ["ignore", "pipe", "pipe"] });
+  waiter = spawn(process.execPath, ["cli/chess.mjs", "wait", "--key", live.keys.b], { env: { ...process.env, AGENT_CHESS_URL: url }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   waiter.stdout!.on("data", (d) => (waited += d));
   const waiterDone = exited(waiter);
   await sleep(1500);

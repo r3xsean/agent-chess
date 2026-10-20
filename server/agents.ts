@@ -7,7 +7,7 @@ import { saveSeatsNow } from "./store";
 
 /*
  * Agents the server runs itself, through the provider's own CLI (`claude -p`, `codex exec`), in the
- * background: no T3 thread, so players and broadcasters stay out of the T3 sidebar. Each runs detached, so
+ * background: no T3 thread, so players stay out of the T3 sidebar. Each runs detached, so
  * it outlives a server restart, and writes its JSON events to a log under data/agent-logs. The server knows
  * when one stops; it carries on in the same session (`--resume`), after the usage limit resets if that's
  * what stopped it.
@@ -18,6 +18,7 @@ export type CliProvider = "claudeAgent" | "codex";
 /** One run of an agent's CLI: what the server needs to find it again, after a restart too. Local only. */
 export interface AgentProc {
   provider: CliProvider;
+  /** On Windows, its host's (agentHost.mjs), which runs as long as the CLI does. */
   pid: number;
   log: string;
   /** Where this run's output starts in the log: a session's runs all write to the same one. */
@@ -36,6 +37,8 @@ export interface AgentOutcome {
   session?: string;
   usageLimit?: { id: string; at: number; resetAt?: number };
 }
+
+const HOST = path.join(ROOT, "server", "agentHost.mjs");
 
 const isCli = (p: string): p is CliProvider => p === "claudeAgent" || p === "codex";
 
@@ -128,19 +131,39 @@ function processCreatedLater(pid: number, then: (created: string) => void) {
   });
 }
 
+/** What an agent's host says on fd 3 about starting its CLI ("" if it says nothing within 30 s). */
+function hostSays(child: ChildProcess): Promise<string> {
+  return new Promise((resolve) => {
+    let said = "";
+    const pipe = child.stdio[3];
+    const done = () => {
+      clearTimeout(timer);
+      pipe?.destroy();
+      resolve(said.trim());
+    };
+    const timer = setTimeout(done, 30_000);
+    if (!pipe) return done();
+    pipe.on("data", (d) => (said += d));
+    pipe.on("close", done);
+  });
+}
+
 /** Runs started by this server, by pid, so their exit is logged; after a restart, `agentAlive` checks the pid. */
 const children = new Map<number, { child: ChildProcess; startedAt: number }>();
 /** Pids of runs from before a restart found to be still theirs (a running process keeps its pid). */
 const confirmed = new Map<number, string>();
 
 /**
- * Start an agent's CLI in the background, carrying `session` on if given. Throws if it can't be started.
+ * Start an agent's CLI in the background, carrying `session` on if given. Rejects if it can't be started.
  * Its OS start time is filled in on the returned record (and saved) a moment later.
  */
-export function startAgent(o: { provider: string; model: string; effort: string; prompt: string; logName: string; session?: string; resumes?: number }): AgentProc {
+export async function startAgent(o: { provider: string; model: string; effort: string; prompt: string; logName: string; session?: string; resumes?: number }): Promise<AgentProc> {
   if (!isCli(o.provider)) throw new Error(`No CLI for provider ${o.provider}`);
   const c = command(o.provider);
   if (!c) throw new Error(`The ${o.provider === "codex" ? "Codex" : "Claude"} CLI isn't installed (or is turned off)`);
+  // On Windows it runs under a small host that gives it a console with no window (see agentHost.mjs).
+  const hosted = process.platform === "win32";
+  const argv = [...c.pre, ...args(o.provider, o.model, o.effort, o.session)];
   const dir = path.join(DATA, "agent-logs");
   mkdirSync(dir, { recursive: true });
   const log = path.join(dir, `${o.logName}.jsonl`);
@@ -153,15 +176,17 @@ export function startAgent(o: { provider: string; model: string; effort: string;
   const prompt = o.provider === "claudeAgent" && o.effort === "ultrathink" ? `ultrathink\n\n${o.prompt}` : o.prompt;
   let child: ChildProcess;
   try {
-    // Detached: it isn't killed with the server (a restart leaves it running) and has no console window.
-    child = spawn(c.cmd, [...c.pre, ...args(o.provider, o.model, o.effort, o.session)], { cwd: ROOT, env, detached: true, windowsHide: true, stdio: ["pipe", fd, fd] });
+    // Detached: it isn't killed with the server (a restart leaves it running).
+    child = spawn(hosted ? process.execPath : c.cmd, hosted ? [HOST, c.cmd, ...argv] : argv, { cwd: ROOT, env, detached: true, windowsHide: true, stdio: hosted ? ["pipe", fd, fd, "pipe"] : ["pipe", fd, fd] });
   } finally {
     closeSync(fd);
   }
   // Listened for before anything can throw: an unheard spawn error would take the server down.
   child.on("error", (e) => console.error(`[agents] ${o.logName}: ${e.message}`));
   child.stdin?.on("error", () => {});
-  if (!child.pid) throw new Error(`The ${o.provider === "codex" ? "Codex" : "Claude"} CLI didn't start`);
+  child.stdio[3]?.on("error", () => {});
+  const name = o.provider === "codex" ? "Codex" : "Claude";
+  if (!child.pid) throw new Error(`The ${name} CLI didn't start`);
   child.stdin!.end(prompt);
   const pid = child.pid;
   const startedAt = Date.now();
@@ -171,6 +196,14 @@ export function startAgent(o: { provider: string; model: string; effort: string;
     console.log(`[agents] ${o.logName} (pid ${pid}) exited${code === null ? "" : ` with ${code}`}`);
   });
   child.unref();
+  // The host says whether the CLI itself started: one that didn't fails here, as a direct start does at once.
+  if (hosted) {
+    const said = await hostSays(child);
+    if (said !== "started") {
+      if (child.exitCode === null) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 15_000 });
+      throw new Error(`The ${name} CLI didn't start${said ? `: ${said.replace(/^error: /, "")}` : ""}`);
+    }
+  }
   const agent: AgentProc = { provider: o.provider, pid, log, offset, startedAt, ...(o.session && { session: o.session }), resumes: o.resumes ?? 0 };
   processCreatedLater(pid, (created) => {
     agent.created = created;

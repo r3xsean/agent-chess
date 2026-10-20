@@ -206,7 +206,7 @@ function renderFrames(job: RenderJob): Promise<void> {
     // Pointed at this server, whichever port it's on. When this server goes, however it goes, the renderer goes
     // with it, so the next boot can render the job again without two renderers writing the same files: on Windows
     // a child dies with its parent anyway (libuv's job object); elsewhere its unused standard input closes.
-    const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CHESS_SERVER: `http://127.0.0.1:${PORT}`, RENDER_EXIT_WITH_SERVER: "1" } });
+    const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, CHESS_SERVER: `http://127.0.0.1:${PORT}`, RENDER_EXIT_WITH_SERVER: "1" } });
     let errText = "";
     child.stdout.on("data", (d: Buffer) => {
       // The renderer reports "\r<format>: <pct>%" while capturing frames, then a line per finished file.

@@ -39,6 +39,9 @@ export const summonAvailable = () => orchestratorAvailable() || Object.keys(webh
 /** The header T3 checks: HMAC-SHA256 of the raw body, hex, after "sha256=". */
 export const SIGNATURE_HEADER = "x-agent-chess-signature";
 
+/** T3 answered and refused the run, so nothing was started (unlike a request that timed out or dropped, which may have). */
+export class WebhookRefused extends Error {}
+
 /** POST to a webhook; T3 answers with the delivery's id. */
 async function post(url: string, body: object): Promise<string | undefined> {
   const payload = JSON.stringify(body);
@@ -47,7 +50,7 @@ async function post(url: string, body: object): Promise<string | undefined> {
   if (secret) headers[SIGNATURE_HEADER] = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
   const r = await fetch(url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(15_000) });
   const text = await r.text();
-  if (!r.ok) throw new Error(`T3 webhook answered ${r.status}: ${text.slice(0, 200)}`);
+  if (!r.ok) throw new WebhookRefused(`T3 webhook answered ${r.status}: ${text.slice(0, 200)}`);
   try {
     return JSON.parse(text).deliveryId;
   } catch {

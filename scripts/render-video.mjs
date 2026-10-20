@@ -97,7 +97,7 @@ function findChrome() {
 
 function run(cmd, argv, input) {
   return new Promise((res, rej) => {
-    const p = spawn(cmd, argv, { stdio: [input ? "pipe" : "ignore", "pipe", "inherit"] });
+    const p = spawn(cmd, argv, { stdio: [input ? "pipe" : "ignore", "pipe", "inherit"], windowsHide: true });
     const chunks = [];
     p.stdout.on("data", (d) => chunks.push(d));
     p.on("close", (code) => (code === 0 ? res(Buffer.concat(chunks)) : rej(new Error(`${cmd} exited with ${code}`))));
@@ -124,7 +124,7 @@ function soundCues(scenes, asides, effects) {
  * it, atempo, which is fine at the short's small speed-up but smears speech sooner.
  */
 let rubberband;
-const hasRubberband = () => (rubberband ??= /\brubberband\b/.test(spawnSync("ffmpeg", ["-hide_banner", "-filters"], { encoding: "utf8" }).stdout ?? ""));
+const hasRubberband = () => (rubberband ??= /\brubberband\b/.test(spawnSync("ffmpeg", ["-hide_banner", "-filters"], { encoding: "utf8", windowsHide: true }).stdout ?? ""));
 
 /** A sound as raw stereo samples; `tempo` speeds it up without changing its pitch (the short's and the asides' quicker voices). */
 const decoded = new Map();
@@ -441,7 +441,7 @@ try {
       const ff = spawn(
         "ffmpeg",
         ["-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(fps), "-t", duration.toFixed(3), silent],
-        { stdio: ["pipe", "inherit", "inherit"] },
+        { stdio: ["pipe", "inherit", "inherit"], windowsHide: true },
       );
       const done = new Promise((res, rej) => ff.on("close", (code) => (code === 0 ? res() : rej(new Error(`ffmpeg exited with ${code}`)))));
       const write = (buf) => (ff.stdin.write(buf) ? Promise.resolve() : new Promise((r) => ff.stdin.once("drain", r)));

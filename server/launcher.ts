@@ -57,7 +57,12 @@ async function launchDirect(g: Game, seat: SeatRole): Promise<boolean> {
   saveGameNow(g);
   try {
     if (local) {
-      const agent = startAgent({ ...who, prompt: agentPrompt(key), logName: `${g.id}-${seat}-${relaunches}` });
+      const agent = await startAgent({ ...who, prompt: agentPrompt(key), logName: `${g.id}-${seat}-${relaunches}` });
+      // The seat went, or was done with, while its agent started (the game aborted): nothing to hand on.
+      if (!seatKeys[key] || !needsAgent(g, seat)) {
+        stopAgent(agent);
+        return true;
+      }
       seatKeys[key].agent = agent;
       saveSeatsNow();
       console.log(`[launch] ${g.id} ${seat}: ${who.model} started in the background (pid ${agent.pid})`);
@@ -94,26 +99,31 @@ export async function launchGame(g: Game): Promise<{ direct: SeatRole[]; orchest
   return { direct, orchestrator: rest };
 }
 
-/** Start a finished game's video director (none if there's nothing to plan, or one is already at it). */
+/**
+ * Start a finished game's video director (none if there's nothing to plan, or one is already at it): in its own
+ * thread when a webhook covers its model, which asks for its task with its session key, else through an
+ * orchestrator run. Undefined once started, else why not.
+ */
 export async function launchDirector(g: Game): Promise<string | undefined> {
   const spec = directorLaunch(g);
   if (!spec.tasks.length) return "note" in spec ? spec.note : undefined;
-  // Started in its own thread when a webhook covers its model: it asks for its task with its session key.
+  g.directorSummonedAt = Date.now();
+  saveGameNow(g);
   const { model, effort } = directorWho(g);
   const url = agentWebhook(model, effort);
+  // A start that fails, or may have come to nothing, is started again by `watch` if it never turns up.
   if (url && "key" in spec && spec.key) {
-    try {
-      await triggerAgent(url, spec.key);
-      return;
-    } catch (e) {
-      console.error(`[launch] ${g.id} director: ${(e as Error).message}`);
-    }
+    await triggerAgent(url, spec.key);
+    return;
   }
-  // The orchestrator's brief hands the seat out itself.
+  // No webhook for its model: an orchestrator run delegates it. Its brief hands the seat out itself.
   if (g.launched) delete g.launched.d;
   saveGameNow(g);
   await triggerOrchestrator({ action: "direct-video", gameId: g.id });
 }
+
+/** How long after it was started a director that never turned up is started again, at most. */
+const DIRECTOR_RETRY_MS = 6 * 3_600_000;
 
 /** When each tournament game was last launched, so a launch that failed (T3 unreachable) is tried again later. */
 const launchTried = new Map<string, number>();
@@ -151,8 +161,6 @@ const QUIET_MS = { w: 25 * 60_000, b: 25 * 60_000, d: 30 * 60_000 } as const;
 /** An agent that hasn't turned up this long after its launch never will. */
 const NO_SHOW_MS = 10 * 60_000;
 const MAX_RELAUNCHES = 3;
-/** A summoned director that never turned up is summoned again only this soon after (not for a game left long ago). */
-const DIRECTOR_RETRY_MS = 6 * 3_600_000;
 
 /** Whether a seat still needs its agent. */
 function needsAgent(g: Game, seat: SeatRole) {
@@ -170,6 +178,8 @@ const MAX_RESUMES = 3;
 const LIMIT_RETRY_MS = 30 * 60_000;
 /** Each stopped run's log is read once. */
 const outcomes = new Map<string, AgentOutcome>();
+/** Stopped runs whose session is being carried on now (a start takes a moment), so it's carried on once. */
+const resuming = new Set<string>();
 
 /** A hand-over to T3 is tried this often until it goes through. */
 const HANDOVER_RETRY_MS = 60_000;
@@ -237,12 +247,12 @@ function actedSince(g: Game, seat: SeatRole, since: number) {
  * agent takes the seat. With its CLI turned off since, the seat goes to T3.
  */
 function agentStopped(g: Game, seat: SeatRole, l: { at: number; relaunches: number }, key: string, agent: AgentProc, now: number) {
-  if (now - agent.startedAt < RESUME_GAP_MS) return;
+  const id = `${agent.pid}@${agent.startedAt}`;
+  if (now - agent.startedAt < RESUME_GAP_MS || resuming.has(id)) return;
   if (!canRunAgent(agent.provider)) {
     handOver(g, seat, l, key, agent, now);
     return;
   }
-  const id = `${agent.pid}@${agent.startedAt}`;
   const out = outcomes.get(id) ?? agentOutcome(agent);
   outcomes.set(id, out);
   if (out.usageLimit) {
@@ -258,16 +268,20 @@ function agentStopped(g: Game, seat: SeatRole, l: { at: number; relaunches: numb
   if (out.session && resumes < MAX_RESUMES) {
     console.log(`[launch] ${g.id} ${seat}: its agent stopped${out.usageLimit ? " (usage limit)" : ""}, carrying its session on`);
     outcomes.delete(id);
-    try {
-      const who = whoFor(g, seat);
-      seatKeys[key].agent = startAgent({ ...who, provider: agent.provider, prompt: resumePrompt(key), logName: path.basename(agent.log, ".jsonl"), session: out.session, resumes: resumes + 1 });
-      saveSeatsNow();
-      // It has its no-show time again to turn up, however long ago it was last heard from.
-      l.at = now;
-      saveGameNow(g);
-    } catch (e) {
-      console.error(`[launch] ${g.id} ${seat}: ${(e as Error).message}`);
-    }
+    resuming.add(id);
+    const who = whoFor(g, seat);
+    startAgent({ ...who, provider: agent.provider, prompt: resumePrompt(key), logName: path.basename(agent.log, ".jsonl"), session: out.session, resumes: resumes + 1 })
+      .then((next) => {
+        // Only if the seat is still this run's and still needs it (nothing replaced it, the game didn't end).
+        if (seatKeys[key]?.agent !== agent || !needsAgent(g, seat)) return stopAgent(next);
+        seatKeys[key].agent = next;
+        saveSeatsNow();
+        // It has its no-show time again to turn up, however long ago it was last heard from.
+        l.at = Date.now();
+        saveGameNow(g);
+      })
+      .catch((e) => console.error(`[launch] ${g.id} ${seat}: ${(e as Error).message}`))
+      .finally(() => resuming.delete(id));
     return;
   }
   if (l.relaunches >= MAX_RELAUNCHES) {
@@ -354,10 +368,9 @@ export function watch() {
       needsDirection(g) &&
       !directorTurnedUp(g)
     ) {
-      console.log(`[launch] ${g.id} director: never turned up, summoning it again`);
-      g.directorSummonedAt = now;
+      console.log(`[launch] ${g.id} director: never turned up, starting it again`);
       g.directorResummons = (g.directorResummons ?? 0) + 1;
-      // Its seat was taken by the summon that came to nothing.
+      // Its seat was taken by the start that came to nothing.
       if (g.launched) delete g.launched.d;
       saveGameNow(g);
       launchDirector(g).catch((e) => console.error(`[launch] ${g.id} director: ${e.message}`));

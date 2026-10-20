@@ -7,6 +7,7 @@
 //   "act-limit-stay"  give the pregame interview, hit the limit, and keep running (a CLI that doesn't stop at one)
 //   "act"             give the pregame interview, then keep running
 //   "hang"            (or no step left) keep running
+//   "console"         keep running, as below
 // A run that keeps running starts a process of its own too (its pid in children.jsonl), as a real CLI's shell would.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -25,7 +26,7 @@ const url = process.env.AGENT_CHESS_URL;
 const runsFile = path.join(dir, "runs.jsonl");
 const earlier = existsSync(runsFile) ? readFileSync(runsFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.seatId === seatId).length : 0;
 const session = resumed ?? randomUUID();
-appendFileSync(runsFile, JSON.stringify({ pid: process.pid, argv, stdin, cwd: process.cwd(), url, seat, seatId, key, session, at: Date.now() }) + "\n");
+appendFileSync(runsFile, JSON.stringify({ pid: process.pid, ppid: process.ppid, argv, stdin, cwd: process.cwd(), url, seat, seatId, key, session, at: Date.now() }) + "\n");
 const out = (e) => process.stdout.write(JSON.stringify(e) + "\n");
 out(codex ? { type: "thread.started", thread_id: session } : { type: "system", subtype: "init", session_id: session });
 
@@ -48,6 +49,15 @@ if (step.includes("limit")) {
   }
   if (!step.endsWith("stay")) process.exit(1);
 }
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore" });
+// "console" (Windows): that process is PowerShell, which writes the console window it has to console.txt (0: none).
+const script = `Add-Type -Name C -Namespace W -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();'
+[W.C]::GetConsoleWindow().ToInt64() | Set-Content -Encoding ascii -LiteralPath '${path.join(dir, "console.txt")}'
+Start-Sleep -Seconds 600`;
+const [cmd, args] =
+  step === "console" && process.platform === "win32"
+    ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]]
+    : [process.execPath, ["-e", "setInterval(() => {}, 60000)"]];
+// Started with nothing said about windows, as a CLI's shell may be: it shares whatever console the CLI has.
+const child = spawn(cmd, args, { stdio: "ignore" });
 appendFileSync(path.join(dir, "children.jsonl"), JSON.stringify({ parent: process.pid, pid: child.pid, seatId }) + "\n");
 setInterval(() => {}, 60_000);

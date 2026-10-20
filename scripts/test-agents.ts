@@ -29,6 +29,8 @@ const pidAlive = (pid: number) => {
 const kill = (pid: number) => (process.platform === "win32" ? spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }) : pidAlive(pid) && process.kill(pid, "SIGKILL"));
 const lines = (f: string) => (existsSync(path.join(fakeDir, f)) ? readFileSync(path.join(fakeDir, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 const runs = () => lines("runs.jsonl");
+// The pid the server records for a run: on Windows its host's (server/agentHost.mjs), the fake CLI's parent.
+const agentPid = (r: { pid: number; ppid: number }) => (process.platform === "win32" ? r.ppid : r.pid);
 const children = () => lines("children.jsonl");
 const control = (c: Record<string, string[]>) => writeFileSync(path.join(fakeDir, "control.json"), JSON.stringify(c));
 async function until(check: () => Promise<boolean> | boolean, label: string, seconds = 30) {
@@ -115,17 +117,25 @@ process.env.CLAUDE_BIN = "none";
 assert.ok(!canRunAgent("claudeAgent"), '"none" turns the CLI off');
 process.env.CLAUDE_BIN = path.join(data, "no-such-claude.exe");
 assert.ok(!canRunAgent("claudeAgent"), "a CLI path that isn't there is off too");
-// One that's there but won't start throws, and its spawn error doesn't take the process down.
+// One that's there but won't start fails to start, and its spawn error doesn't take the process down.
 process.env.CLAUDE_BIN = path.resolve("README.md");
-assert.throws(() => startAgent({ provider: "claudeAgent", model: "m", effort: "low", prompt: "x", logName: "unit-bad" }));
+await assert.rejects(startAgent({ provider: "claudeAgent", model: "m", effort: "low", prompt: "x", logName: "unit-bad" }));
 await sleep(500);
 process.env.CLAUDE_BIN = FAKE;
 
-// Its own agent: started detached with the prompt on stdin, its OS start time recorded, stopped with everything it started.
-control({});
-const mine = startAgent({ provider: "claudeAgent", model: "claude-haiku-5-5", effort: "low", prompt: "Your seat key: g1-w-00ff\nRun: start --key g1-w-00ff", logName: "unit-w" });
+// Its own agent: started detached with the prompt on stdin, its processes without console windows, its OS start
+// time recorded, stopped with everything it started.
+control({ "g1-w": ["console"] });
+const mine = await startAgent({ provider: "claudeAgent", model: "claude-haiku-5-5", effort: "low", prompt: "Your seat key: g1-w-00ff\nRun: start --key g1-w-00ff", logName: "unit-w" });
 await until(() => children().length === 1, "the fake starts a process of its own");
 assert.equal(runs()[0]?.key, "g1-w-00ff", "the prompt arrives on stdin");
+assert.equal(agentPid(runs()[0]), mine.pid, "the run recorded is the one started");
+if (process.platform === "win32") {
+  // What it starts without a word about windows (as a CLI's shell may) gets no console window of its own.
+  const consoleFile = path.join(fakeDir, "console.txt");
+  await until(() => existsSync(consoleFile) && readFileSync(consoleFile, "utf8").trim() !== "", "the agent's own process reports its console window");
+  assert.equal(readFileSync(consoleFile, "utf8").trim(), "0", "an agent's processes open no console window");
+}
 await until(() => !!mine.created, "its OS start time is recorded");
 assert.equal(mine.created, processCreated(mine.pid));
 assert.ok(agentAlive(mine));
@@ -139,7 +149,7 @@ stopAgent(mine);
 await until(() => !agentAlive(mine) && !pidAlive(children()[0].pid), "its whole tree stopped");
 
 // After a restart (not its child any more), a pid is stopped only if its OS start time is the one recorded.
-const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore" });
+const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
 await sleep(500);
 const created = processCreated(other.pid!);
 assert.ok(created);
@@ -166,8 +176,9 @@ const { games } = await import("../server/store");
 const player = { provider: "claudeAgent", model: "claude-haiku-5-5", effort: "low" };
 const over = { id: "gover", phase: "finished", white: player, black: player, seen: {}, directLaunch: { w: { at: Date.now(), relaunches: 0 }, b: { at: Date.now(), relaunches: 0 } } } as unknown as Game;
 games.set(over.id, over);
-const lingering = startAgent({ ...player, prompt: "Your seat key: gover-w-0b", logName: "unit-over-w" });
-await until(() => children().some((c) => c.parent === lingering.pid), "the lingering agent's process of its own");
+const lingering = await startAgent({ ...player, prompt: "Your seat key: gover-w-0b", logName: "unit-over-w" });
+const lingeringCli = () => runs().find((r) => agentPid(r) === lingering.pid)?.pid;
+await until(() => children().some((c) => c.parent === lingeringCli()), "the lingering agent's process of its own");
 seatKeys["gover-w-0b"] = { gameId: "gover", role: "w", agent: lingering };
 seatKeys["gover-b-0c"] = { gameId: "gover", role: "b", agent: { ...mine } };
 // Even with nothing to start agents with any more (both CLIs off, no webhooks), the ones there are looked after.
@@ -182,7 +193,7 @@ try {
 } finally {
   Date.now = realNow;
 }
-await until(() => !agentAlive(lingering) && !pidAlive(children().find((c) => c.parent === lingering.pid).pid), "the lingering agent stopped, tree and all");
+await until(() => !agentAlive(lingering) && !pidAlive(children().find((c) => c.parent === lingeringCli()).pid), "the lingering agent stopped, tree and all");
 assert.ok(!seatKeys["gover-w-0b"].agent, "and forgotten");
 process.env.CLAUDE_BIN = process.env.CODEX_BIN = FAKE;
 games.delete(over.id);
@@ -224,6 +235,7 @@ function start(extra: Record<string, string> = {}) {
   const s = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     env: { ...process.env, PORT: String(port), AGENT_CHESS_DATA: data, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", ...extra },
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
   s.stdout!.on("data", (d) => (output += d));
   s.stderr!.on("data", (d) => (output += d));
@@ -263,8 +275,8 @@ try {
   assert.equal(path.resolve(w1.cwd), path.resolve("."), "it runs in the project");
   assert.deepEqual(hits, [], "nothing went through T3");
   const seats = JSON.parse(readFileSync(path.join(data, "seats.json"), "utf8"));
-  assert.equal(seats[w1.key]?.agent?.pid, w1.pid, "the seat records its agent's process");
-  assert.ok(!JSON.stringify(await game(g1)).includes(String(w1.pid)), "the process isn't in the game's (mirrored) data");
+  assert.equal(seats[w1.key]?.agent?.pid, agentPid(w1), "the seat records its agent's process");
+  assert.ok(!JSON.stringify(await game(g1)).includes(String(agentPid(w1))), "the process isn't in the game's (mirrored) data");
   console.log("PASS: players started in the background through their CLI, with only their key, nothing through T3");
 
   // Game 1's usage limit pauses White's clock.
@@ -327,7 +339,7 @@ try {
   assert.ok(w3.argv.includes("--resume") && w3.key === w1.key, "White's session carries on");
   // Black's CLI is off now: its seat goes to T3, which refuses at first. The seat stays the server's until a try goes through.
   await until(() => hits.some((h) => h.path === "/black"), "Black handed to T3", 20);
-  assert.equal(JSON.parse(readFileSync(path.join(data, "seats.json"), "utf8"))[b1.key]?.agent?.pid, b2.pid, "a refused hand-over keeps the seat");
+  assert.equal(JSON.parse(readFileSync(path.join(data, "seats.json"), "utf8"))[b1.key]?.agent?.pid, agentPid(b2), "a refused hand-over keeps the seat");
   await until(() => hits.filter((h) => h.path === "/black").length === 2, "the hand-over tried again", 80);
   const handed = hits.filter((h) => h.path === "/black");
   assert.ok(handed.every((h) => h.body.key === b1.key), "with the seat's key (its agent has stopped)");

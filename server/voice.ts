@@ -40,7 +40,7 @@ function apiKey(): string {
   if (savedKey === undefined) {
     savedKey = "";
     if (process.platform === "win32") {
-      const r = spawnSync("reg", ["query", "HKCU\\Environment", "/v", "ELEVENLABS_API_KEY"], { encoding: "utf8", timeout: 10_000 });
+      const r = spawnSync("reg", ["query", "HKCU\\Environment", "/v", "ELEVENLABS_API_KEY"], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
       savedKey = /ELEVENLABS_API_KEY\s+REG_\w+\s+(\S+)/.exec(r.stdout ?? "")?.[1] ?? "";
     }
   }
@@ -105,11 +105,11 @@ function wordStarts(chars: unknown, starts: unknown): number[] | undefined {
 }
 
 /** Whether ffprobe runs (checked before anything is paid for: every clip's length comes from it). */
-const probeAvailable = () => spawnSync("ffprobe", ["-version"], { timeout: 10_000 }).status === 0;
+const probeAvailable = () => spawnSync("ffprobe", ["-version"], { windowsHide: true, timeout: 10_000 }).status === 0;
 
 /** Seconds of audio in a file. */
 export function audioSeconds(file: string): number {
-  const p = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file], { encoding: "utf8", timeout: 20_000 });
+  const p = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
   const d = Number((p.stdout ?? "").trim());
   if (p.error || p.status !== 0 || !Number.isFinite(d) || d <= 0) throw new Error(`ffprobe couldn't read the length of ${path.basename(file)}`);
   return d;

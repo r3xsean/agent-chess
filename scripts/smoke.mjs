@@ -14,7 +14,7 @@ const api = async (p, body) =>
 const cli = (args) => {
   try {
     // --no-wait: this script drives both seats in turn, so no command may block on the other one.
-    return execFileSync("node", [CLI, ...args, ...(args[0] === "wait" ? [] : ["--no-wait"])], { encoding: "utf8", env: { ...process.env, AGENT_CHESS_URL: URL } });
+    return execFileSync("node", [CLI, ...args, ...(args[0] === "wait" ? [] : ["--no-wait"])], { encoding: "utf8", windowsHide: true, env: { ...process.env, AGENT_CHESS_URL: URL } });
   } catch (e) {
     return e.stdout + e.stderr;
   }

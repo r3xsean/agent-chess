@@ -20,7 +20,7 @@ export const SAMPLE =
 
 function key() {
   if (process.env.ELEVENLABS_API_KEY) return process.env.ELEVENLABS_API_KEY.trim();
-  const out = execSync("reg query HKCU\\Environment /v ELEVENLABS_API_KEY", { encoding: "utf8" });
+  const out = execSync("reg query HKCU\\Environment /v ELEVENLABS_API_KEY", { encoding: "utf8", windowsHide: true });
   const m = out.match(/ELEVENLABS_API_KEY\s+REG_\w+\s+(\S+)/);
   if (!m) throw new Error("ELEVENLABS_API_KEY not found");
   return m[1].trim();

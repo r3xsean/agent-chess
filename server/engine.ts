@@ -65,7 +65,7 @@ export class Engine {
 
   start() {
     const exe = findStockfish();
-    this.proc = spawn(exe, [], { stdio: "pipe" });
+    this.proc = spawn(exe, [], { stdio: "pipe", windowsHide: true });
     this.proc.on("error", (e) => {
       // Spawn failure (missing binary etc.): don't crash the server; 'exit' may never fire.
       console.error(`[${this.opts.label}] could not run ${exe}: ${e.message}`);

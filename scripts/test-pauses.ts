@@ -25,6 +25,7 @@ let output = "";
 const server = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "server/index.ts"], {
   env: { ...process.env, PORT: String(port), AGENT_CHESS_DATA: data, T3_STATE_DB: database, T3_USAGE_WATCH: "1", PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "" },
   stdio: ["ignore", "pipe", "pipe"],
+  windowsHide: true,
 });
 server.stdout.on("data", (s) => output += s);
 server.stderr.on("data", (s) => output += s);

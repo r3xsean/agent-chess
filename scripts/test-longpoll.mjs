@@ -14,7 +14,7 @@ const post = async (p, body, admin) =>
 /** Run the CLI, with `input` on standard input when given. */
 const cli = (args, input) =>
   new Promise((resolve) => {
-    const p = spawn("node", [CLI, ...args], { env: { ...process.env, AGENT_CHESS_URL: URL } });
+    const p = spawn("node", [CLI, ...args], { windowsHide: true, env: { ...process.env, AGENT_CHESS_URL: URL } });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));

@@ -54,7 +54,7 @@ function readInput() {
 }
 
 const body = { key, ...(flags["no-wait"] ? { noWait: true } : {}) };
-const JSON_BODY = { move: "turn", direct: "plan", revise: "plan", narrate: "narration", packaging: "packaging", postgame: "postgame" };
+const JSON_BODY = { move: "turn", direct: "plan", revise: "plan", narrate: "narration", packaging: "packaging", postgame: "postgame", published: "results" };
 if (cmd in JSON_BODY) {
   const raw = readInput();
   try {
@@ -96,7 +96,7 @@ function post(cmdName, payload, timeoutMs) {
 
 // Waiting (and showing the position) is safe to repeat; anything that acts may already have gone through.
 const repeatable = ["start", "wait", "status", "brief", "chat-brief", "narrate-brief", "packaging-brief", "help", "probe", "options", "threat", "board"].includes(cmd);
-const resume = String(key).startsWith("dt-") ? "chat-brief" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
+const resume = String(key).startsWith("dt-") ? "chat-brief" : String(key).startsWith("pb-") ? "start" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
 const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 
 /** Agents give each command a 6-minute shell timeout: the CLI answers inside it, whatever happens. */

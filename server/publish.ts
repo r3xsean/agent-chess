@@ -1,17 +1,22 @@
-import { existsSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Game, PublishPlatform, PublishState, PublishVisibility, VideoPackagingOptions } from "../shared/types";
 import { dropThumbOptions, jobsFor, makeThumbnails, useThumbnailOption } from "./render";
 import { favourites } from "./director";
 import { videoPath } from "./videoFiles";
-import { saveGameNow } from "./store";
-import { touch } from "./game";
-import { orchestratorAvailable, triggerOrchestrator } from "./summon";
+import { agentDir, games, saveGameNow } from "./store";
+import { ActionError, touch } from "./game";
+import { CLI, DATA } from "./paths";
+import { agentWebhook, orchestratorAvailable, triggerAgent, triggerOrchestrator, WebhookRefused } from "./summon";
 
 /*
  * Posting a game's rendered videos. The platforms' APIs keep an unaudited app's posts private, so
  * instead a publisher agent uploads them the way the user would: in the user's own Brave, already
- * logged in to YouTube Studio and TikTok Studio. The website asks (the click is the user's go-ahead),
- * the T3 webhook wakes an orchestrator, the orchestrator delegates the publisher and records its posts.
+ * logged in to YouTube Studio and TikTok Studio. The website asks (the click is the user's go-ahead) and
+ * starts the publisher in its own T3 thread through the webhook for its model, which reports its posts
+ * with the CLI. With no such webhook, the orchestrator's webhook wakes an orchestrator, which delegates the
+ * publisher and records its posts.
  */
 
 /** Driving a live browser is Astra's work (see the delegate skill's routing). */
@@ -25,6 +30,26 @@ const ACCOUNTS = {
 
 /** A request whose publisher hasn't reported back in this long can be made again. */
 const STALE_MS = 90 * 60_000;
+
+/**
+ * The publishers started in their own thread, by key: which request each is for, and whether it has reported.
+ * Local only: games go to the public mirror, so a key is never kept on one.
+ */
+const KEYS_FILE = path.join(DATA, "publishers.json");
+const publishers: Record<string, { gameId: string; attempt: number; reported?: boolean }> = (() => {
+  try {
+    return existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, "utf8")) : {};
+  } catch {
+    console.warn("[publish] Could not read publishers.json: earlier publishers' keys are unknown now.");
+    return {};
+  }
+})();
+function savePublishers() {
+  writeFileSync(`${KEYS_FILE}.tmp`, JSON.stringify(publishers));
+  renameSync(`${KEYS_FILE}.tmp`, KEYS_FILE);
+}
+export const isPublisherKey = (key: string) => key.startsWith("pb-");
+const publisherWebhook = () => agentWebhook(PUBLISHER.model, PUBLISHER.effort);
 
 export const PLATFORMS: PublishPlatform[] = ["youtube", "tiktok"];
 const NAME: Record<PublishPlatform, string> = { youtube: "YouTube", tiktok: "TikTok" };
@@ -60,6 +85,7 @@ export function missingFor(g: Game, p: PublishPlatform): string[] {
 
 /** What the website shows: the request, its posts, and what each platform still needs. */
 export function publishState(g: Game) {
+  expireStale(g);
   return {
     publish: g.publish ?? null,
     ready: Object.fromEntries(PLATFORMS.map((p) => [p, missingFor(g, p)])) as Record<PublishPlatform, string[]>,
@@ -74,7 +100,8 @@ const inFlight = (s: PublishState | undefined) => s?.status === "requested" && D
  */
 export async function requestPublish(g: Game, platforms: PublishPlatform[], visibility: PublishVisibility) {
   if (!platforms.length) throw new Error("Pick YouTube and/or TikTok.");
-  if (!orchestratorAvailable()) throw new Error("No T3 orchestrator webhook configured (data/webhook.json), so no publisher can be summoned.");
+  if (!publisherWebhook() && !orchestratorAvailable()) throw new Error(`No T3 webhook for the publisher (${PUBLISHER.model}@${PUBLISHER.effort}) or the orchestrator configured (data/webhook.json), so no publisher can be summoned.`);
+  expireStale(g);
   if (inFlight(g.publish)) throw new Error("These videos are already being published.");
   for (const p of platforms) {
     const missing = missingFor(g, p);
@@ -90,16 +117,55 @@ export async function requestPublish(g: Game, platforms: PublishPlatform[], visi
   await summonPublisher(g);
 }
 
-async function summonPublisher(g: Game) {
+/** An orchestrator whose webhook didn't answer is asked this many times more, while it hasn't taken the request. */
+const ORCHESTRATOR_RETRIES = 3;
+
+async function summonPublisher(g: Game, tries = 0) {
+  const s = g.publish!;
+  const url = publisherWebhook();
   try {
-    await triggerOrchestrator({ action: "publish", gameId: g.id });
+    if (url) {
+      const key = `pb-${randomBytes(24).toString("hex")}`;
+      publishers[key] = { gameId: g.id, attempt: s.attempt };
+      savePublishers();
+      // Handed out before it's started, so no orchestrator run (and no restart) starts a second one.
+      s.handedOutAt = Date.now();
+      saveGameNow(g);
+      await triggerAgent(url, key);
+    } else await triggerOrchestrator({ action: "publish", gameId: g.id });
   } catch (e) {
-    const s = g.publish!;
+    // Only this request's own state: a report or a newer request since is left as it is.
+    if (g.publish !== s || s.status !== "requested") throw e;
+    // An orchestrator run (an earlier ask whose answer was lost) took it meanwhile: it's that run's now.
+    if (!(e instanceof WebhookRefused) || (!url && s.handedOutAt)) {
+      // A request that timed out or dropped may have started the run all the same: the request stays its
+      // own (in flight until it's reported on, or for STALE_MS), so a second publisher can't post too. An
+      // orchestrator that hasn't taken it is asked again: only one run is ever handed the publisher.
+      console.error(`[publish] ${g.id}: the webhook didn't answer (${(e as Error).message}); it may have started, so the request stays its own`);
+      if (!url && tries < ORCHESTRATOR_RETRIES)
+        setTimeout(() => {
+          if (g.publish === s && s.status === "requested" && !s.handedOutAt) summonPublisher(g, tries + 1).catch(() => {});
+        }, 60_000).unref();
+      return;
+    }
     g.publish = { ...s, status: "failed", errors: Object.fromEntries(s.platforms.map((p) => [p, `Couldn't summon a publisher: ${(e as Error).message}`])) };
     saveGameNow(g);
     touch(g);
     throw e;
   }
+}
+
+/**
+ * A request nothing reported on in STALE_MS fails, so the page can ask again: a new publisher looks for the
+ * posts first. Its own publisher can still report late (same request), which records what it did.
+ */
+function expireStale(g: Game) {
+  const s = g.publish;
+  if (s?.status !== "requested" || inFlight(s)) return;
+  s.status = "failed";
+  s.errors = Object.fromEntries(s.platforms.map((p) => [p, `The publisher hadn't reported back after ${STALE_MS / 60_000} minutes. Check ${NAME[p]} for the post before publishing again.`]));
+  saveGameNow(g);
+  touch(g);
 }
 
 /**
@@ -115,13 +181,63 @@ export function resumePublishes(all: Iterable<Game>) {
   }
 }
 
-/** The publisher's report, recorded by the orchestrator: a post (its link) or an error per platform. */
-export function recordPublished(g: Game, results: Partial<Record<PublishPlatform, { url?: string | null; error?: string; note?: string }>>) {
+/**
+ * A command from a publisher started in its own thread: `start` (its thread's title, then its task) and
+ * `published` (its report, recorded once).
+ */
+export function publisherCommand(key: string, cmd: string, body: { results?: unknown }): string {
+  const p = publishers[key];
+  const g = p && games.get(p.gameId);
+  if (!p || !g) throw new ActionError("This publisher key is unknown.");
+  const current = g.publish?.attempt === p.attempt;
+  // Its request over (reported, replaced, or failed to start): nothing more to do, and DONE lets its thread settle.
+  const over = p.reported
+    ? "DONE — your report is recorded. Your task is complete."
+    : "DONE — this publish request is over, so there's nothing for you to do. If you uploaded or changed anything for it, say so in your final message, with the links.";
+  if (cmd === "start" || cmd === "help") {
+    expireStale(g);
+    if (p.reported || !current || g.publish?.status !== "requested") return over;
+    return `📤 Publisher — ${g.id}\n\n${publisherPrompt(g, key)}`;
+  }
+  if (cmd !== "published") throw new ActionError(`Unknown command: ${cmd}. Yours are start and published <report.json>.`);
+  // A request that failed (to start, or by going stale) still takes its own publisher's report: that's what it posted.
+  if (p.reported || !current || g.publish!.status === "done") return over;
+  const s = recordPublished(g, body.results, p.attempt);
+  p.reported = true;
+  savePublishers();
+  return `DONE — recorded (${s.status === "done" ? "posted" : "with errors"}). Your task is complete: end with a few sentences on what you did on each platform.`;
+}
+
+type Report = Partial<Record<PublishPlatform, { url?: string | null; error?: string; note?: string }>>;
+
+/** A report with a post (an http(s) link, or null) or a reason it isn't posted for each platform asked for, or why not. */
+function reportProblem(s: PublishState, results: unknown): string | undefined {
+  const shape = `{${s.platforms.map((p) => `"${p}": {"url": "https://…" | null, "note"?: "…"} or {"error": "…"}`).join(", ")}}`;
+  if (!results || typeof results !== "object" || Array.isArray(results)) return `Send ${shape}.`;
+  for (const p of s.platforms) {
+    const r = (results as Record<string, any>)[p];
+    if (!r || typeof r !== "object") return `${NAME[p]} has no result: send ${shape}.`;
+    if (r.note !== undefined && typeof r.note !== "string") return `${NAME[p]}'s note must be text.`;
+    if (r.error !== undefined) {
+      if (typeof r.error !== "string" || !r.error.trim()) return `${NAME[p]}'s error must say what stopped it.`;
+    } else if (!(r.url === null || (typeof r.url === "string" && /^https?:\/\/\S+$/.test(r.url)))) return `${NAME[p]}'s url must be its link (https://…), or null if you couldn't find it.`;
+  }
+}
+
+/**
+ * The publisher's report on request `attempt` (from the publisher itself, or the orchestrator that delegated it):
+ * a post (its link) or an error per platform. A report on an earlier request is refused.
+ */
+export function recordPublished(g: Game, results: unknown, attempt: number) {
   const s = g.publish;
-  if (!s) throw new Error("Nothing was asked to be published for this game.");
+  if (!s) throw new ActionError("Nothing was asked to be published for this game.");
+  if (attempt !== s.attempt) throw new ActionError(`That report is for publish request ${attempt}; the current one is ${s.attempt}.`);
+  const problem = reportProblem(s, results);
+  if (problem) throw new ActionError(problem);
+  const report = results as Report;
   const errors: Partial<Record<PublishPlatform, string>> = {};
   for (const p of s.platforms) {
-    const r = results[p];
+    const r = report[p];
     if (!r) errors[p] = "The publisher didn't report on it.";
     else if (r.error) errors[p] = r.error;
     else s.posts[p] = { url: r.url ?? s.posts[p]?.url ?? null, visibility: s.visibility, at: Date.now(), ...(r.note ? { note: r.note } : {}) };
@@ -275,7 +391,8 @@ ${existsSync(f.subtitles) ? `- Subtitles: TikTok's web uploader can't take a sub
 Before pressing Post, go back over every field above. After posting, find the post in TikTok Studio → Posts (it may show as processing) and get its link (https://www.tiktok.com/${ACCOUNTS.tiktok.handle}/video/…).`;
 }
 
-function publisherPrompt(g: Game): string {
+/** The publisher's task. One started in its own thread (with its `key`) records its report with the CLI; a delegated one ends with it. */
+function publisherPrompt(g: Game, key?: string): string {
   const s = g.publish!;
   const title = g.video?.packaging?.title ?? g.id;
   const steps = s.platforms.map((p) => (p === "youtube" ? youtubeSteps(g, s) : tiktokSteps(g, s))).join("\n\n");
@@ -296,9 +413,16 @@ ${steps}
 - Don't print or save cookies or tokens.
 
 ## Report
-End your final message with exactly one line in this form (valid JSON, keys ${keys} only):
-PUBLISH_RESULT {"youtube":{"url":"https://…","note":"…"},"tiktok":{"error":"what stopped it"}}
-For each platform: "url" when it's posted (null if the post exists but you couldn't find its link), or "error" when it isn't. "note" is optional: anything the user should know, such as a field you couldn't set or the cover frame you picked. Before that line, say in a few sentences what you did on each platform.${
+${
+    key
+      ? `When you're finished on every platform (or stopped), write your report as JSON (keys ${keys} only) to a file in ${agentDir(g.id, "p")}, like this:
+{"youtube":{"url":"https://…","note":"…"},"tiktok":{"error":"what stopped it"}}
+and record it, once: node "${CLI}" published <report.json> --key ${key}
+It prints DONE once it's recorded; if it says the JSON is wrong, fix it and run it again.`
+      : `End your final message with exactly one line in this form (valid JSON, keys ${keys} only):
+PUBLISH_RESULT {"youtube":{"url":"https://…","note":"…"},"tiktok":{"error":"what stopped it"}}`
+  }
+For each platform: "url" when it's posted (null if the post exists but you couldn't find its link), or "error" when it isn't. "note" is optional: anything the user should know, such as a field you couldn't set or the cover frame you picked. ${key ? "Then, in your final message" : "Before that line"}, say in a few sentences what you did on each platform.${
     s.visibility === "test"
       ? " This is a test post, to check the process before posts go public: also list the settings each upload page offered that these steps don't mention, and anything that was slow, confusing or fragile, so the steps can be improved."
       : ""
@@ -310,6 +434,7 @@ For each platform: "url" when it's posted (null if the post exists but you could
  * gives it to one run only: another run asking for the same request gets an error, so it can't post twice.
  */
 export function publishLaunch(g: Game, handOut = false) {
+  expireStale(g);
   if (g.publish?.status !== "requested") throw new Error("Nothing is waiting to be published for this game.");
   if (handOut) {
     if (g.publish.handedOutAt) throw new Error("This request's publisher was already handed to another orchestrator run.");
