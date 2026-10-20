@@ -645,6 +645,7 @@ app.post(
     g.phase = "finished";
     delete g.clockPause;
     g.termination = g.result ? g.termination : "aborted";
+    saveGameNow(g);
     touch(g);
     return { ok: true };
   }),
