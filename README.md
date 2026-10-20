@@ -1,118 +1,41 @@
 # Agent Chess
 
-A local chess.com-style arena where AI agents (Claude, Codex) play each other, think out loud on every move, show their calculations (click a line to watch it played on the board), get a live Stockfish game review (Brilliant → Blunder, accuracy, estimated rating), give pre- and post-game interviews, keep a journal across games, and get commentated live by a broadcaster agent. Games can be standard chess or Chess960, players can have a personality or play as themselves, ratings are Glicko-2, and a read-only public mirror lets anyone watch and predict.
+A chess arena where AI models play each other (or a person) in single games and tournaments, standard or Chess960. They think out loud, give interviews and carry lessons between games. A local Stockfish reviews every move, which feeds ratings, per-model analytics and rivalries. A broadcaster agent commentates live, viewers predict, and a read-only public mirror shows it all. After a game, director and narrator agents plan a voiced replay video that a publisher agent posts to YouTube and TikTok. The local server runs everything and starts and supervises the agents through T3 Code.
+
+How any of it works lives in the code: start at `server/index.ts` (the HTTP API) and `cli/chess.mjs` (the only interface agents use).
 
 ## Run it
 
 ```powershell
-cd C:\Users\User\agent-chess
-.\start.ps1            # builds the UI and starts the server
+.\start.ps1     # builds the UI and starts the server in the foreground
+.\restart.ps1   # builds, stops the running server cleanly and starts it in the background
 ```
 
 Then open http://127.0.0.1:5170.
 
-## Play a game
+## Configure it
 
-1. Click **New game**, pick a model, effort and personality for each side (**No personality** is the control group: the model plays as itself), optionally turn on **Chess960** (random or chosen start position 0–959), and turn the broadcaster on or off.
-2. Press **Summon agents**: the server starts each agent in its own T3 thread, through the webhook for its model and effort (`server/launcher.ts`). The thread gets only its seat key, and its first command, `start`, gives it its task. Seats on a model and effort with no webhook of their own go to an orchestrator run, which gets its brief from the server (`POST /api/orchestrator/brief`, `server/orchestrator.ts`): the tasks to delegate and how to look after them. Or copy the phrase the button shows (e.g. `summon chess game gk12ab34`) into your Claude chat in T3 Code (the `agent-chess` skill), which works from the same brief. After a broadcast game, the server summons the video director.
-3. Watch on the board. Tabs: **Thinking** (commentary, self-eval vs engine, calculation lines), **Moves**, **Studio** (interviews and the broadcaster's commentary), **Review** (eval graph, accuracy, classifications), **Predict** (call the result, guess the next move).
+All optional; each feature stays off without its setting.
 
-Tournaments: **Tournament** → add players (model × effort × personality) → copy `run chess tournament <id>` into chat. Games run round-robin, as many at once as the players fill (half of them, rounded down), and no model is ever in two rated games at the same time, in or out of the tournament (unrated games don't count, so a model playing a casual unrated game can still play its tournament games); pass `boards` when creating one through the API to play fewer at once (`boards: 1` for one at a time). Ratings update after every game, unless the tournament (or a single game, or a game against an agent) was set up with **Rated** off: an unrated game changes no rating and no leaderboard record. A Chess960 tournament gives each pairing its own start position (the return game of a double round-robin replays it with colours swapped).
+| Setting | For | Read in |
+| --- | --- | --- |
+| `data/webhook.json` (`url`, `secret`, `agents`) | Summoning agents through T3 webhooks | `server/summon.ts` |
+| `data/mirror.json` (`url`, `secret`), or `MIRROR_URL` / `MIRROR_SECRET` | Pushing to the public mirror | `server/mirror.ts` |
+| `data/admin-token.txt` | Admin endpoints (created on first start) | `server/store.ts` |
+| `ELEVENLABS_API_KEY` | Voices in replay videos | `server/voice.ts` |
+| `PORT`, `AGENT_CHESS_DATA` | Server port and data directory | `server/paths.ts` |
+| `ENGINE_DEPTH`, `ENGINE_MAX_MS`, `ENGINE_THREADS`, `STOCKFISH_PATH` | Stockfish | `server/engine.ts` |
+| `T3_STATE_DB`, `T3_USAGE_WATCH` | Pausing games when a model hits its usage limit | `server/usageLimits.ts` |
+| `PUBLIC_MODE=1` | Running as the read-only public mirror (see `Dockerfile`) | `server/paths.ts` |
 
-**Ratings** are [Glicko-2](https://www.glicko.net/glicko/glicko2.pdf), one rating period per game (as on lichess), rebuilt from the game history at every start. The leaderboard shows each rating with its deviation; above ±110 it's marked provisional (`?`).
-
-**The T3 webhooks** (`data/webhook.json`: `{ "url": "…", "secret": "…", "agents": { "<model>@<effort>": "…" } }`) are how the website summons agents. A T3 webhook always runs on the model and effort of the thread that created it, so each entry in `agents` is a webhook made from a thread on that model and effort, with bindToCurrentThread off. Its fixed prompt takes `{{body.key}}`, runs `start --key <key>`, renames its thread to the title `start` prints, does the task and settles the thread once the CLI prints DONE. The server sends those webhooks just `{ "key": "…" }`, because a request body reaches the agent as untrusted data while the agent's own `start` command doesn't. It also watches the seats it started: an agent unheard from for 25 minutes (or that never turned up within 10) is replaced by a new one on a new key, so the old one can't act any more, up to three times. `url` is the orchestrator's webhook, for seats with no agent webhook and for Publish: Summon agents (`start-game`), a video director (`direct-video`) and Publish (`publish`). Its prompt says only to fetch the brief for its action, so every run reads just its own job. The server starts an auto-run tournament's next games itself, as boards free up. With a `secret`, every request is signed (`x-agent-chess-signature: sha256=<hex HMAC of the body>`) and T3 checks it.
-
-## What the agents see
-
-Only what a human sees on chess.com: the board (a White-at-bottom text diagram for both players, plus a compact piece list), variant-appropriate FEN, the complete unannotated SAN move history, last move, check, captured pieces and material count, and draw offers. Each brief identifies the game, player's color, side to move, move number and next ply. Actual game history is separate from the authoritative current-position block; earlier plans and calculated variations remain hypothetical unless that continuation was actually played. Chess960 briefs also include the starting FEN. No legal-move list, no engine. Illegal moves are rejected with just "Illegal move." and shown to the audience. Fair play is enforced by prompt (agents have a shell, so they could in principle cheat).
-
-The displayed FEN records an en-passant target after every double pawn push, whether or not a capture is legal; it gives no legality hint. Internal rules and analysis FENs are unchanged. Post-game diagrams also keep White at the bottom. When learning is enabled, each game stores a snapshot of both players' lessons at creation, used for its pre-game and turn briefs. Other games' lesson updates and resets affect future games only. Older active games without snapshots freeze the current lessons on their first load after this update. Post-game lesson rewriting still uses the latest shared version.
-
-A turn is one command: the move goes in as JSON on standard input, and the command waits (up to 5 minutes) and prints whatever needs the agent next, so a player never spends a step on a separate `wait` or on writing a file. Every model step re-reads the agent's whole conversation, so fewer steps is most of what a game costs. The post-game interview, journal and lessons go in together (`postgame`); the broadcaster's `say` waits on for the next events the same way, and quiet moves reach it three at a time (or after 90 s), with any big moment at once.
-
-## Layout
-
-| Path | What |
-| --- | --- |
-| `server/` | Express server: game state, agent API, Stockfish, classification, Glicko-2, predictions, public mirror, PGN |
-| `cli/chess.mjs` | The only interface agents use. Each seat key has its own commands (`help --key <key>` lists them; `start` prints a seat's whole task, for an agent started in its own thread): players `wait`, `move`, `interview`, `postgame`, …; the broadcaster `bc-wait`, `say`; the video director `brief`, `direct`, `confirm` |
-| `web/` | React + chessground UI |
-| `shared/` | Types, rules (chess.js for standard, chessops for Chess960), personalities, model list, eval math |
-| `vendor/` | Stockfish 19, lichess opening book, sound effects (git-ignored except openings and sfx) |
-| `data/` | Games, players, journals, lessons, predictions (git-ignored) |
-
-Environment knobs: `PORT` (5170), `ENGINE_DEPTH` (22), `ENGINE_MAX_MS` (12000), `ENGINE_THREADS` (8).
-
-## Paused games
-
-The local server checks T3's saved provider failures every five seconds. An explicit `usage_limit` failure pauses the affected game at the failure timestamp; silence, status checks and ordinary provider errors do not count as exhausted usage. The game page shows the reason, affected players and reset time when known, and the Watch tab marks the game **Paused**. Thinking clocks and recorded move times exclude the pause. The pause survives a server restart and is pushed to the public mirror.
-
-T3 owns retries and auto-resume. Agent Chess makes no model calls to check usage and launches no replacement agents. A fresh game action from an affected player clears that player's usage blocker; if both players are blocked, both must act. `wait`, `status`, duplicate submissions and malformed actions do not resume the game. A validly submitted illegal chess move does prove the agent is responding. Manual pauses and other reason codes require an explicit operator resume.
-
-Detection reads `~/.t3/userdata/statev2.sqlite` in read-only mode and associates seats with their threads: a seat the server started in its own thread by the webhook delivery that started it (kept with its key in `data/seats.json`), and a seat an orchestrator delegated by its task ID (`<game>-w` / `<game>-b`, including `-r<n>` replacements). Set `T3_STATE_DB` for another T3 database path, or `T3_USAGE_WATCH=0` to disable detection. The adapter uses T3's internal schema; if the database is incompatible or unreadable it logs a warning and leaves games unchanged. The public mirror never reads T3.
-
-Local admin API: `POST /api/games/<id>/clock` with `{"action":"pause","code":"maintenance","reason":"Updating the board service"}` or `{"action":"resume"}`. Usage pauses additionally name affected `seats` (`["w"]`, `["b"]` or both) and may include an epoch-millisecond `resetAt`. The existing `x-admin-token` is required. This endpoint is disabled on the public mirror.
-
-Checks: `node node_modules/tsx/dist/cli.mjs scripts/test-thinking-clock.ts` and `node node_modules/tsx/dist/cli.mjs scripts/test-pauses.ts` (the latter starts its own temporary server and synthetic T3 database, without touching live games).
-
-## Viewer predictions
-
-Every live game has a **🔮 Predict** tab. Viewers call the result until move 10 (10 points if right) and guess each next move by playing it on the board (3 points per correct guess). Viewers are anonymous (a random id kept in the browser) with an editable name; the lobby shows the top predictors. Points are always worked out from the games, so nothing is scored twice.
-
-## The public site
-
-The public site is a read-only mirror of this one, running the same server with `PUBLIC_MODE=1` (see `Dockerfile`; it's deployed on Railway with a volume at `/data`). Games are still played here: the local server pushes every change to the mirror, and the mirror lets anyone watch, browse players, memory and agents (with their personalities), and make predictions. It runs no engine, agents or renders, refuses everything else that writes, and rate-limits viewers.
-
-To connect the local server to a mirror, create `data/mirror.json`:
-
-```json
-{ "url": "https://agent-chess-production.up.railway.app", "secret": "<the mirror's MIRROR_SECRET>" }
-```
-
-(or set `MIRROR_URL` and `MIRROR_SECRET`). On start it sends everything, then each change within a couple of seconds, retrying if the mirror is unreachable. With a mirror configured, the local site's prediction tab talks to the mirror too, so local and public viewers share one crowd. On the public site the viewer's analysis board shows the engine only for positions the games already analysed.
-
-## Video replays
-
-Any finished game can be exported as a video: 16:9 for YouTube and 9:16 for TikTok. Click 🎬 on the game page to preview it in the browser (space to play, ←/→ to skip). To render MP4s:
+## Render videos
 
 ```powershell
-npm run video -- <gameId>            # both formats → <id>-youtube.mp4, <id>-tiktok.mp4 in the game's folder
+npm run video -- <gameId>                                        # YouTube and TikTok cuts
 npm run video -- <gameId> --format portrait --music path\to\track.mp3
 ```
 
-Each game's videos get their own folder under `data/videos/`, named for the day and the players, with the game id at the end: `2026-10-17 GPT-6 Astra vs Opus 5.5 (g7lto2a464)/`. The files in it keep the id too (`g7lto2a464-youtube.mp4`). Videos rendered before this were all in `data/videos/` itself; the server moves them into their game's folder when it starts.
-
-**What's in it:**
-- The board, eval bar and each player's clock.
-- Move verdicts, and the engine's preferred move and line.
-- The eval chart, with each player's own evaluation.
-- Illegal move attempts, draw offers and resignations.
-- The best line from each pre- and post-game interview.
-- On misjudged moments, what the mover thought next to what the engine says.
-- The series between the two models ("Revenge match · Opus leads 2–0").
-
-The video slows down only for the key moments. On those, the mover's own words appear in a speech bubble before the move (`--thoughts off` skips them), and the banner shows how long they thought. A thought never covers the board. In the YouTube cut it's a bright bubble under the move list that opens to fit the line, the list making room and the panel dimming while the game stops for it, and closes after. In the short, a thought takes the space above the board.
-
-Between the key moments, the players keep talking with **asides**: short lines from their commentary, spoken in their voice (15% quicker than the other lines, time-stretched with the pitch kept) while the moves play on. They look like what they are, comments in an annotated game. Each is a dark row in the move list under the move it's from, behind a rule in the speaker's colour. It folds open as it's said and scrolls up with the list as moves come, so it never reads as a stop. The YouTube cut has all of them. The short has the ones the director marks for it, in place of the eval chart. The director opens with a short exchange of asides, so the opening has the two of them talking. A move with an illegal attempt gets one too (usually the player owning up to it), said while the rejected move is on the board. An aside is said as its move lands, never before, and the board plays on under it. So asides are lines that stay true while the board moves on: a plan, a verdict, a worry, a read on the opponent. They're never about the move itself. A thought about a single move is a moment, where the game stops for it. An aside that runs into the next moment holds the board until it's said. When the director submits a plan, the server times both cuts, estimating how long each line takes to say. It sends the plan back with every stretch where nothing is said for more than 20 seconds (12 in the short), unless the director marks the stretch as quiet on purpose because nothing said there lasts beyond its own move. The plan's readback flags asides that name a move or a capture, so the director checks they still hold. A quiet move holds for as long as the next player took to think, compared with the game's other quiet moves, with their clock running through the hold: a 2-minute think lingers and a quick reply flies by, while the total length stays about the same.
-
-**Who picks the key moments:** after the game, a video director, its own agent apart from the broadcaster (a broadcast game's first plan is made on the broadcaster's model), reads the whole game and picks those moments, plus the interview lines (`server/director.ts`). It also picks a cold open (the videos start on the payoff, then rewind), chapter titles, and three to five each of YouTube titles, TikTok captions and thumbnails for you to pick from (its favourite first, used until you pick). It also draws on the board what each quote talks about, the way a streamer draws while talking through a position: moves as arrows (green for the player's side, red for the opponent's), a piece's attacks and defences as thinner arrows, and squares as rings. A line is drawn the way it's imagined: a piece that moves again goes on from where it landed, and a fork is drawn from the square the knight lands on. Each arrow snaps in as its words are said, and those words light up in the bubble. One idea builds up at a time and wipes as the next one starts (or its sentence ends), and an idea that ends on the move being played stays up until the piece goes. Moves a player looks back on are drawn from where they were played. For every word that names a square, a move or a piece, the director says what it points at (a ref); those words light up in the bubble as they're said, and everything takes its colour from what it points at on the board as the player imagines it: green for the speaker's pieces and moves, red for the opponent's, amber for an empty square, with the engine's pick in blue. The server checks every ref against the board (the piece the words name is really there, it's drawn in that idea, no word is left out) and sends the plan back with every problem; a plan that passes is read back to the director in words (each lit word and drawing, what it points at and its colour) to `confirm` or fix. `npm run test:marks` checks the drawing and lighting on positions from a real game. The timing comes from ElevenLabs' word timestamps; clips recorded before those existed are timed by their length. Its plan is saved with the game. For a game that finished without a plan, the video page's render summons one (in its own thread, or through the orchestrator's `direct-video`), or an orchestrator gets its task from `GET /api/games/<id>/director-launch` (admin token; add `?redo=1` to replace an existing plan). Without a plan, a fallback rule picks the moments from the engine's verdicts.
-
-With the YouTube render come `<id>-youtube.txt` (title, caption, description with chapters), `<id>-thumb.png` (the thumbnail in use) and `<id>-thumb-1.png` on (each of the director's thumbnail options), and with each cut its subtitles (`<id>-youtube.srt`, `<id>-tiktok.srt`); the TikTok cut also leaves `<id>-tiktok-cover.png`. The render panel shows the director's options side by side: click a title, caption or thumbnail to use it (`POST /api/games/:id/packaging/pick`). For new options on a planned game, without touching the rest of its plan, an orchestrator delegates the task from `GET /api/games/<id>/packaging-launch` (admin token): a director runs `packaging-brief` and submits them with `packaging <file.json>`, and their thumbnails are made by themselves. The render panel also has copy buttons, and the YouTube title, YouTube description and TikTok caption can be edited there (`POST /api/games/:id/upload-text`): the publisher posts your wording. An edited description stays in place of the generated one through later renders until you press **Use generated**.
-
-**Voices:** in a directed video, each model speaks its own lines (quotes, asides, interview lines) in its own ElevenLabs voice (`shared/voices.ts`), with the director's delivery ("smug", "stunned") as an audio tag. Set `ELEVENLABS_API_KEY` in your environment. Lines are recorded when you render, cached under `data/voice/`, and never recorded twice. The director's plan is limited to an amount of speech that always fits, and nothing is recorded unless the account's remaining balance can be checked and covers it. If any line can't be voiced (no key, balance unknown or too low, an ElevenLabs error), the render stops and says why rather than going out half-silent. Retrying reuses what's already recorded. To render without voices on purpose, tick "Without voices" (or pass `--voices off`). The TikTok cut plays the voices slightly faster.
-
-The broadcaster's own lines aren't in the video. They trail the moves they describe, so they'd be out of sync.
-
-**Sound:**
-- Sound effects come from `vendor/sfx/`: Kenney's CC0 packs, named `<event>_<n>.ogg`.
-- Music comes from `--music`, or the first track in `vendor/music/` (git-ignored), and dips under the effects. `--audio-only` redoes just the sound of an existing render.
-
-**Requirements:** the renderer drives headless Chrome (or Edge) and needs `ffmpeg` on the PATH.
-
-## Move classification
-
-Moves are rated by how much of the mover's winning chances they give up, using the same bands chess.com publishes for its expected-points model: Best (nothing lost), Excellent (up to 2%), Good (up to 5%), Inaccuracy (up to 10%), Mistake (up to 20%), Blunder (more). **Brilliant** and **Great** follow [WintrChess](https://github.com/WintrCat/wintrchess)'s rules (`server/wintr.ts`): a Brilliant is a sound piece sacrifice whose capture doesn't simply hand material back, played when you wouldn't be completely winning anyway; a Great is the only move that keeps the advantage. `scripts/test-brilliant.mjs` checks them against Morphy's Opera Game and the Légal trap.
+Needs Chrome or Edge and `ffmpeg` on the PATH. Output goes to the game's folder under `data/videos/`.
 
 ## License
 
