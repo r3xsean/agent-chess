@@ -24,7 +24,7 @@ import {
   saveGameNow,
   savePlayersNow,
   saveSeatsNow,
-  saveTournament,
+  saveTournamentNow,
   seatKeys,
   tournaments,
 } from "./store";
@@ -340,18 +340,23 @@ function endGame(g: Game, result: Result, termination: string) {
   // Unrecovered players may still owe their post-game interview/journal.
   g.endedAt = Date.now();
   applyRating(g);
-  if (g.tournamentId) {
-    const t = tournaments.get(g.tournamentId);
-    if (t && t.pairings.every((p) => p.gameId && games.get(p.gameId)?.result)) {
-      t.status = "finished";
-      saveTournament(t);
-    }
-  }
   maybeFinishReview(g);
   // The result and the ratings must hit disk together.
   saveGameNow(g);
   savePlayersNow();
+  // After the game's own result is on disk, so a tournament is never saved finished with a game that isn't.
+  if (g.tournamentId) {
+    const t = tournaments.get(g.tournamentId);
+    if (t) settleTournament(t);
+  }
   touch(g);
+}
+
+/** A tournament whose every pairing has a result is finished (also run at boot, for one cut off before it was saved). */
+export function settleTournament(t: Tournament) {
+  if (t.status === "finished" || !t.pairings.length || !t.pairings.every((p) => p.gameId && games.get(p.gameId)?.result)) return;
+  t.status = "finished";
+  saveTournamentNow(t);
 }
 
 /** Rated unless it was set up unrated (games from before the option are all rated). */

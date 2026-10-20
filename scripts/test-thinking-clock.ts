@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { currentThinkMs, pauseThinkingClock, resumeThinkingClock } from "../shared/thinkingClock";
+import { currentThinkMs, pauseThinkingClock, resumeThinkingClock, skipDowntime } from "../shared/thinkingClock";
 import type { Game } from "../shared/types";
 
 const g: Pick<Game, "turnStartedAt" | "clockPause"> = { turnStartedAt: 1_000 };
@@ -17,4 +17,13 @@ assert.equal(currentThinkMs(restored, 7_206_000), 5_000, "duplicate resume is ha
 const ended = { turnStartedAt: null };
 pauseThinkingClock(ended, { at: 4_000, code: "manual", reason: "Maintenance" });
 assert.equal(currentThinkMs(ended, 9_000), 0);
-console.log("PASS: thinking clock excludes outages, survives restart, and resumes without losing prior thinking");
+const down: Pick<Game, "turnStartedAt" | "clockPause"> = { turnStartedAt: 1_000 };
+assert.ok(skipDowntime(down, 4_000, 64_000));
+assert.equal(currentThinkMs(down, 66_000), 5_000, "server downtime does not count");
+const lateTurn: Pick<Game, "turnStartedAt" | "clockPause"> = { turnStartedAt: 5_000 };
+skipDowntime(lateTurn, 4_000, 64_000);
+assert.equal(currentThinkMs(lateTurn, 64_000), 0, "a turn begun after the last heartbeat starts at the restart");
+const pausedDown = JSON.parse(JSON.stringify(restored));
+pauseThinkingClock(pausedDown, { at: 7_206_000, code: "manual", reason: "Maintenance" });
+assert.equal(skipDowntime(pausedDown, 7_206_000, 9_000_000), false, "a paused clock is already frozen");
+console.log("PASS: thinking clock excludes outages and server downtime, survives restart, and resumes without losing prior thinking");

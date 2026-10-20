@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { resumeThinkingClock } from "../shared/thinkingClock";
+import { resumeThinkingClock, skipDowntime } from "../shared/thinkingClock";
+import { beat, lastAliveAt, startHeartbeat } from "./heartbeat";
 import { migratePause, pauseGame } from "./pauses";
 import { startUsageLimitWatcher } from "./usageLimits";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -21,6 +22,7 @@ import {
   engine,
   rebuildRatings,
   resign,
+  settleTournament,
   say,
   submitInterview,
   submitJournal,
@@ -74,7 +76,13 @@ if (!PUBLIC_MODE) startLocal();
 
 function startLocal() {
   for (const g of games.values()) migratePause(g);
+  // The time the server was down isn't anyone's thinking: each turn under way starts that much later.
+  const up = Date.now();
+  if (lastAliveAt) for (const g of games.values()) if (g.phase === "playing" && !g.result && skipDowntime(g, lastAliveAt, up)) saveGameNow(g);
+  if (lastAliveAt) console.log(`[boot] the server was down for ${Math.round((up - lastAliveAt) / 1000)} s`);
+  startHeartbeat();
   rebuildRatings();
+  for (const t of tournaments.values()) settleTournament(t);
   loadOpenings();
   engine.start();
   for (const g of games.values()) {
@@ -1523,6 +1531,8 @@ bus.on("lobby", () => mirrorChangedLobby());
 function shutdown() {
   flushAll();
   flushPredictions();
+  // Down from now: the next boot doesn't count the time as anyone's thinking.
+  if (!PUBLIC_MODE) beat();
   engine.stop();
   explorer.stop();
   server.close();

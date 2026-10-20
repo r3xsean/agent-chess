@@ -9,12 +9,12 @@ import { GLICKO_START } from "./glicko";
 const dirs = ["games", "tournaments", "journals", "agents"].map((d) => path.join(DATA, d));
 for (const d of dirs) mkdirSync(d, { recursive: true });
 
-function writeJson(file: string, value: unknown) {
+export function writeJson(file: string, value: unknown) {
   const tmp = file + ".tmp";
   writeFileSync(tmp, JSON.stringify(value, null, 1));
   renameSync(tmp, file);
 }
-const readJson = <T>(file: string, fallback: T): T => {
+export const readJson = <T>(file: string, fallback: T): T => {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as T;
   } catch {
