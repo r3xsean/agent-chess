@@ -16,8 +16,18 @@ const white = player("gpt-6-astra");
 const black = player("gpt-6.1-sol");
 
 try {
-  const g = createGame({ white, black, broadcaster: null });
+  const g = createGame({ white, black });
   assert.ok(pregameBrief(g, "w").includes("INTERVIEWER:"));
+
+  // An earlier meeting stays out of the pre-game; the post-game says where the series stands.
+  Object.assign(g, { result: "1-0", termination: "Black resigned", endedAt: Date.now() - 1000, video: { hook: { caption: "Sol hangs the queen." }, moments: [] } });
+  const rematch = createGame({ white, black });
+  rematch.createdAt = Date.now();
+  for (const c of ["w", "b"] as const) assert.ok(!/record|Last time|series|headline|resigned|Welcome back/i.test(pregameBrief(rematch, c)), pregameBrief(rematch, c));
+  Object.assign(rematch, { result: "1-0", phase: "postgame", termination: "checkmate" });
+  assert.ok(postgameBrief(rematch, "w").includes("You lead the series 2–0 now."), postgameBrief(rematch, "w"));
+  assert.ok(postgameBrief(rematch, "b").includes("gpt-6-astra leads the series 2–0 now."));
+  for (const x of [g, rematch]) store.games.delete(x.id);
 
   for (const variant of ["standard", "chess960"] as const) {
     const cases = [

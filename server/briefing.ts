@@ -1,12 +1,10 @@
 import type { Square } from "chess.js";
-import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
+import { castlingNote, looseChess, newRules, ratingName, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
-import { explainIllegal, lineBreakReason } from "../shared/explain";
 import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
-import { games } from "./store";
 import { rivalry, seriesLine } from "./rivalry";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
@@ -16,9 +14,10 @@ const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r:
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
   // Once the game is rated, the rating it was played at (games since don't change who was the favourite).
-  const rating = g.ratingBefore?.[c] ?? ratingOf(p);
-  if (isHuman(p)) return `${p.modelLabel} (a human player, rating ${rating})`;
-  return `${fullName(p)} (${p.effort} effort, rating ${rating})`;
+  // A Chess960 game is rated in Chess960 ratings, and says so.
+  const rating = `${ratingName(variantOf(g))} ${g.ratingBefore?.[c] ?? ratingOf(p, variantOf(g))}`;
+  if (isHuman(p)) return `${p.modelLabel} (a human player, ${rating})`;
+  return `${fullName(p)} (${p.effort} effort, ${rating})`;
 }
 
 export function asciiBoard(fen: string, orientation: Color): string {
@@ -153,66 +152,28 @@ export function turnBrief(g: Game, color: Color): string {
   return out.join("\n");
 }
 
-function headToHead(g: Game, color: Color) {
-  const me = playerOf(g, color).id;
-  const opp = playerOf(g, other(color)).id;
-  let w = 0,
-    d = 0,
-    l = 0;
-  for (const x of games.values()) {
-    if (!x.result || x.id === g.id) continue;
-    const ids = [x.white.id, x.black.id];
-    if (!ids.includes(me) || !ids.includes(opp) || me === opp) continue;
-    const myColor: Color = x.white.id === me ? "w" : "b";
-    if (x.result === "1/2-1/2") d++;
-    else if ((x.result === "1-0") === (myColor === "w")) w++;
-    else l++;
-  }
-  // The same two models may have met at other efforts: that's the series the interviewer asks about,
-  // so say both, and which is which.
-  const r = rivalry(g);
-  const series = r ? { w: r.before[color], d: r.before.draws, l: r.before[other(color)] } : { w: 0, d: 0, l: 0 };
-  const exact = w + d + l ? `Your record against this exact opponent (this effort): ${w} wins, ${d} draws, ${l} losses.` : "";
-  const model = series.w + series.d + series.l ? `Your record against ${sideName(g, other(color))} at any effort: ${series.w} wins, ${series.d} draws, ${series.l} losses.` : "";
-  return [exact, model].filter(Boolean).join(" ") || "You have never played this opponent before.";
-}
-
 /** After the game, where the series between the two models stands now (empty for a first meeting). */
 function seriesNow(g: Game, color: Color): string {
   const r = rivalry(g);
   if (!r || r.before.w + r.before.b + r.before.draws === 0) return "";
   const opp = sideName(g, other(color));
-  return ` ${seriesLine(r.after, (c) => (c === color ? "you" : opp)).replace(/^you leads/, "you lead")} now.`;
+  return ` ${seriesLine(r.after, (c) => (c === color ? "you" : opp)).replace(/^you leads/, "You lead")} now.`;
 }
 
-/** The interviewer's opening question: about the last meeting and the series when these two models have met before. */
-function pregameQuestion(g: Game, color: Color): string {
-  const plain = "Welcome to the board. How are you feeling about this matchup, and what's your plan for the game?";
-  const r = rivalry(g);
-  if (!r?.last) return plain;
-  const opp = sideName(g, other(color));
-  const lastTime =
-    r.last.winner === null
-      ? `Your last game against ${opp} was a draw${r.last.termination ? ` (${r.last.termination})` : ""}`
-      : r.last.winner === color
-        ? `Last time, you beat ${opp}${r.last.termination ? ` (${r.last.termination})` : ""}`
-        : `Last time, ${opp} beat you${r.last.termination ? ` (${r.last.termination})` : ""}`;
-  const headline = r.last.headline ? ` The replay's headline was: '${r.last.headline.replace(/[.!?]+$/, "")}'.` : "";
-  const series = seriesLine(r.before, (c) => (c === color ? "you" : opp)).replace(/^you leads/, "you lead");
-  return `Welcome back. ${lastTime}.${headline} ${series}. What's different today, and what's your plan?`;
-}
-
+/**
+ * Before the game a player hears nothing about its earlier games against this opponent (no record, last result
+ * or replay headline), so each game stands on its own.
+ */
 export function pregameBrief(g: Game, color: Color): string {
   const out = [
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
     ...(isHuman(playerOf(g, other(color))) ? ["Your opponent is a human, playing their own moves on the website."] : []),
-    headToHead(g, color),
     ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
     "",
-    `INTERVIEWER: "${pregameQuestion(g, color)}"`,
+    'INTERVIEWER: "Welcome to the board. How are you feeling about this matchup, and what\'s your plan for the game?"',
     "Answer in your own voice, under 800 characters, with: interview -  (text on standard input)",
   ];
   return out.join("\n");
@@ -286,60 +247,3 @@ function postgameNeeds(g: Game, color: Color) {
 }
 
 const postgameSubmit = (keys: string[]) => `Submit it with \`postgame\`, as JSON: { ${keys.map((k) => `"${k}": "…"`).join(", ")} }`;
-
-/* ------------------------- broadcaster event feed ------------------------- */
-
-export interface FeedEvent {
-  id: string;
-  ts: number;
-  text: string;
-}
-
-export function broadcasterEvents(g: Game): FeedEvent[] {
-  const ev: FeedEvent[] = [];
-  const W = describePlayer(g, "w");
-  const B = describePlayer(g, "b");
-  ev.push({ id: "matchup", ts: g.createdAt, text: `[MATCHUP] White: ${W}  vs  Black: ${B}${variantOf(g) === "chess960" ? `\n${chess960Intro(g).join("\n")}` : ""}` });
-  for (const c of ["w", "b"] as Color[]) {
-    const i = g.interviews.pre[c];
-    if (i) ev.push({ id: `pre-${c}`, ts: i.ts, text: `[PRE-GAME INTERVIEW — ${colorName(c)}, ${sideName(g, c)}] "${i.text}"` });
-  }
-  if (g.playStartedAt) ev.push({ id: "start", ts: g.playStartedAt, text: "[GAME STARTED] White is on move." });
-  for (const m of g.moves) {
-    if (!m.analysis) break; // wait for the engine so every move event carries its review
-    const a = m.analysis;
-    const human = isHuman(playerOf(g, m.color));
-    const who = `${colorName(m.color)} (${sideName(g, m.color)}${human ? ", the human" : ""})`;
-    const no = `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
-    // A human shares no thinking or self-evaluation, only the move.
-    const own = human ? "" : ` Player's own eval: ${m.selfEvalRaw}.`;
-    const parts = [
-      `[MOVE ${no} ${m.san}] by ${who}, thought for ${Math.round(m.thinkMs / 1000)}s.`,
-      a.unavailable
-        ? `Engine: analysis unavailable for this move.${own}`
-        : `Engine: ${a.classification.toUpperCase()}; eval now ${formatScore(a.evalAfter)}${a.bestSan && a.bestSan !== m.san ? `; engine preferred ${a.bestSan}` : ""}.${own}`,
-    ];
-    if (!human) parts.push(`Player's thinking: "${m.commentary.slice(0, 700)}${m.commentary.length > 700 ? "…" : ""}"`);
-    if (m.lines.length)
-      parts.push(
-        `Calculated lines: ${m.lines.map((l, i) => `(${i + 1}) ${l.san.join(" ")}${l.brokenAt ? ` [breaks: ${l.brokenAt} is illegal — ${lineBreakReason(m.fenBefore, l, variantOf(g))}]` : ""}${l.note ? ` — ${l.note.slice(0, 160)}` : ""}`).join(" | ")}`,
-      );
-    if (m.illegalAttempts.length)
-      parts.push(`Before this, the player tried illegal move(s): ${m.illegalAttempts.map((t) => `${t} (${explainIllegal(m.fenBefore, t)})`).join(", ")}.`);
-    if (m.offeredDraw) parts.push(`${colorName(m.color)} offered a draw with this move.`);
-    ev.push({ id: `move-${m.ply}`, ts: m.ts, text: parts.join("\n") });
-  }
-  if (g.result && g.moves.every((m) => m.analysis)) {
-    ev.push({ id: "result", ts: Date.now(), text: `[RESULT] ${g.result} — ${g.termination}.` });
-  }
-  if (g.review) {
-    const rv = (c: Color) =>
-      g.review![c].accuracy != null ? `${colorName(c)} accuracy ${g.review![c].accuracy}% (≈${g.review![c].estElo})` : `${colorName(c)} accuracy unavailable`;
-    ev.push({ id: "review", ts: Date.now(), text: `[GAME REVIEW] ${rv("w")}, ${rv("b")}.` });
-  }
-  for (const c of ["w", "b"] as Color[]) {
-    const i = g.interviews.post[c];
-    if (i) ev.push({ id: `post-${c}`, ts: i.ts, text: `[POST-GAME INTERVIEW — ${colorName(c)}] "${i.text}"` });
-  }
-  return ev;
-}
