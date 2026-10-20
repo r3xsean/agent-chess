@@ -1521,6 +1521,18 @@ app.post(
   }),
 );
 
+// restart.ps1 stops the server this way, so everything is saved before it goes. Local only, with the admin token.
+app.post(
+  "/api/admin/shutdown",
+  localOnly,
+  handle((req) => {
+    requireAdmin(req);
+    console.log("[agent-chess] shutting down (asked to by restart.ps1)");
+    setTimeout(shutdown, 200);
+    return { ok: true };
+  }),
+);
+
 const dist = path.join(ROOT, "dist");
 if (existsSync(dist)) {
   app.use(express.static(dist));
