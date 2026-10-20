@@ -76,11 +76,6 @@ if (!PUBLIC_MODE) startLocal();
 
 function startLocal() {
   for (const g of games.values()) migratePause(g);
-  // The time the server was down isn't anyone's thinking: each turn under way starts that much later.
-  const up = Date.now();
-  if (lastAliveAt) for (const g of games.values()) if (g.phase === "playing" && !g.result && skipDowntime(g, lastAliveAt, up)) saveGameNow(g);
-  if (lastAliveAt) console.log(`[boot] the server was down for ${Math.round((up - lastAliveAt) / 1000)} s`);
-  startHeartbeat();
   rebuildRatings();
   for (const t of tournaments.values()) settleTournament(t);
   loadOpenings();
@@ -1541,7 +1536,20 @@ if (existsSync(dist)) {
 
 // Locally the agent API must never be reachable from the network; the public mirror has to be.
 const HOST = PUBLIC_MODE ? "0.0.0.0" : "127.0.0.1";
-const server = app.listen(PORT, HOST, () => console.log(`[agent-chess] http://${HOST}:${PORT}${PUBLIC_MODE ? " (public read-only mirror)" : ""}`));
+const server = app.listen(PORT, HOST, () => {
+  console.log(`[agent-chess] http://${HOST}:${PORT}${PUBLIC_MODE ? " (public read-only mirror)" : ""}`);
+  // Only once it's listening: a second server that couldn't get the port mustn't touch the heartbeat.
+  if (PUBLIC_MODE) return;
+  if (lastAliveAt) skipServerDowntime(lastAliveAt);
+  startHeartbeat();
+});
+
+/** The time the server was down (until it answers again) isn't anyone's thinking: each turn under way starts that much later. */
+function skipServerDowntime(from: number) {
+  const up = Date.now();
+  for (const g of games.values()) if (g.phase === "playing" && !g.result && skipDowntime(g, from, up)) (saveGameNow(g), touch(g));
+  console.log(`[boot] the server was down for ${Math.round((up - from) / 1000)} s`);
+}
 bus.on("lobby", () => mirrorChangedLobby());
 
 function shutdown() {

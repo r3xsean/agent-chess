@@ -176,7 +176,7 @@ export function watch() {
     if (
       g.phase === "finished" &&
       summoned &&
-      now - Math.max(summoned, bootAt) > NO_SHOW_MS &&
+      now - summoned > NO_SHOW_MS &&
       now - summoned < DIRECTOR_RETRY_MS &&
       (g.directorResummons ?? 0) < MAX_RELAUNCHES &&
       needsDirection(g) &&
