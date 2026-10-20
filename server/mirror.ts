@@ -4,7 +4,7 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Game, PlayerStats, Tournament } from "../shared/types";
 import { DATA } from "./paths";
-import { deleteGameFile, deleteTournamentFile, games, players, saveGameNow, savePlayersNow, saveTournamentNow, tournaments } from "./store";
+import { deleteGameFile, deleteTournamentFile, games, players, players960, saveGameNow, savePlayersNow, saveTournamentNow, tournaments } from "./store";
 
 /*
  * The public site is a read-only mirror. Games are played here, on the local server; every change is
@@ -41,6 +41,7 @@ export interface SyncBatch {
   /** Every tournament there is, whenever any changes. */
   tournaments?: Tournament[];
   players?: Record<string, PlayerStats>;
+  players960?: Record<string, PlayerStats>;
 }
 
 /* ------------------------------ the local side: push ------------------------------ */
@@ -143,6 +144,7 @@ async function push() {
   if (!fullSyncDone) batch.allGameIds = [...games.keys()];
   if (meta) {
     if (keep("players", players)) batch.players = players;
+    if (keep("players960", players960)) batch.players960 = players960;
     const ts = [...tournaments.values()];
     if (keep("tournaments", ts)) batch.tournaments = ts;
   }
@@ -271,9 +273,10 @@ export function ingest(batch: SyncBatch): string[] {
       deleteTournamentFile(id);
     }
   }
-  if (batch.players) {
-    for (const id of Object.keys(players)) if (!(id in batch.players)) delete players[id];
-    Object.assign(players, batch.players);
+  for (const [pool, next] of [[players, batch.players], [players960, batch.players960]] as const) {
+    if (!next) continue;
+    for (const id of Object.keys(pool)) if (!(id in next)) delete pool[id];
+    Object.assign(pool, next);
     savePlayersNow();
   }
   return changed;

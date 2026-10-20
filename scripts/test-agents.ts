@@ -164,7 +164,7 @@ delete seatKeys["gclaim-w-0a"];
 const { watch } = await import("../server/launcher");
 const { games } = await import("../server/store");
 const player = { provider: "claudeAgent", model: "claude-haiku-5-5", effort: "low" };
-const over = { id: "gover", phase: "finished", white: player, black: player, broadcaster: null, seen: {}, directLaunch: { w: { at: Date.now(), relaunches: 0 }, b: { at: Date.now(), relaunches: 0 } } } as unknown as Game;
+const over = { id: "gover", phase: "finished", white: player, black: player, seen: {}, directLaunch: { w: { at: Date.now(), relaunches: 0 }, b: { at: Date.now(), relaunches: 0 } } } as unknown as Game;
 games.set(over.id, over);
 const lingering = startAgent({ ...player, prompt: "Your seat key: gover-w-0b", logName: "unit-over-w" });
 await until(() => children().some((c) => c.parent === lingering.pid), "the lingering agent's process of its own");
@@ -241,7 +241,7 @@ try {
     return res.json();
   };
   const game = async (id: string): Promise<Game> => request(`/api/games/${id}`);
-  const newGame = async () => (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } })).game.id as string;
+  const newGame = async () => (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" } })).game.id as string;
   const seatRuns = (id: string, seat: string) => runs().filter((r) => r.seatId === `${id}-${seat}`);
 
   // Game 1: White hits a usage limit, then acts once carried on; Black just stops, then keeps running.

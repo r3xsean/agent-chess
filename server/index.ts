@@ -1,5 +1,5 @@
 import express, { type Request, type Response } from "express";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { resumeThinkingClock, skipDowntime } from "../shared/thinkingClock";
 import { beat, lastAliveAt, startHeartbeat } from "./heartbeat";
 import { migratePause, pauseGame } from "./pauses";
@@ -8,9 +8,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, PublishPlatform, SeatRole, Tournament, VideoPlan } from "../shared/types";
-import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
+import { MODELS, modelLabel } from "../shared/models";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
-import { adminToken, agentDir, flushAll, games, loadAll, players, saveGame, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
+import { adminToken, agentDir, flushAll, freshStats, games, loadAll, players, players960, saveGame, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
   acceptDraw,
@@ -22,7 +22,6 @@ import {
   rebuildRatings,
   resign,
   settleTournament,
-  say,
   submitInterview,
   playerFinished,
   seatIsHuman,
@@ -38,7 +37,7 @@ import {
   touch,
 } from "./game";
 import { humanSide, isHuman } from "../shared/naming";
-import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
+import { postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
 import { launchGame, startTournament, watch } from "./launcher";
 import { applyNarration, directorBrief, investigationNotes, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
@@ -260,12 +259,6 @@ function chess960Choice(v: unknown): number | undefined {
   return n;
 }
 
-function broadcasterConfig(input: any): Game["broadcaster"] {
-  if (!input || input.enabled === false) return null;
-  const m = MODELS.find((x) => x.model === input.model) ?? MODELS.find((x) => x.model === DEFAULT_BROADCASTER.model)!;
-  return { enabled: true, provider: m.provider, model: m.model, effort: input.effort ?? DEFAULT_BROADCASTER.effort };
-}
-
 const handle =
   (fn: (req: Request, res: Response) => unknown | Promise<unknown>) => async (req: Request, res: Response) => {
     try {
@@ -305,6 +298,7 @@ function gameSummary(g: Game) {
     plies: g.moves.length,
     opening: g.opening,
     tournamentId: g.tournamentId,
+    variant: variantOf(g),
     rated: isRated(g),
     accuracy: g.review ? { w: g.review.w.accuracy, b: g.review.b.accuracy } : null,
   };
@@ -339,7 +333,6 @@ app.get(
   "/api/meta",
   handle(() => ({
     models: MODELS,
-    defaultBroadcaster: DEFAULT_BROADCASTER,
     summonAvailable: !PUBLIC_MODE && (summonAvailable() || anyAgentCli()),
     publicMode: PUBLIC_MODE,
     // Where viewers' predictions live: the public mirror when there is one, so local and public viewers share them.
@@ -482,7 +475,7 @@ app.post(
     requireAdmin(req);
     const g = getGame(String(req.params.id));
     const seat = String(req.body?.seat);
-    if (!["w", "b", "x", "d"].includes(seat)) throw new ActionError('seat must be "w", "b", "x" or "d"');
+    if (!["w", "b", "d"].includes(seat)) throw new ActionError('seat must be "w", "b" or "d"');
     // A seat its brief already handed out keeps that time, so its agent turning up since still counts.
     if (!seatClaimed(g, seat as SeatRole)) claimSeats(g, [seat as SeatRole]);
     return { ok: true, launched: g.launched };
@@ -514,6 +507,8 @@ app.post(
 const lobby = () => ({
   games: [...games.values()].sort((a, b) => b.createdAt - a.createdAt).map(gameSummary),
   players: Object.values(players).sort((a, b) => b.rating - a.rating),
+  /** The Chess960 leaderboard: ratings from Chess960 games only. */
+  players960: Object.values(players960).sort((a, b) => b.rating - a.rating),
   tournaments: [...tournaments.values()].sort((a, b) => b.createdAt - a.createdAt),
 });
 app.get("/api/lobby", handle(lobby));
@@ -527,7 +522,7 @@ app.post(
     const black = playerRef(req.body.black ?? {});
     if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model and effort). Change one of them.");
-    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
+    const g = createGame({ white, black, rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
     // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
     const human = humanSide(g);
     const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
@@ -553,7 +548,7 @@ app.get(
   handle((req) => {
     requireAdmin(req);
     const g = getGame(String(req.params.id));
-    if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its broadcaster plans the video at the end.");
+    if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its director plans the video at the end.");
     // ?redo=1 throws the current plan away so a new director can make another.
     if (req.query.redo && g.video) {
       // The last director's and narrator's working files move aside (kept, under previous/), so the new ones
@@ -591,10 +586,9 @@ app.get(
       seats: {
         white: seatInfo("w"),
         black: seatInfo("b"),
-        broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" } : null,
         // The video director comes after the game: done once the plan is saved (or there's nothing to plan).
         // The video director comes after the game: done once the plan is saved and its narrator has seen the narration through.
-        director: g.phase === "finished" && (g.broadcaster?.enabled || g.launched?.d) ? { secondsSinceSeen: ago("d"), done: !needsDirection(g) && autoDirectorDone(g) } : null,
+        director: g.phase === "finished" ? { secondsSinceSeen: ago("d"), done: !needsDirection(g) && autoDirectorDone(g) } : null,
       },
     };
   }),
@@ -655,9 +649,12 @@ app.get(
   handle((req) => {
     const id = String(req.params.id);
     const p = players[id];
-    if (!p) throw new ActionError("No such player");
+    const p960 = players960[id];
+    if (!p && !p960) throw new ActionError("No such player");
     return {
-      player: p,
+      // A player who has only played Chess960 has no standard rating yet: its card starts from the fresh one.
+      player: p ?? { ...p960, ...freshStats() },
+      player960: p960 ?? null,
       games: [...games.values()].filter((g) => g.white.id === id || g.black.id === id).sort((a, b) => b.createdAt - a.createdAt).map(gameSummary),
     };
   }),
@@ -691,7 +688,6 @@ app.post(
       createdAt: Date.now(),
       players: unique,
       doubleRound: !!req.body.doubleRound,
-      broadcaster: broadcasterConfig(req.body.broadcaster),
       rated: req.body.rated !== false,
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
@@ -843,6 +839,8 @@ const WAIT_MS = 300_000;
 function seat(key: string) {
   const s = seatKeys[key];
   if (!s) throw new ActionError("Unknown --key. Use the exact key from your instructions. If it worked before, your seat was handed to a new agent after you went quiet: stop now, your task is over.");
+  // Keys saved for a seat that no longer exists (the old broadcaster's) open nothing.
+  if (!["w", "b", "d"].includes(s.role)) throw new ActionError("This seat no longer exists: stop now, your task is over.");
   const g = getGame(s.gameId);
   g.seen[s.role] = Date.now();
   return { g, role: s.role };
@@ -878,7 +876,7 @@ function submitPostgame(g: Game, c: Color, input: any): string {
 
 function waitingReason(g: Game, c: Color) {
   if (g.clockPause) return `game paused: ${g.clockPause.reason}`;
-  if (g.phase === "pregame") return "waiting for the other player's interview and the broadcaster's introduction";
+  if (g.phase === "pregame") return "waiting for the other player's interview";
   if (g.phase === "playing") return `your opponent is thinking (move ${Math.ceil((g.moves.length + 1) / 2)})`;
   if (g.phase === "postgame") return "the engine is finishing its review";
   return "";
@@ -916,9 +914,6 @@ function waitUntil<T>(g: Game, check: () => T | null, res: Response, recheckMs?:
   });
 }
 
-/** Broadcaster batches awaiting acknowledgment from the CLI (in memory; a restart just redelivers). */
-const bcAcks = new Map<string, { gameId: string; ids: string[]; done: boolean }>();
-
 function readText(body: any) {
   return String(body?.text ?? "");
 }
@@ -934,8 +929,6 @@ const PLAYER_COMMANDS = `  wait                 block until something needs you 
 const SEAT_COMMANDS: Record<SeatRole, string> = {
   w: PLAYER_COMMANDS,
   b: PLAYER_COMMANDS,
-  x: `  bc-wait              block until there are new events and print them
-  say -                put one segment on air (text on standard input, or --text "..."), then wait for the next events`,
   d: `  brief                print the video director brief
   direct <plan.json>   submit your video plan; it's read back to you
   confirm              save the plan once its readback is right
@@ -948,17 +941,6 @@ ${PROBE_COMMANDS}`,
 
 /** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
 const planDrafts = new Map<string, VideoPlan>();
-
-/** Quiet moves wait for company, so the broadcaster covers a few in one segment instead of one step per move. */
-const BC_BATCH_MOVES = 3;
-const BC_HOLD_MS = 90_000;
-const BC_BIG = new Set(["brilliant", "great", "mistake", "miss", "blunder"]);
-function bcHold(g: Game, fresh: { id: string; ts: number }[]) {
-  if (g.phase !== "playing" || fresh.length >= BC_BATCH_MOVES || fresh.some((e) => !e.id.startsWith("move-"))) return false;
-  const moves = fresh.map((e) => g.moves[Number(e.id.slice(5)) - 1]);
-  if (moves.some((m) => !m || m.illegalAttempts.length || m.offeredDraw || BC_BIG.has(m.analysis?.classification ?? ""))) return false;
-  return Date.now() - Math.min(...fresh.map((e) => e.ts)) < BC_HOLD_MS;
-}
 
 app.post(
   "/api/agent/:cmd",
@@ -1068,48 +1050,6 @@ app.post(
       }
       throw unknown();
     }
-    // The narrator: the narration over a saved plan's engine lines, after the director. A focused brief, the
-    // engine questions, then each submission checked, saved and read back with how it will play.
-    if (role === "x") {
-      /** Wait for the broadcaster's next events (`say` goes straight on to this too), after `done` if given. */
-      const bcNext = async (done = "") => {
-        if (done && req.body.noWait) return text(`${done} Run \`bc-wait\`.`);
-        const pending = () => {
-          const fresh = broadcasterEvents(g).filter((e) => !g.bcDelivered.includes(e.id));
-          if (g.phase === "finished" && g.broadcasterDone) return { kind: "done" as const, fresh };
-          if (fresh.length && !bcHold(g, fresh)) return { kind: "events" as const, fresh };
-          if (g.phase === "finished") return { kind: "done" as const, fresh };
-          return null;
-        };
-        const out = await waitUntil(g, pending, res, 5_000);
-        const head = done ? `${done}\n\n` : "";
-        if (!out) return text(`${head}WAITING — nothing new yet. Run \`bc-wait\`.`);
-        // Events count as consumed only when the CLI acknowledges them after printing (bc-ack);
-        // an unacknowledged batch is simply delivered again on the next bc-wait.
-        const ack = randomBytes(6).toString("hex");
-        bcAcks.set(ack, { gameId: g.id, ids: out.fresh.map((e) => e.id), done: out.kind === "done" });
-        res.setHeader("x-ack", ack);
-        if (out.kind === "done") return text(`${head}DONE — the broadcast is over. Your task is complete; you can stop now.`);
-        return text(head + out.fresh.map((e) => e.text).join("\n\n") + "\n\n(Now `say` something about this.)");
-      };
-      if (cmd === "bc-wait") return bcNext();
-      if (cmd === "bc-ack") {
-        const a = bcAcks.get(String(req.body?.ack ?? ""));
-        if (!a || a.gameId !== g.id) return text("OK");
-        bcAcks.delete(String(req.body.ack));
-        for (const id of a.ids) if (!g.bcDelivered.includes(id)) g.bcDelivered.push(id);
-        if (a.done) g.broadcasterDone = true;
-        touch(g);
-        return text("OK");
-      }
-      if (cmd === "say") {
-        if (g.phase === "finished" && g.broadcasterDone) throw new ActionError("The broadcast is over.");
-        const line = say(g, readText(req.body));
-        return bcNext(`OK — segment ${line.id} is on air.`);
-      }
-      throw unknown();
-    }
-
     const c = role as Color;
     // Every command that acts goes straight on to wait for whatever needs the player next, so a turn is one call.
     const next = async (done = "") => {

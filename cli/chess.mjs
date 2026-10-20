@@ -66,7 +66,7 @@ if (cmd in JSON_BODY) {
 } else if (["probe", "options", "threat", "board"].includes(cmd)) {
   // The engine questions: where, then moves (or how many options).
   body.args = positional.slice(1);
-} else if (["interview", "say", "bind-thread", "request-narration", "log"].includes(cmd)) {
+} else if (["interview", "bind-thread", "request-narration", "log"].includes(cmd)) {
   body.text = readInput().trim();
 }
 
@@ -84,7 +84,7 @@ function post(cmdName, payload, timeoutMs) {
         let text = "";
         res.setEncoding("utf8");
         res.on("data", (d) => (text += d));
-        res.on("end", () => resolve({ status: res.statusCode, text, ack: res.headers["x-ack"] }));
+        res.on("end", () => resolve({ status: res.statusCode, text }));
         res.on("error", reject);
       },
     );
@@ -95,8 +95,8 @@ function post(cmdName, payload, timeoutMs) {
 }
 
 // Waiting (and showing the position) is safe to repeat; anything that acts may already have gone through.
-const repeatable = ["start", "wait", "bc-wait", "status", "brief", "chat-brief", "narrate-brief", "packaging-brief", "help", "probe", "options", "threat", "board"].includes(cmd);
-const resume = String(key).startsWith("dt-") ? "chat-brief" : cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
+const repeatable = ["start", "wait", "status", "brief", "chat-brief", "narrate-brief", "packaging-brief", "help", "probe", "options", "threat", "board"].includes(cmd);
+const resume = String(key).startsWith("dt-") ? "chat-brief" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
 const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 
 /** Agents give each command a 6-minute shell timeout: the CLI answers inside it, whatever happens. */
@@ -148,8 +148,6 @@ async function main() {
     process.exit(1);
   }
   console.log(res.text);
-  // Broadcaster batches are only marked consumed once we've printed them.
-  if (res.ack) await post("bc-ack", { key, ack: res.ack }, 10_000).catch(() => {});
 }
 
 main();

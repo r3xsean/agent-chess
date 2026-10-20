@@ -155,7 +155,7 @@ export function RatingChart({ series, name }: { series: RatingSeries[]; name: (s
               {main.points.length > 1 && <path d={band} fill={SERIES[0]} opacity={0.12} />}
               {shown.map((s, si) => (
                 <polyline
-                  key={s.playerId}
+                  key={`${s.variant}:${s.playerId}`}
                   points={s.points.map((p) => `${x(p.ts)},${y(p.rating)}`).join(" ")}
                   fill="none"
                   stroke={SERIES[si]}
@@ -164,7 +164,7 @@ export function RatingChart({ series, name }: { series: RatingSeries[]; name: (s
                 />
               ))}
               {pts.map((q) => (
-                <circle key={`${q.s.playerId}-${q.p.gameId}`} cx={q.px} cy={q.py} r={4} fill={SERIES[q.si]} stroke={SURFACE} strokeWidth={2} />
+                <circle key={`${q.s.variant}:${q.s.playerId}-${q.p.gameId}`} cx={q.px} cy={q.py} r={4} fill={SERIES[q.si]} stroke={SURFACE} strokeWidth={2} />
               ))}
               {main.points.length > 1 && (
                 <text x={x(best.ts)} y={y(best.rating) - 10} className="viz-label" textAnchor={x(best.ts) > W - pad.r - 40 ? "end" : x(best.ts) < pad.l + 40 ? "start" : "middle"}>
@@ -177,7 +177,7 @@ export function RatingChart({ series, name }: { series: RatingSeries[]; name: (s
       </Frame>
       <div className="viz-legend">
         {shown.map((s, si) => (
-          <span key={s.playerId}>
+          <span key={`${s.variant}:${s.playerId}`}>
             <i style={{ background: SERIES[si] }} />
             {name(s)} · {s.current} ({s.games} game{s.games === 1 ? "" : "s"})
           </span>

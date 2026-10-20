@@ -2,19 +2,27 @@ import type { PlayerRef, PlayerStats } from "../../../shared/types";
 import { PROVISIONAL_RD } from "../../../shared/rating";
 import { sideLooks, type ModelLook } from "../../../shared/looks";
 import { useEffect, useState } from "react";
-import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from "../api";
+import { ratingsOf, useMeta, useStream, type GameSummary, type Lobby as LobbyData, type VariantRatings } from "../api";
+import { VARIANT_NAME, VARIANTS, type Variant } from "../../../shared/rules";
 import { crowdApi, useViewer } from "../viewer";
-import { PlayerAvatar, PlayerName } from "../components/PlayerName";
+import { PlayerAvatar, PlayerName, Var960 } from "../components/PlayerName";
 import { PauseNotice } from "../components/PauseNotice";
 
-export function PlayerCell({ p, rating, look }: { p: PlayerRef; rating?: number; look?: ModelLook }) {
+
+export function PlayerCell({ p, rating, look, variant = "standard" }: { p: PlayerRef; rating?: number; look?: ModelLook; variant?: Variant }) {
   return (
     <a className="pcell" href={`#/player/${encodeURIComponent(p.id)}`} onClick={(e) => e.stopPropagation()}>
       <PlayerAvatar player={p} look={look} size={36} />
       <div>
         <div className="nm">
           <PlayerName player={p} look={look} />
-          {rating !== undefined && <span style={{ color: "var(--muted)", fontWeight: 500 }}> ({rating})</span>}
+          {rating !== undefined && (
+            <span style={{ color: "var(--muted)", fontWeight: 500 }}>
+              {" "}
+              ({rating}
+              {variant === "chess960" && <Var960 />})
+            </span>
+          )}
         </div>
       </div>
     </a>
@@ -36,7 +44,7 @@ export function RatingText({ p }: { p: Pick<PlayerStats, "rating" | "rd"> }) {
 const phaseLabel =(g: GameSummary) =>
   g.clockPause ? `⏸ Paused · ${g.phase === "playing" ? `move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "pregame" ? "pre-game" : "post-game"}` : g.phase === "pregame" ? "Pre-game" : g.phase === "playing" ? `Live · move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "postgame" ? "Post-game" : g.result ?? "Aborted";
 
-export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: Record<string, number> }) {
+export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: VariantRatings }) {
   return (
     <div className="card">
       <table className="table games-table">
@@ -55,10 +63,10 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
           {games.map((g) => (
             <tr key={g.id} className="click" onClick={() => (location.hash = `#/game/${g.id}`)}>
               <td className="g-w">
-                <PlayerCell p={g.white} rating={ratings?.[g.white.id]} />
+                <PlayerCell p={g.white} rating={ratings?.[g.variant][g.white.id]} variant={g.variant} />
               </td>
               <td className="g-b">
-                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings?.[g.black.id]} />
+                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings?.[g.variant][g.black.id]} variant={g.variant} />
               </td>
               <td className="res g-res">
                 {g.clockPause ? <span className="pause-label">{phaseLabel(g)}</span> : g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
@@ -148,8 +156,10 @@ function Predictors({ base, live }: { base: string; live: number }) {
 const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
 const ALL = "";
 
-/** The leaderboard, narrowed by model and effort (each "All" by default). Ranks count within the filter. */
-function Leaderboard({ players }: { players: PlayerStats[] }) {
+/** The leaderboards, standard and Chess960 (rated apart), narrowed by model and effort (each "All" by default). Ranks count within the filter. */
+function Leaderboard({ boards }: { boards: Record<Variant, PlayerStats[]> }) {
+  const [variant, setVariant] = useState<Variant>("standard");
+  const players = boards[variant];
   const [model, setModel] = useState(ALL);
   const [effort, setEffort] = useState(ALL);
   const options = (key: (r: PlayerRef) => string, label: (r: PlayerRef) => string, order?: (a: string, b: string) => number) =>
@@ -180,6 +190,16 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
     <>
       <h2>🏆 Leaderboard</h2>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
+        <div className="field" style={{ marginBottom: 0 }}>
+          Ratings
+          <div className="seg" role="group" aria-label="Which ratings">
+            {VARIANTS.map((v) => (
+              <button key={v} className={variant === v ? "on" : ""} onClick={() => setVariant(v)}>
+                {VARIANT_NAME[v]}
+              </button>
+            ))}
+          </div>
+        </div>
         {picker("Model", model, setModel, models)}
         {picker("Effort", effort, setEffort, efforts)}
         {filtered && (
@@ -200,7 +220,7 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
             <tr>
               <th>#</th>
               <th>Player</th>
-              <th>Rating</th>
+              <th>{variant === "chess960" ? "Chess960 rating" : "Rating"}</th>
               <th className="hide-sm">Games</th>
               <th>W / D / L</th>
             </tr>
@@ -214,6 +234,7 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
                 </td>
                 <td style={{ fontWeight: 800 }}>
                   <RatingText p={p} />
+                  {variant === "chess960" && <Var960 />}
                 </td>
                 <td className="hide-sm">{p.games}</td>
                 <td>
@@ -224,7 +245,7 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
             {shown.length === 0 && (
               <tr>
                 <td colSpan={5} className="empty">
-                  {players.length ? "No player matches these filters." : "Nobody has played yet."}
+                  {players.length ? "No player matches these filters." : variant === "chess960" ? "No Chess960 games yet." : "Nobody has played yet."}
                 </td>
               </tr>
             )}
@@ -239,7 +260,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
   const lobby = useStream<LobbyData>("/api/lobby/stream");
   const meta = useMeta();
   if (!lobby) return <div className="empty">Loading…</div>;
-  const ratings = Object.fromEntries(lobby.players.map((p) => [p.id, p.rating]));
+  const ratings = ratingsOf(lobby);
   const live = lobby.games.filter((g) => g.phase !== "finished");
   const done = lobby.games.filter((g) => g.phase === "finished");
   return (
@@ -249,7 +270,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
           <h1>Agent Chess</h1>
           <p className="sub">
             {local
-              ? "AI agents play each other — or you — with live thinking, engine review and a broadcaster."
+              ? "AI agents play each other — or you — with live thinking, engine review and replay videos."
               : "AI models play chess against each other, live: watch them think, see every move reviewed by Stockfish, and call the result before they do."}
           </p>
         </div>
@@ -274,9 +295,9 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
           <div className="live-cards">
             {live.map((g) => (
               <a key={g.id} className={`live-card${g.clockPause ? " is-paused" : ""}`} href={`#/game/${g.id}`}>
-                <PlayerCell p={g.white} rating={ratings[g.white.id]} />
-                <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs</div>
-                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings[g.black.id]} />
+                <PlayerCell p={g.white} rating={ratings[g.variant][g.white.id]} variant={g.variant} />
+                <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs{g.variant === "chess960" ? " · Chess960" : ""}</div>
+                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings[g.variant][g.black.id]} variant={g.variant} />
                 <div style={{ fontSize: 13, color: g.clockPause ? "var(--pause-color)" : "var(--green)", fontWeight: 700 }}>
                   {phaseLabel(g)}
                   {!g.rated && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · unrated</span>}
@@ -288,7 +309,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
         </>
       )}
 
-      <Leaderboard players={lobby.players} />
+      <Leaderboard boards={{ standard: lobby.players, chess960: lobby.players960 ?? [] }} />
 
       {meta && <Predictors base={meta.crowdBase} live={live.length} />}
 

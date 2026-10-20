@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { AgentRow, AnalyticsScope, ModelAnalytics, Outcome, RatingSeries, TimeStats } from "../../../shared/analytics";
 import { useFetch } from "../api";
 import { lookOf } from "../../../shared/looks";
-import { PlayerAvatar } from "../components/PlayerName";
+import { PlayerAvatar, Var960 } from "../components/PlayerName";
 import { Bars, CalibrationChart, ModelScatter, RatingChart, VerdictMix, fmtMs, fmtNum } from "../components/Charts";
 
 /*
@@ -106,7 +106,7 @@ const COLS: Col[] = [
   {
     key: "rating",
     label: "Rating",
-    hint: "Glicko-2 rating of its most-played player (rated games only)",
+    hint: "Glicko-2 rating of its most-played player, from rated standard games",
     get: (r) => r.rating,
     show: (r) =>
       r.rating === null ? (
@@ -116,6 +116,22 @@ const COLS: Col[] = [
           {r.rating}
           {(r.rd ?? 350) > PROVISIONAL_RD && "?"}
           <small className="muted"> ±{r.rd}</small>
+        </>
+      ),
+  },
+  {
+    key: "rating960",
+    label: "Chess960",
+    hint: "Its Chess960 rating: rated apart from standard chess, from rated Chess960 games only",
+    get: (r) => r.rating960 ?? null,
+    show: (r) =>
+      r.rating960 == null ? (
+        "–"
+      ) : (
+        <>
+          {r.rating960}
+          {(r.rd960 ?? 350) > PROVISIONAL_RD && "?"}
+          <Var960 />
         </>
       ),
   },
@@ -244,7 +260,8 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
 
 /* ------------------------------ one model ------------------------------ */
 
-const seriesName = (s: RatingSeries) => `${cap(s.effort)} effort`;
+// Standard and Chess960 ratings are separate series, never one line.
+const seriesName = (s: RatingSeries) => `${cap(s.effort)} effort${s.variant === "chess960" ? " · Chess960" : ""}`;
 
 function OverviewTab({ a }: { a: ModelAnalytics }) {
   const q = a.quality;
@@ -253,7 +270,7 @@ function OverviewTab({ a }: { a: ModelAnalytics }) {
     <div className="panels">
       <Panel
         title="Rating over time"
-        hint="Each dot is a rated game; click one to open it."
+        hint="Each dot is a rated game; click one to open it. Chess960 is rated apart, so its ratings are their own lines."
         wide
         few={a.ratingHistory[0] && a.ratingHistory[0].games < FEW_GAMES ? <Few n={a.ratingHistory[0].games} /> : undefined}
       >
@@ -682,16 +699,18 @@ function SetupTab({ a }: { a: ModelAnalytics }) {
                   <th className="num">Avg think</th>
                   <th className="num">Rating</th>
                   <th className="num">Rated W/D/L</th>
+                  <th className="num">Chess960</th>
                 </tr>
               </thead>
               <tbody>
                 {s.efforts.map((e) => {
-                  const x = s.players.find((q) => q.effort === e.effort);
+                  const x = s.players.find((q) => q.effort === e.effort && (q.variant ?? "standard") === "standard");
+                  const x960 = s.players.find((q) => q.effort === e.effort && q.variant === "chess960");
                   return (
                     <tr
                       key={e.effort}
-                      className={`${x ? "click" : ""} ${e.games < FEW_GAMES ? "faded" : ""}`}
-                      onClick={() => x && (location.hash = `#/player/${encodeURIComponent(x.playerId)}`)}
+                      className={`${x || x960 ? "click" : ""} ${e.games < FEW_GAMES ? "faded" : ""}`}
+                      onClick={() => (x ?? x960) && (location.hash = `#/player/${encodeURIComponent((x ?? x960)!.playerId)}`)}
                     >
                       <td>{cap(e.effort)}</td>
                       <td className="num">{e.games}</td>
@@ -709,6 +728,21 @@ function SetupTab({ a }: { a: ModelAnalytics }) {
                         )}
                       </td>
                       <td className="num">{x ? `${x.record.wins}/${x.record.draws}/${x.record.losses}` : <span className="muted">·</span>}</td>
+                      <td className="num" title="Chess960 rating and rated W/D/L (rated apart from standard)">
+                        {x960 ? (
+                          <>
+                            <b>
+                              {x960.rating}
+                              {x960.rd > PROVISIONAL_RD && "?"}
+                            </b>{" "}
+                            <span className="muted">
+                              {x960.record.wins}/{x960.record.draws}/{x960.record.losses}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="muted">·</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -737,7 +771,8 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1>{r.label}</h1>
           <div className="muted">
-            {rowLook(r).makerName} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated
+            {rowLook(r).makerName} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated standard
+            {r.record960?.games ? ` · ${r.record960.wins}W / ${r.record960.draws}D / ${r.record960.losses}L rated Chess960` : ""}
           </div>
         </div>
         {rows && rows.length > 1 && (
@@ -765,8 +800,21 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
             )
           }
           sub={r.rd !== null ? `± ${r.rd}` : "unrated"}
-          hint="Its most-played player's Glicko-2 rating"
+          hint="Its most-played player's Glicko-2 rating, from rated standard games"
         />
+        {r.rating960 != null && (
+          <Stat
+            label="Chess960 rating"
+            value={
+              <>
+                {r.rating960}
+                {(r.rd960 ?? 350) > PROVISIONAL_RD && "?"}
+              </>
+            }
+            sub={`± ${r.rd960}`}
+            hint="Rated apart from standard chess: only its rated Chess960 games move it"
+          />
+        )}
         <Stat
           label="Chess.com"
           value={r.chessCom === null ? "–" : `≈${r.chessCom.rating}`}

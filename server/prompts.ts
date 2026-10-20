@@ -6,7 +6,7 @@ import { needsDirection } from "./director";
 import { autoDirectorSession, sessionPrompt } from "./directorThread";
 import { castlingNote, variantOf } from "../shared/rules";
 import { describePlayer } from "./briefing";
-import { fullName, humanSide, isHuman, sideName } from "../shared/naming";
+import { fullName, isHuman } from "../shared/naming";
 import { DEFAULT_DIRECTOR } from "../shared/models";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
@@ -24,7 +24,7 @@ export function playerPrompt(g: Game, color: Color): string {
 This game is Chess960 (Fischer Random), start position #${g.chess960}: both sides use the same back-rank arrangement on their respective home ranks. Ordinary opening sequences may not apply to this setup. All other rules are normal. ${castlingNote(startFenOf(g))} Castle by sending "O-O" or "O-O-O".
 `
       : "";
-  return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move and a broadcaster commentating.
+  return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move.
 
 ## Who you are
 You play ${colorName(color)}. Play the chess you think is strongest, and talk in your own natural voice.
@@ -91,56 +91,7 @@ If your moves keep getting rejected: you always have at least one legal move whi
 You are trying to win. Resign only when the position is clearly lost with no practical chances. Offer or accept a draw when the position is dead equal with nothing left to play for, or when a draw is a good result for you.`;
 }
 
-export function broadcasterPrompt(g: Game): string {
-  const key = seatKeysFor(g.id).x;
-  const dir = agentDir(g.id, "x");
-  const cli = `node "${CLI}"`;
-  const human = humanSide(g);
-  const agents = (["w", "b"] as Color[]).filter((c) => c !== human);
-  const cast = human
-    ? `A human is playing tonight: ${colorName(human)} is ${sideName(g, human)}, playing their own moves on the website — call them by name. They don't share their thinking, so their moves come with no commentary or self-evaluation: read their play from the moves and the engine. ${colorName(agents[0])} is an AI agent: call it by its model ("${sideName(g, agents[0])}"). Human versus machine is the story.`
-    : `The players ARE the models: call them by their model ("${sideName(g, "w")}", "${sideName(g, "b")}").`;
-  const variant =
-    variantOf(g) === "chess960"
-      ? `\nThis is a CHESS960 game (start position #${g.chess960}): ordinary opening sequences may not apply to this back-rank arrangement — make the starting setup part of the story.`
-      : "";
-  return `You are the live broadcaster for Agent Chess Arena: a veteran chess commentator with the energy of a top streamer. Your words appear live on screen, in the Studio feed next to the board, as ${human ? "a human takes on an AI agent" : "two AI agents play chess"}.
-
-Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.${variant}
-${cast}
-
-You see everything: the engine's verdict on each move (brilliant, great, best, excellent, good, book, inaccuracy, mistake, miss, blunder) and its evaluation, each agent's private thinking, calculations and self-evaluation, illegal-move attempts, draw offers and interviews. The players cannot hear you.
-
-## CLI
-Run every command as:  ${cli} <command> --key ${key}
-- \`bc-wait\` — blocks until there are new events and prints them. WAITING means run it again; DONE means you're finished.
-- \`say -\` — put one segment on air, as text on standard input (or \`say --text "..."\`). It then waits for the next events and prints them, so after the first \`bc-wait\` you just keep answering with \`say\`.
-To send text on standard input, in the same command (the closing \`'@\` or \`EOF\` must start its own line):
-PowerShell:
-$OutputEncoding = [Text.UTF8Encoding]::new($false); @'
-Your segment here.
-'@ | ${cli} say - --key ${key}
-Bash:
-${cli} say - --key ${key} <<'EOF'
-Your segment here.
-EOF
-Commands can block for up to 5 minutes: give every command your shell tool a timeout of at least 360 seconds (6 minutes). If your shell times out while \`say\` is waiting, the segment already went on air: run \`bc-wait\`, don't say it again. Files work too, instead of \`-\` (your scratch folder is ${dir}).
-
-## How to commentate
-- One segment = 1–3 sentences, under 400 characters. Lively, conversational English, like a streamer typing to chat.
-- Name moves in normal chess notation ("Nxe5+", "O-O", "Bb5"). No markdown.
-- Translate evaluations into words ("White is clearly better", "about a pawn up") rather than reading numbers.
-- Chase the drama: brilliant moves, blunders, players misjudging the position (compare their self-eval with the engine's), calculations that don't work, illegal-move attempts, draw offers.
-- Quiet moves reach you a few at a time (a big moment comes at once): cover them together in one segment. If events pile up, summarize — stay close to live.
-
-## Flow
-1. Pre-game: introduce the matchup, react to the pre-game interviews. The first move waits for your intro (after ${human ? "the agent's interview is" : "both interviews are"} in).
-2. During the game: commentate.
-3. After the game: react to the result and the review, then to the post-game interviews, then sign off. The CLI prints DONE once the show is over.
-Start with \`bc-wait\`, then answer each batch with \`say\` (which prints the next batch) until the CLI prints DONE. Never end your task before that.`;
-}
-
-/** The video director: a finished game's own task, apart from the broadcast. It only plans the replay video. */
+/** The video director: a finished game's own task. It only plans the replay video. */
 export function directorPrompt(g: Game): string {
   const key = directorKey(g.id);
   const cli = `node "${CLI}"`;
@@ -189,8 +140,7 @@ const DIRECTOR_STALE_MS = 45 * 60_000;
 
 /**
  * The director task for a finished game, or none (with why), handed to the run that asks: a second run
- * asking within the next 45 minutes gets none. A broadcast game's first plan is made by its broadcaster's
- * model; a game without a broadcaster, or a redo, gets the default director.
+ * asking within the next 45 minutes gets none.
  */
 export function directorLaunch(g: Game, effort?: string) {
   const none = (note: string) => ({ gameId: g.id, tasks: [], note });
@@ -221,10 +171,9 @@ export function directorLaunch(g: Game, effort?: string) {
   };
 }
 
-/** Who directs a game's video: its broadcaster's model for a broadcast game's first plan, otherwise the default director. */
-export function directorWho(g: Game, effort?: string) {
-  const base = g.broadcaster?.enabled && !g.videoRedos ? g.broadcaster : DEFAULT_DIRECTOR;
-  return { provider: base.provider, model: base.model, effort: effort ?? base.effort };
+/** Who directs a game's video: the default director, at the effort asked for. */
+export function directorWho(_g: Game, effort?: string) {
+  return { provider: DEFAULT_DIRECTOR.provider, model: DEFAULT_DIRECTOR.model, effort: effort ?? DEFAULT_DIRECTOR.effort };
 }
 
 const effortOption = (provider: string, effort: string) =>
@@ -236,7 +185,6 @@ const effortOption = (provider: string, effort: string) =>
  */
 export function seatTask(g: Game, role: SeatRole): { title: string; prompt: string } {
   if (role === "w" || role === "b") return { title: `♟ ${colorName(role)}: ${fullName(role === "w" ? g.white : g.black)} — ${g.id}`, prompt: playerPrompt(g, role) };
-  if (role === "x") return { title: `🎙 Broadcaster — ${g.id}`, prompt: broadcasterPrompt(g) };
   return g.video ? { title: `🎬 Titles & thumbnails — ${g.id}`, prompt: packagingPrompt(g) } : { title: `🎬 Video director — ${g.id}`, prompt: directorPrompt(g) };
 }
 
@@ -253,20 +201,6 @@ export function launchSpec(g: Game) {
       prompt: playerPrompt(g, c),
     };
   });
-  if (g.broadcaster?.enabled) {
-    tasks.push({
-      role: "broadcaster",
-      seat: "x",
-      title: `🎙 Broadcaster — ${g.id}`,
-      clientRequestId: `${g.id}-x`,
-      target: {
-        providerInstanceId: g.broadcaster.provider,
-        model: g.broadcaster.model,
-        options: effortOption(g.broadcaster.provider, g.broadcaster.effort),
-      },
-      prompt: broadcasterPrompt(g),
-    });
-  }
   // `launched`: seats an orchestrator already delegated — don't launch them again.
   return { gameId: g.id, launched: g.launched ?? {}, tasks };
 }

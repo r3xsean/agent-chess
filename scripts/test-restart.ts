@@ -78,7 +78,7 @@ try {
   await up();
   token = readFileSync(path.join(data, "admin-token.txt"), "utf8").trim();
   const newGame = async () => {
-    const created = (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } })).json();
+    const created = (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" } })).json();
     const keys: Record<string, string> = Object.fromEntries(created.launch.tasks.map((t: any) => [t.seat, /--key (\S+)/.exec(t.prompt)![1]]));
     const act = (seat: string, cmd: string, body = {}) => request(`/api/agent/${cmd}`, { key: keys[seat], noWait: true, ...body }, false);
     const game = async (): Promise<Game> => (await request(`/api/games/${created.game.id}`)).json();
@@ -126,7 +126,6 @@ try {
   editGame(done.id, (g) => {
     g.phase = "finished";
     g.finishedAt = Date.now() - 20 * 60_000;
-    g.broadcaster = { enabled: true, provider: "claudeAgent", model: "claude-opus-5-5", effort: "high" };
     g.directorSummonedAt = Date.now() - 20 * 60_000;
     g.publish = { platforms: ["youtube"], visibility: "test", status: "requested", requestedAt: Date.now() - 60_000, attempt: 1, posts: {} };
   });

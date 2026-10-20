@@ -79,7 +79,6 @@ try {
   const { game, launch } = await req("POST", "/api/games", {
     white: { model: "claude-haiku-5-5", effort: "low" },
     black: { model: "gpt-6-luna", effort: "low" },
-    broadcaster: { enabled: false },
   });
   const wKey = /--key (\S+)/.exec(launch.tasks[0].prompt)[1];
   await req("POST", `/api/games/${game.id}/summon`, {});

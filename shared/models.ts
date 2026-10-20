@@ -20,8 +20,7 @@ export const MODELS: ModelOption[] = [
   { provider: "codex", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: CODEX_EFFORTS, defaultEffort: "high" },
 ];
 
-export const DEFAULT_BROADCASTER = { provider: "claudeAgent", model: "claude-opus-5-5", effort: "high" };
-/** Who plans the replay video when a game has no broadcaster to do it (or a plan is redone). */
-export const DEFAULT_DIRECTOR = DEFAULT_BROADCASTER;
+/** Who plans each game's replay video. */
+export const DEFAULT_DIRECTOR = { provider: "claudeAgent", model: "claude-opus-5-5", effort: "high" };
 
 export const modelLabel = (model: string) => MODELS.find((m) => m.model === model)?.label ?? model;

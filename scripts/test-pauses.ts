@@ -45,7 +45,6 @@ try {
   const created = (await request("/api/games", {
     white: { model: "claude-sonnet-5-5", effort: "high" },
     black: { model: "gpt-6-astra", effort: "high" },
-    broadcaster: { enabled: false },
   }, true)).json();
   const id = created.game.id;
   const keys = Object.fromEntries(created.launch.tasks.map((t: any) => [t.seat, /--key (\S+)/.exec(t.prompt)![1]]));

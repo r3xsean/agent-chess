@@ -33,5 +33,15 @@ const rated = game("0-1", true);
 rebuildRatings();
 if (!rated.ratingChange || players[a.id].games !== 2) fail("a game marked rated should be rated");
 
+// Chess960 is rated apart: its result moves the Chess960 ratings and leaves the standard ones alone.
+const before = { ...players[a.id] };
+const fischer = game("1-0");
+fischer.variant = "chess960";
+rebuildRatings();
+const { players960 } = await import("../server/store");
+if (players[a.id].rating !== before.rating || players[a.id].games !== before.games) fail(`a Chess960 game moved the standard rating: ${before.rating} → ${players[a.id].rating}`);
+if (players960[a.id]?.games !== 1 || players960[a.id].wins !== 1) fail("a Chess960 game wasn't counted in the Chess960 ratings");
+if (fischer.ratingBefore?.w !== 1500) fail(`a first Chess960 game should start from the fresh rating, not the standard one: ${fischer.ratingBefore?.w}`);
+
 console.log(ok ? "ok" : "failed");
 process.exit(ok ? 0 : 1);

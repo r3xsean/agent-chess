@@ -215,6 +215,11 @@ export const newRules = (fen: string, variant: Variant = "standard"): Rules => (
 
 /** A game's variant (old games have none: standard). */
 export const variantOf = (g: { variant?: Variant } | null | undefined): Variant => g?.variant ?? "standard";
+/** Every variant: each has its own ratings and leaderboard, so a Chess960 result never moves a standard rating. */
+export const VARIANTS: Variant[] = ["standard", "chess960"];
+export const VARIANT_NAME: Record<Variant, string> = { standard: "Standard", chess960: "Chess960" };
+/** What a rating is called where it's shown: "Chess960 rating" for Chess960, plain "rating" otherwise. */
+export const ratingName = (v: Variant) => (v === "chess960" ? "Chess960 rating" : "rating");
 
 /**
  * A chess.js board for any position, for the helpers that inspect positions (material, attackers,

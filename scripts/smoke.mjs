@@ -28,7 +28,6 @@ const file = (name, content) => {
 const { game, launch } = await api("/api/games", {
   white: { model: "claude-opus-5-5", effort: "high" },
   black: { model: "gpt-6-astra", effort: "high" },
-  broadcaster: { enabled: false },
 });
 const keys = Object.fromEntries(launch.tasks.map((t) => [t.role, /--key (\S+)/.exec(t.prompt)[1]]));
 console.log("game", game.id, keys);

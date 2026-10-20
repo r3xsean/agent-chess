@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, rename
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Game, PlayerRef, PlayerStats, SeatRole, Tournament } from "../shared/types";
+import type { Variant } from "../shared/rules";
 import { DATA } from "./paths";
 import { GLICKO_START } from "./glicko";
 import type { AgentProc } from "./agents";
@@ -26,7 +27,11 @@ const safe = (id: string) => id.replace(/[^a-zA-Z0-9._-]/g, "_");
 export const games = new Map<string, Game>();
 export const tournaments = new Map<string, Tournament>();
 export let players: Record<string, PlayerStats> = {};
-/** Secret per seat, so the CLI can only act for the seat it was given (w, b, the broadcaster x, the video director d). */
+/** Chess960 ratings, kept apart from the standard ones above: the same players, rated only from their Chess960 games. */
+export let players960: Record<string, PlayerStats> = {};
+/** The ratings a variant's games are rated in. */
+export const ratingPool = (variant: Variant) => (variant === "chess960" ? players960 : players);
+/** Secret per seat, so the CLI can only act for the seat it was given (w, b, the video director d). */
 /**
  * Seat keys, local only. `delivery`: the T3 webhook delivery that started the seat's own thread (it finds
  * that thread). `agent`: the CLI process the server runs the seat's agent in, when it runs it itself.
@@ -51,6 +56,7 @@ export function loadAll() {
     if (t) tournaments.set(t.id, t);
   }
   players = readJson(path.join(DATA, "players.json"), {});
+  players960 = readJson(path.join(DATA, "players-960.json"), {});
   seatKeys = readJson(path.join(DATA, "seats.json"), {});
 }
 
@@ -92,21 +98,25 @@ export function saveTournamentNow(t: Tournament) {
   pending.delete(`t:${t.id}`);
   writeJson(path.join(DATA, "tournaments", `${safe(t.id)}.json`), t);
 }
+function writePlayers() {
+  writeJson(path.join(DATA, "players.json"), players);
+  writeJson(path.join(DATA, "players-960.json"), players960);
+}
 export function savePlayersNow() {
   clearTimeout(pending.get("players"));
   pending.delete("players");
-  writeJson(path.join(DATA, "players.json"), players);
+  writePlayers();
 }
 export const saveTournament = (t: Tournament) =>
   debounce(`t:${t.id}`, () => writeJson(path.join(DATA, "tournaments", `${safe(t.id)}.json`), t));
-export const savePlayers = () => debounce("players", () => writeJson(path.join(DATA, "players.json"), players));
+export const savePlayers = () => debounce("players", writePlayers);
 export const saveSeats = () => debounce("seats", () => writeJson(path.join(DATA, "seats.json"), seatKeys));
 
 export function flushAll() {
   for (const [key] of pending) clearTimeout(pending.get(key));
   for (const g of games.values()) writeJson(path.join(DATA, "games", `${safe(g.id)}.json`), g);
   for (const t of tournaments.values()) writeJson(path.join(DATA, "tournaments", `${safe(t.id)}.json`), t);
-  writeJson(path.join(DATA, "players.json"), players);
+  writePlayers();
   writeJson(path.join(DATA, "seats.json"), seatKeys);
 }
 
@@ -120,12 +130,13 @@ export const freshStats = () => ({
   losses: 0,
 });
 
-export function ensurePlayer(ref: PlayerRef): PlayerStats {
-  if (!players[ref.id]) {
-    players[ref.id] = { id: ref.id, ref, ...freshStats() };
+export function ensurePlayer(ref: PlayerRef, variant: Variant = "standard"): PlayerStats {
+  const pool = ratingPool(variant);
+  if (!pool[ref.id]) {
+    pool[ref.id] = { id: ref.id, ref, ...freshStats() };
     savePlayers();
   }
-  return players[ref.id];
+  return pool[ref.id];
 }
 
 export const agentDir = (gameId: string, role: string) => {

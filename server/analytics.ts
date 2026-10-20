@@ -19,8 +19,8 @@ import { MODELS } from "../shared/models";
 import { isHuman } from "../shared/naming";
 import { scoreToCp, winPercentFor } from "../shared/evalmath";
 import { beliefs, engineAfter } from "../shared/belief";
-import { looseChess } from "../shared/rules";
-import { games, players } from "./store";
+import { looseChess, VARIANTS, variantOf, type Variant } from "../shared/rules";
+import { games, players, players960, ratingPool } from "./store";
 import { GLICKO_START, glickoUpdate, type Glicko } from "./glicko";
 import { isRated, lineTokens } from "./game";
 import { chessComEstimates, moveReading, type MoveSample } from "./chessCom";
@@ -176,11 +176,11 @@ export function illegalKind(fen: string, tried: string): IllegalKind["kind"] {
 
 /* ------------------------------ ratings ------------------------------ */
 
-/** Every player's rating and RD after each rated game, replayed the way the ratings are built (game.ts). */
-function ratingHistories() {
+/** Every player's rating and RD after each rated game of a variant, replayed the way its ratings are built (game.ts). */
+function ratingHistories(variant: Variant) {
   const state = new Map<string, Glicko>();
   const out = new Map<string, { ts: number; gameId: string; rating: number; rd: number; color: Color; g: Game }[]>();
-  const done = [...games.values()].filter((g) => g.result && isRated(g)).sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
+  const done = [...games.values()].filter((g) => g.result && isRated(g) && variantOf(g) === variant).sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
   for (const g of done) {
     const pw = state.get(g.white.id) ?? { ...GLICKO_START };
     const pb = state.get(g.black.id) ?? { ...GLICKO_START };
@@ -306,28 +306,34 @@ const bump = (rec: Record<string, number>, key: string, by = 1) => (rec[key] = (
 
 /* ------------------------------ one model ------------------------------ */
 
-function rowOf(model: string, sides: Side[]): AgentRow {
-  const ps = Object.values(players).filter((p) => p.ref.model === model && !isHuman(p.ref));
+/** A model's players in one variant's ratings: its most settled one (lowest RD, i.e. most games, not a lucky one-game effort) and their record. */
+function standingIn(variant: Variant, model: string) {
+  const ps = Object.values(ratingPool(variant)).filter((p) => p.ref.model === model && !isHuman(p.ref));
   const rated = ps.filter((p) => p.games > 0);
-  // The model's rating is its most settled player's (lowest RD, i.e. most games), not a lucky one-game effort.
   const best = (rated.length ? rated : ps).reduce<(typeof ps)[number] | null>((a, b) => (!a || b.rd < a.rd || (b.rd === a.rd && b.rating > a.rating) ? b : a), null);
+  const record = ps.reduce((a, p) => ({ games: a.games + p.games, wins: a.wins + p.wins, draws: a.draws + p.draws, losses: a.losses + p.losses }), { games: 0, wins: 0, draws: 0, losses: 0 });
+  return { ps, best: best && best.games > 0 ? best : null, anyBest: best, record };
+}
+
+function rowOf(model: string, sides: Side[]): AgentRow {
+  const std = standingIn("standard", model);
+  const c960 = standingIn("chess960", model);
+  const ps = std.ps;
   const own = sides.flatMap((s) => s.own);
   const g = own.filter(graded);
   const estElo = mean(sides.map((s) => s.g.review?.[s.color].estElo ?? null).filter((x): x is number => x !== null));
-  const ref = sides[0]?.me ?? ps[0]?.ref;
+  const ref = sides[0]?.me ?? ps[0]?.ref ?? c960.ps[0]?.ref;
   return {
     model,
     label: MODELS.find((m) => m.model === model)?.label ?? ref?.modelLabel ?? model,
     provider: ref?.provider ?? "",
-    rating: best && best.games > 0 ? best.rating : null,
-    rd: best && best.games > 0 ? best.rd : null,
-    bestPlayerId: best?.id ?? null,
-    record: ps.reduce((a, p) => ({ games: a.games + p.games, wins: a.wins + p.wins, draws: a.draws + p.draws, losses: a.losses + p.losses }), {
-      games: 0,
-      wins: 0,
-      draws: 0,
-      losses: 0,
-    }),
+    rating: std.best?.rating ?? null,
+    rd: std.best?.rd ?? null,
+    bestPlayerId: std.anyBest?.id ?? c960.anyBest?.id ?? null,
+    record: std.record,
+    rating960: c960.best?.rating ?? null,
+    rd960: c960.best?.rd ?? null,
+    record960: c960.record,
     games: sides.length,
     moves: own.length,
     accuracy: accOf(sides),
@@ -346,19 +352,22 @@ function rowOf(model: string, sides: Side[]): AgentRow {
   };
 }
 
-function analyse(model: string, sides: Side[], field: Partial<Record<Classification, number>>, history: ReturnType<typeof ratingHistories>): ModelAnalytics {
+function analyse(model: string, sides: Side[], field: Partial<Record<Classification, number>>, history: Record<Variant, ReturnType<typeof ratingHistories>>): ModelAnalytics {
   const row = rowOf(model, sides);
   const chrono = [...sides].sort((a, b) => a.ts - b.ts);
   const own = sides.flatMap((s) => s.own);
 
   /* ratings */
-  const ratingHistory: RatingSeries[] = Object.values(players)
-    .filter((p) => p.ref.model === model && history.has(p.id))
+  // Standard and Chess960 are rated apart: each player has a series in each it has rated games in.
+  const ratingHistory: RatingSeries[] = VARIANTS.flatMap((variant) =>
+    Object.values(ratingPool(variant))
+    .filter((p) => p.ref.model === model && history[variant].has(p.id))
     .map((p) => {
-      const pts = history.get(p.id)!;
+      const pts = history[variant].get(p.id)!;
       return {
         playerId: p.id,
         effort: p.ref.effort,
+        variant,
         games: pts.length,
         current: p.rating,
         rd: p.rd,
@@ -367,8 +376,8 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
           return { ts: x.ts, gameId: x.gameId, rating: x.rating, rd: x.rd, result: pointsW as Outcome, opponent: labelOf(x.color === "w" ? x.g.black : x.g.white) };
         }),
       };
-    })
-    .sort((a, b) => b.games - a.games);
+    }),
+  ).sort((a, b) => b.games - a.games);
 
   /* form and upsets */
   const last = chrono.slice(-10);
@@ -664,15 +673,18 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
       think: timeStats(ss.flatMap((s) => s.own.map(thinkOf).filter((x): x is number => x !== null))),
     }))
     .sort((a, b) => effortOrder.indexOf(a.effort) - effortOrder.indexOf(b.effort));
-  const setupPlayers = Object.values(players)
+  const setupPlayers = VARIANTS.flatMap((variant) =>
+    Object.values(ratingPool(variant))
     .filter((p) => p.ref.model === model)
     .map((p) => ({
       playerId: p.id,
       effort: p.ref.effort,
+      variant,
       rating: p.rating,
       rd: p.rd,
       record: { games: p.games, wins: p.wins, draws: p.draws, losses: p.losses },
-    }));
+    })),
+  );
 
   return {
     scope: "all",
@@ -722,7 +734,7 @@ function signature() {
     const pending = (g.pendingIllegal?.w.length ?? 0) + (g.pendingIllegal?.b.length ?? 0);
     parts.push(`${g.id}.${g.moves.length}.${g.result}.${g.endedAt}.${isRated(g)}.${g.classifierVersion}.${pending}.${JSON.stringify([g.review, g.ratingBefore, g.ratingChange])}`);
   }
-  for (const p of Object.values(players)) parts.push(`${p.id}.${p.rating}.${p.rd}.${p.games}`);
+  for (const [v, pool] of [["s", players], ["c", players960]] as const) for (const p of Object.values(pool)) parts.push(`${v}.${p.id}.${p.rating}.${p.rd}.${p.games}`);
   return parts.join("|");
 }
 
@@ -737,12 +749,12 @@ function compute(scope: AnalyticsScope): Computed {
     for (const s of sidesOf(g)) byModel.set(s.me.model, [...(byModel.get(s.me.model) ?? []), s]);
   }
   // Models with rated players but no game in this scope still get a row.
-  for (const p of Object.values(players)) if (!isHuman(p.ref) && !byModel.has(p.ref.model)) byModel.set(p.ref.model, []);
+  for (const p of [...Object.values(players), ...Object.values(players960)]) if (!isHuman(p.ref) && !byModel.has(p.ref.model)) byModel.set(p.ref.model, []);
 
   const field: Partial<Record<Classification, number>> = {};
   for (const sides of byModel.values()) for (const s of sides) for (const m of s.own) if (m.analysis && !m.analysis.unavailable) bump(field, m.analysis.classification);
 
-  const history = ratingHistories();
+  const history = { standard: ratingHistories("standard"), chess960: ratingHistories("chess960") };
   const models = new Map<string, ModelAnalytics>();
   for (const [model, sides] of byModel) models.set(model, { ...analyse(model, sides, field, history), scope });
   const all = [...models.values()];

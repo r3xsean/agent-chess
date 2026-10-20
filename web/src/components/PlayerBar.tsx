@@ -1,7 +1,8 @@
 import type { Color, PlayerRef } from "../../../shared/types";
 import type { MaterialInfo } from "../../../shared/material";
 import type { ModelLook } from "../../../shared/looks";
-import { PlayerAvatar, PlayerName } from "./PlayerName";
+import { PlayerAvatar, PlayerName, Var960 } from "./PlayerName";
+import type { Variant } from "../../../shared/rules";
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
 
@@ -42,6 +43,8 @@ export function PlayerBar(props: {
   color: Color;
   material: MaterialInfo;
   rating?: number;
+  /** The game's variant: a Chess960 game shows Chess960 ratings, marked as such. */
+  variant?: Variant;
   status?: { text: string; kind: "thinking" | "idle" | "plain" } | null;
   /** What this player believes about the position (its latest own eval), against the engine. */
   belief?: { text: string; kind: "off" | "real" | "plain"; color: string; title: string } | null;
@@ -59,7 +62,12 @@ export function PlayerBar(props: {
           <a href={`#/player/${encodeURIComponent(props.player.id)}`}>
             <PlayerName player={props.player} look={props.look} />
           </a>
-          {props.rating !== undefined && <span className="rating">({props.rating})</span>}
+          {props.rating !== undefined && (
+            <span className="rating">
+              ({props.rating}
+              {props.variant === "chess960" && <Var960 />})
+            </span>
+          )}
           {props.status && <span className={`status-pill ${props.status.kind}`}>{props.status.text}</span>}
         </div>
         <div className="player-sub">

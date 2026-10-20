@@ -1,10 +1,10 @@
 # Agent Chess
 
-If the server started you to play, commentate, direct, narrate or publish (you were given a seat key or a task brief), stop reading here: your task and `help --key` are your only instructions.
+If the server started you to play, direct, narrate or publish (you were given a seat key or a task brief), stop reading here: your task and `help --key` are your only instructions.
 
 ## What this is
 
-A chess arena where AI models play each other (or a person) in single games and tournaments, standard or Chess960. They think out loud and give interviews. A local Stockfish reviews every move, which feeds ratings, per-model analytics and rivalries. A broadcaster agent commentates live, viewers predict, and a read-only public mirror shows it all. After a game, director and narrator agents plan a voiced replay video that a publisher agent posts to YouTube and TikTok. The local server runs everything and starts and supervises the agents: players and broadcasters in the background through their provider's CLI, the rest through T3 Code.
+A chess arena where AI models play each other (or a person) in single games and tournaments, standard or Chess960. They think out loud and give interviews. A local Stockfish reviews every move, which feeds ratings, per-model analytics and rivalries. Viewers predict, and a read-only public mirror shows it all. After a game, director and narrator agents plan a voiced replay video that a publisher agent posts to YouTube and TikTok. The local server runs everything and starts and supervises the agents: players in the background through their provider's CLI, the rest through T3 Code.
 
 ## Restarting the server
 

@@ -1,3 +1,4 @@
+import type { Variant } from "./rules";
 import type { Classification, Color } from "./types";
 
 /*
@@ -29,12 +30,16 @@ export interface AgentRow {
   model: string;
   label: string;
   provider: string;
-  /** Its best-rated player (model + effort), from rated games. */
+  /** Its best-rated player (model + effort), from rated standard games. */
   rating: number | null;
   rd: number | null;
   bestPlayerId: string | null;
-  /** Rated games only, as on the leaderboard. */
+  /** Rated standard games only, as on the leaderboard. */
   record: WDL;
+  /** The same from rated Chess960 games: Chess960 is rated apart, so its results never move the standard rating. */
+  rating960: number | null;
+  rd960: number | null;
+  record960: WDL;
   /** Games and moves in scope. */
   games: number;
   moves: number;
@@ -68,6 +73,8 @@ export interface RatingPoint {
 export interface RatingSeries {
   playerId: string;
   effort: string;
+  /** Which ratings these are: standard and Chess960 are kept apart. */
+  variant: Variant;
   games: number;
   current: number;
   rd: number;
@@ -189,6 +196,6 @@ export interface ModelAnalytics {
   h2h: HeadToHead[];
   setup: {
     efforts: { effort: string; games: number; score: number | null; accuracy: number | null; think: TimeStats }[];
-    players: { playerId: string; effort: string; rating: number; rd: number; record: WDL }[];
+    players: { playerId: string; effort: string; variant: Variant; rating: number; rd: number; record: WDL }[];
   };
 }

@@ -188,7 +188,7 @@ export interface Timeline {
   /** Lines said in passing, over the scenes (the YouTube cut of a directed game only). */
   asides: AsideCue[];
   duration: number;
-  /** Whether the broadcaster picked the moments (otherwise a fallback rule did). */
+  /** Whether the director picked the moments (otherwise a fallback rule did). */
   directed: boolean;
 }
 
@@ -213,11 +213,6 @@ const PUNISHABLE: Classification[] = ["mistake", "miss", "blunder"];
 const WORDS_PER_SECOND = 4.5;
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
 
-/*
- * The broadcaster isn't in the video: its lines are stamped with the move on the board when they
- * were said, which often trails the move they're about. The video tells the story with the players'
- * own words, the engine's verdicts and the eval instead. (The broadcaster still picks the moments.)
- */
 export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {}): Timeline {
   const wide = format === "landscape";
   const pace = opts.pace ?? 1;

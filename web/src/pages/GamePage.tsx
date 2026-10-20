@@ -20,13 +20,13 @@ import { PlayerBar } from "../components/PlayerBar";
 import { PauseNotice } from "../components/PauseNotice";
 import { MoveList } from "../components/MoveList";
 import { ThinkingFeed } from "../components/ThinkingFeed";
-import { Studio } from "../components/Studio";
+import { Interviews } from "../components/Interviews";
 import { Review, engineScoreAt } from "../components/Review";
 import { WhyCard, movePrefixes } from "../components/WhyCard";
 import { explainMove, type EngineLine } from "../../../shared/why";
 import { playMoveSound, playSfx, STING, useSfxToggle } from "../sfx";
 
-type Tab = "moves" | "thinking" | "studio" | "review" | "predict";
+type Tab = "moves" | "thinking" | "interviews" | "review" | "predict";
 interface CalcState {
   ply: number;
   line: number;
@@ -123,7 +123,7 @@ export function GamePage({ id }: { id: string }) {
   const human = game ? humanSide(game) : null;
   const myKey = useMemo(() => seatKey(id), [id]);
   const mine: Color | null = human && myKey ? human : null;
-  // While you play, the engine, the agent's thinking and the broadcaster stay hidden; all of it unlocks at the end.
+  // While you play, the engine and the agent's thinking stay hidden; all of it unlocks at the end.
   const hidden = !!mine && !!game && !game.result && game.termination !== "aborted";
   const sfx = useSfxToggle();
   const [offerDraw, setOfferDraw] = useState(false);
@@ -540,10 +540,11 @@ export function GamePage({ id }: { id: string }) {
 
   const thinkMs = (c: Color) =>
     game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c ? currentThinkMs(game, now) : 0);
-  const rating = (c: Color) => lobby?.players.find((p) => p.id === (c === "w" ? game.white : game.black).id)?.rating;
+  // A Chess960 game shows its players' Chess960 ratings: the two are rated apart.
+  const rating = (c: Color) => (variantOf(game) === "chess960" ? lobby?.players960 : lobby?.players)?.find((p) => p.id === (c === "w" ? game.white : game.black).id)?.rating;
   const status = (c: Color) => {
     if (game.clockPause) return { text: "⏸ Paused", kind: "idle" as const };
-    if (game.phase === "pregame") return game.interviews.pre[c] || c === human ? { text: "Ready", kind: "plain" as const } : { text: "In the studio", kind: "plain" as const };
+    if (game.phase === "pregame") return game.interviews.pre[c] || c === human ? { text: "Ready", kind: "plain" as const } : { text: "In the interview", kind: "plain" as const };
     if (playing && turn === c && c === human) return { text: c === mine ? "Your move" : "Thinking", kind: "thinking" as const };
     if (playing && turn === c) {
       const seen = game.seen[c];
@@ -596,6 +597,7 @@ export function GamePage({ id }: { id: string }) {
       color={c}
       material={material}
       rating={rating(c)}
+      variant={variantOf(game)}
       status={status(c)}
       belief={beliefPill(c)}
       clockMs={thinkMs(c)}
@@ -665,7 +667,7 @@ export function GamePage({ id }: { id: string }) {
             [
               ["thinking", "🧠", "Thinking"],
               ["moves", "♟", "Moves"],
-              ["studio", "🎙", "Studio"],
+              ["interviews", "🎤", "Interviews"],
               ["review", "⭐", "Review"],
               ...(hidden || mine ? [] : [["predict", "🔮", "Predict"]]),
             ] as [Tab, string, string][]
@@ -834,8 +836,7 @@ export function GamePage({ id }: { id: string }) {
           <div className="play-panel">
             {game.phase === "pregame" ? (
               <div className="play-status">
-                You're {mine === "w" ? "White" : "Black"} against {agentName}. The game starts once they've answered their pre-game interview
-                {game.broadcaster?.enabled ? " and the broadcaster has introduced the match" : ""}.
+                You're {mine === "w" ? "White" : "Black"} against {agentName}. The game starts once they've answered their pre-game interview.
               </div>
             ) : (
               <>
@@ -901,7 +902,7 @@ export function GamePage({ id }: { id: string }) {
                 tryAt={calc?.try !== undefined ? calc.try : tryIdx}
                 calc={calc} onSelect={go} onSelectTry={showTry} onPlayLine={playLine} />
             ))}
-          {tab === "studio" && <Studio game={game} hideBroadcast={hidden} />}
+          {tab === "interviews" && <Interviews game={game} />}
           {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
           {tab === "predict" && crowdBase !== null && (
             <CrowdPanel

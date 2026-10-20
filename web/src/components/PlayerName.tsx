@@ -99,6 +99,12 @@ function Wear({ age, size }: { age: Age; size: number }) {
   );
 }
 
+/** Marks a Chess960 rating, so it's never read as the standard one. */
+export const Var960 = () => (
+  <span className="var-tag" title="Chess960 rating: Chess960 is rated apart from standard chess">
+    960
+  </span>
+);
 /** The model's name in its colour (the house colour, or the away colour in a game), with the effort. */
 export function PlayerName({ player, effort = true, className = "", look = lookOf(player) }: { player: PlayerRef; effort?: boolean; className?: string; look?: ModelLook }) {
   return (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Game, ModelOption, PlayerRef, PlayerStats, Tournament } from "../../shared/types";
+import type { Variant } from "../../shared/rules";
 
 export interface GameSummary {
   id: string;
@@ -13,6 +14,7 @@ export interface GameSummary {
   plies: number;
   opening: Game["opening"];
   tournamentId?: string;
+  variant: Variant;
   rated: boolean;
   accuracy: { w: number | null; b: number | null } | null;
 }
@@ -20,12 +22,13 @@ export interface GameSummary {
 export interface Lobby {
   games: GameSummary[];
   players: PlayerStats[];
+  /** The Chess960 leaderboard: Chess960 is rated apart from standard chess. */
+  players960: PlayerStats[];
   tournaments: Tournament[];
 }
 
 export interface Meta {
   models: ModelOption[];
-  defaultBroadcaster: { provider: string; model: string; effort: string };
   /** A T3 webhook is configured, so the site can summon agents itself. */
   summonAvailable: boolean;
   /** The read-only public mirror: no game creation, agents, renders or engine. */
@@ -90,5 +93,12 @@ export function useFetch<T>(url: string | null, deps: unknown[] = []): T | null 
   return value;
 }
 
-export type PlayerPage = { player: PlayerStats; games: GameSummary[] };
+export type PlayerPage = { player: PlayerStats; player960: PlayerStats | null; games: GameSummary[] };
+
+/** Each player's current rating by id, per variant (a Chess960 game is shown with Chess960 ratings). */
+export type VariantRatings = Record<Variant, Record<string, number>>;
+export const ratingsOf = (l: Pick<Lobby, "players" | "players960"> | null | undefined): VariantRatings => ({
+  standard: Object.fromEntries((l?.players ?? []).map((p) => [p.id, p.rating])),
+  chess960: Object.fromEntries((l?.players960 ?? []).map((p) => [p.id, p.rating])),
+});
 export type TournamentPage = { tournament: Tournament; games: (GameSummary | null)[]; next?: number[]; breakUntil?: number };

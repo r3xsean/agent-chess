@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
+import { api, ratingsOf, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
 import type { PlayerRef, Tournament } from "../../../shared/types";
 import { sideLooks } from "../../../shared/looks";
 import { GamesTable, PlayerCell } from "./Lobby";
@@ -11,7 +11,10 @@ export function TournamentPage({ id }: { id: string }) {
   const data = useFetch<Data>(`/api/tournaments/${id}`, [id, JSON.stringify(lobby?.games.map((g) => g.phase)), JSON.stringify(lobby?.tournaments)]);
   if (!data) return <div className="empty">Loading…</div>;
   const { tournament: t, games } = data;
-  const ratings = Object.fromEntries((lobby?.players ?? []).map((p) => [p.id, p.rating]));
+  const all = ratingsOf(lobby);
+  // A Chess960 tournament is shown with its players' Chess960 ratings.
+  const variant = t.chess960 ? "chess960" : "standard";
+  const ratings = all[variant];
   const score: Record<string, { pts: number; played: number; w: number; d: number; l: number }> = {};
   for (const p of t.players) score[p.id] = { pts: 0, played: 0, w: 0, d: 0, l: 0 };
   for (const g of games) {
@@ -36,7 +39,7 @@ export function TournamentPage({ id }: { id: string }) {
     <div className="page">
       <h1>🏆 {t.name}</h1>
       <p className="sub">
-        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin{t.rated === false ? " · unrated" : ""} · {t.status}
+        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin{t.chess960 ? " · Chess960 (rated apart from standard)" : ""}{t.rated === false ? " · unrated" : ""} · {t.status}
       </p>
       {meta && !meta.publicMode && <TournamentSettings key={`${t.id}:${t.boards}:${t.breakHours}`} tournament={t} />}
       {t.status === "running" && (
@@ -69,7 +72,7 @@ export function TournamentPage({ id }: { id: string }) {
               <tr key={p.id}>
                 <td style={{ fontWeight: 700, color: i === 0 ? "#f7c631" : "var(--muted)" }}>{i + 1}</td>
                 <td>
-                  <PlayerCell p={p} rating={ratings[p.id]} />
+                  <PlayerCell p={p} rating={ratings[p.id]} variant={variant} />
                 </td>
                 <td style={{ fontWeight: 800 }}>{score[p.id].pts}</td>
                 <td className="hide-sm">{score[p.id].played}</td>
@@ -106,7 +109,7 @@ export function TournamentPage({ id }: { id: string }) {
         </table>
       </div>
       <h2>Games</h2>
-      <GamesTable games={games.filter((g): g is NonNullable<typeof g> => !!g)} ratings={ratings} />
+      <GamesTable games={games.filter((g): g is NonNullable<typeof g> => !!g)} ratings={all} />
     </div>
   );
 }

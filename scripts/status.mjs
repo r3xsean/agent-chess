@@ -8,5 +8,4 @@ for (const m of g.moves.slice(-8)) {
   );
 }
 console.log("pending illegal:", JSON.stringify(g.pendingIllegal));
-for (const l of g.broadcast.slice(-3)) console.log(`BC#${l.id}: ${l.text.slice(0, 160)}`);
 if (g.review) console.log("review:", JSON.stringify(g.review));

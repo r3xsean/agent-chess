@@ -5,7 +5,6 @@ import { games, saveTournament, saveTournamentNow, tournaments } from "./store";
 import { ActionError, boardsOf, claimSeats, createGame, seatClaimed, startablePairings, tournamentBreakUntil } from "./game";
 import { directorLaunch, launchSpec } from "./prompts";
 import { publishLaunch } from "./publish";
-import { summonAvailable } from "./summon";
 import { directorThreadLaunch } from "./directorThread";
 import { fullName, humanSide } from "../shared/naming";
 
@@ -33,7 +32,7 @@ export function tournamentNext(t: Tournament): { finished: true } | { games: Gam
   }
   const byId = new Map(t.players.map((p) => [p.id, p]));
   const start = (next: Tournament["pairings"][number]) => {
-    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, broadcaster: t.broadcaster, tournamentId: t.id, rated: t.rated !== false, chess960: next.chess960 });
+    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, tournamentId: t.id, rated: t.rated !== false, chess960: next.chess960 });
     next.gameId = g.id;
     return g;
   };
@@ -94,7 +93,7 @@ function nothing(why: string, source: BriefSource) {
   return `You are the Agent Chess orchestrator. ${why} There's nothing for you to do.${source === "webhook" ? ` Just ${SETTLE_OWN}` : " Tell the user."}`;
 }
 
-/** Launching the agents of one or more games, looking after them, and each broadcast game's director after it. */
+/** Launching the agents of one or more games and looking after them. A video director is never part of it: the user asks for one. */
 function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: string[] = []) {
   // The seats in this brief are handed to this run as it's written, so a run asking at the same time gets none of them.
   const todo = gs
@@ -104,8 +103,6 @@ function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: strin
   if (!todo.length) return null;
   const many = todo.length > 1;
   const humans = todo.filter(({ g }) => humanSide(g));
-  // With a webhook, the server summons each broadcast game's director itself once the game is over.
-  const broadcast = summonAvailable() ? [] : todo.filter(({ g }) => g.broadcaster?.enabled);
   const out = [
     header(intro),
     "",
@@ -127,15 +124,8 @@ function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: strin
     `- A game that can't go on: POST ${API}/api/games/<id>/abort (admin).`,
     "",
   ];
-  if (broadcast.length)
-    out.push(
-      "## 3. After the game: the video director",
-      `${broadcast.length < todo.length ? `For ${broadcast.map(({ g }) => g.id).join(", ")} (the broadcast game${broadcast.length > 1 ? "s" : ""}): o` : "O"}nce the broadcaster's seat is done (the game is finished), GET ${API}/api/games/<id>/director-launch (admin). If \`tasks\` has one, delegate it the same way and record it with {"seat":"d"}. If it's empty, its \`note\` says why, and there's nothing to do.`,
-      'When the director finishes, `/agents` should show `director.done: true`. If not, continue it once with `t3_thread_send` ("Your task isn\'t done: run `brief` and carry on until `confirm` prints DONE."); if it can\'t be continued, delegate its task again with its clientRequestId plus `-r2` (a model\'s safety filter occasionally refuses a long brief; a second try usually works).',
-      "",
-    );
   out.push(...extra.flatMap((e) => [e, ""]));
-  out.push(finish(source, `every game above is finished, each seat you launched is done${broadcast.length ? " and each director's plan is saved (or there was none to make)" : ""}`));
+  out.push(finish(source, "every game above is finished and each seat you launched is done"));
   const text = out.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
   // One game: its id goes straight into the steps. The prompts never say <id>, so they come through as they are.
   return many ? text : text.replaceAll("/api/games/<id>/", `/api/games/${todo[0].g.id}/`);
@@ -144,7 +134,7 @@ function gamesBrief(intro: string, gs: Game[], source: BriefSource, extra: strin
 function startGame(g: Game, source: BriefSource) {
   if (g.phase === "finished") return nothing(`Game ${g.id} is already over.`, source);
   return (
-    gamesBrief(`Start game ${g.id}: ${matchup(g)}${g.broadcaster?.enabled ? ", with a broadcaster" : ""}.`, [g], source) ??
+    gamesBrief(`Start game ${g.id}: ${matchup(g)}.`, [g], source) ??
     nothing(`Every seat of game ${g.id} was already launched by another orchestrator run, which looks after it.`, source)
   );
 }

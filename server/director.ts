@@ -22,7 +22,7 @@ import { leftEnPrise } from "./wintr";
 import { boardOf, describe, drawnLine, imagined, isHit, markColors, moverKind, moveWordAt, phraseAt, phraseEnd, quoteWords, refProblems, resolveRefs, sanKey, squareWordAt } from "../shared/thoughtMarks";
 
 /*
- * After the game a video director (its own task, apart from the broadcaster) reads the whole game and picks the
+ * After the game a video director (its own task) reads the whole game and picks the
  * moments the replay video should slow down for, plus the best line of each interview.
  */
 
@@ -115,7 +115,7 @@ export function directorBrief(g: Game): string {
     ...(human ? [`${name(human)} is a human: their moves come without commentary, so moments on their moves have no quote (the board, the verdict and the agent's reaction tell those).`] : []),
     `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
     ...(g.ratingBefore && g.ratingChange
-      ? [`Ratings (the video shows these): ${(["w", "b"] as Color[]).map((c) => `${name(c)} ${g.ratingBefore![c]} → ${g.ratingBefore![c] + g.ratingChange![c]}`).join(", ")}.`]
+      ? [`${variantOf(g) === "chess960" ? "Chess960 ratings (the video shows these; Chess960 is rated apart from standard chess)" : "Ratings (the video shows these)"}: ${(["w", "b"] as Color[]).map((c) => `${name(c)} ${g.ratingBefore![c]} → ${g.ratingBefore![c] + g.ratingChange![c]}`).join(", ")}.`]
       : []),
     ...historyLines(g),
     ...characterLines(g),
@@ -170,7 +170,6 @@ export function directorBrief(g: Game): string {
     });
     if (m.offeredDraw) out.push(`  offered a draw with this move`);
     if (m.commentary.trim()) out.push(`  commentary: ${m.commentary.trim()}`);
-    for (const b of g.broadcast.filter((l) => l.ply === m.ply && l.ts <= (g.endedAt ?? Infinity))) out.push(`  broadcaster said: ${b.text}`);
   });
 
   out.push(

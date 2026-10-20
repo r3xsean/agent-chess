@@ -935,6 +935,14 @@
   font-size: 28px;
   font-weight: 700;
 }
+.v-rating-change .v-rating-kind {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
+  color: #c9b8ff;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
 .v-rating-change .up {
   color: #81b64c;
 }

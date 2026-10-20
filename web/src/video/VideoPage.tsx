@@ -1322,7 +1322,7 @@ function PlayerCard({ g, color, material, rating, toMove, clockMs }: { g: Game; 
       <div className="v-player-meta">
         <div className="v-player-name">
           <PlayerName player={ref} look={sideLooks(g)[color]} />
-          {rating !== undefined && <span className="v-rating">({rating})</span>}
+          {rating !== undefined && <span className="v-rating">({rating}{variantOf(g) === "chess960" ? " · Chess960" : ""})</span>}
         </div>
         <Captured info={material} color={color} />
       </div>
@@ -1903,7 +1903,7 @@ function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: numb
       <div className="v-hero-as">{whoLine(ref)}</div>
       <div className="v-hero-tags">
         <span className={`v-side ${color}`}>{color === "w" ? "White" : "Black"}</span>
-        {rating !== undefined && <span className="v-chip">Rated {rating}</span>}
+        {rating !== undefined && <span className="v-chip">{variantOf(g) === "chess960" ? "Chess960 rating" : "Rated"} {rating}</span>}
       </div>
     </div>
   );
@@ -1994,6 +1994,7 @@ function ResultScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: b
         </div>
         {ratings && (
           <div className="v-rating-change">
+            {variantOf(g) === "chess960" && <small className="v-rating-kind">Chess960 rating </small>}
             {ratings[c].before} → {ratings[c].after}{" "}
             {delta !== undefined && <b className={delta >= 0 ? "up" : "down"}>{delta >= 0 ? `+${delta}` : delta}</b>}
           </div>
@@ -2145,11 +2146,12 @@ async function loadRatings(g: Game): Promise<Ratings> {
   const out = {} as NonNullable<Ratings>;
   for (const c of ["w", "b"] as Color[]) {
     const ref = c === "w" ? g.white : g.black;
-    const p = lobby.players.find((x) => x.id === ref.id);
+    // A Chess960 game moved its players' Chess960 ratings, never their standard ones.
+    const p = (variantOf(g) === "chess960" ? lobby.players960 ?? [] : lobby.players).find((x) => x.id === ref.id);
     if (!p) return null;
     // Undo every rating change from games that finished after this one.
     // Every rated game counts, including ones still in their post-game (rated the moment they ended).
-    const others = lobby.games.filter((s) => s.id !== g.id && s.result && (s.white.id === ref.id || s.black.id === ref.id));
+    const others = lobby.games.filter((s) => s.id !== g.id && s.result && (s.variant ?? "standard") === variantOf(g) && (s.white.id === ref.id || s.black.id === ref.id));
     let after = p.rating;
     for (const s of others) {
       const full = await api<Game>(`/api/games/${s.id}`);

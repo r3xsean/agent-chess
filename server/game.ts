@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { currentThinkMs } from "../shared/thinkingClock";
 import { playerActed } from "./pauses";
 import { EventEmitter } from "node:events";
-import type { BroadcastLine, CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
+import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
 import { Engine } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
@@ -10,12 +10,12 @@ import { glickoUpdate } from "./glicko";
 import { mirrorChanged } from "./mirror";
 import { scoresChanged } from "./predictions";
 import { isHuman } from "../shared/naming";
-import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
+import { chess960Fen, newRules, START_FEN, VARIANTS, variantOf, type Rules, type Variant } from "../shared/rules";
 import {
   freshStats,
   ensurePlayer,
   games,
-  players,
+  ratingPool,
   saveGame,
   saveGameNow,
   savePlayersNow,
@@ -25,10 +25,8 @@ import {
   tournaments,
 } from "./store";
 
-const BROADCAST_GATE_MS = 90_000;
 const MAX_COMMENTARY = 6000;
 const MAX_INTERVIEW = 800;
-const MAX_BROADCAST = 600;
 
 export const bus = new EventEmitter();
 bus.setMaxListeners(1000);
@@ -67,7 +65,6 @@ const newId = (prefix: string) => `${prefix}${Date.now().toString(36).slice(-5)}
 export function createGame(opts: {
   white: PlayerRef;
   black: PlayerRef;
-  broadcaster: Game["broadcaster"];
   tournamentId?: string;
   rated?: boolean;
   /** A Chess960 game from this starting position (0–959). */
@@ -79,7 +76,6 @@ export function createGame(opts: {
     white: opts.white,
     black: opts.black,
     ...(opts.chess960 !== undefined ? { variant: "chess960" as const, chess960: opts.chess960, startFen: chess960Fen(opts.chess960) } : {}),
-    broadcaster: opts.broadcaster,
     tournamentId: opts.tournamentId,
     phase: "pregame",
     moves: [],
@@ -87,9 +83,6 @@ export function createGame(opts: {
     result: null,
     termination: null,
     interviews: { pre: {}, post: {} },
-    broadcast: [],
-    broadcasterDone: !opts.broadcaster?.enabled,
-    bcDelivered: [],
     seen: {},
     pendingIllegal: { w: [], b: [] },
     turnStartedAt: null,
@@ -102,10 +95,10 @@ export function createGame(opts: {
     options: { pieceList: true, rated: opts.rated ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
-  ensurePlayer(opts.white);
-  ensurePlayer(opts.black);
+  ensurePlayer(opts.white, variantOf(g));
+  ensurePlayer(opts.black, variantOf(g));
   games.set(g.id, g);
-  for (const role of ["w", "b", "x", "d"] as const) addSeatKey(g.id, role);
+  for (const role of ["w", "b", "d"] as const) addSeatKey(g.id, role);
   // The caller is about to hand out these seat keys, so they must be on disk first.
   saveSeatsNow();
   saveGameNow(g);
@@ -304,26 +297,16 @@ export function tick() {
     if (g.clockPause) continue;
     if (g.phase === "pregame" && preReady(g, "w") && preReady(g, "b")) {
       g.interviewsCompleteAt ??= now;
-      const bcSpoke = g.broadcast.some((l) => l.ts >= g.interviewsCompleteAt!);
-      if (!g.broadcaster?.enabled || bcSpoke || now - g.interviewsCompleteAt > BROADCAST_GATE_MS) {
-        g.phase = "playing";
-        g.playStartedAt = now;
-        g.turnStartedAt = now;
-        touch(g);
-      }
+      g.phase = "playing";
+      g.playStartedAt = now;
+      g.turnStartedAt = now;
+      touch(g);
     }
-    if (g.phase === "postgame" && g.review) {
-      const playersDone = playerFinished(g, "w") && playerFinished(g, "b");
-      if (playersDone) {
-        const lastPlayerTs = Math.max(g.interviews.post.w?.ts ?? g.endedAt ?? 0, g.interviews.post.b?.ts ?? g.endedAt ?? 0);
-        const bcWrapped = g.broadcast.some((l) => l.ts >= lastPlayerTs);
-        if (!g.broadcaster?.enabled || bcWrapped || g.broadcasterDone || now - lastPlayerTs > BROADCAST_GATE_MS) {
-          g.phase = "finished";
-          g.finishedAt = now;
-          saveGameNow(g);
-          touch(g);
-        }
-      }
+    if (g.phase === "postgame" && g.review && playerFinished(g, "w") && playerFinished(g, "b")) {
+      g.phase = "finished";
+      g.finishedAt = now;
+      saveGameNow(g);
+      touch(g);
     }
   }
 }
@@ -359,7 +342,7 @@ export function settleTournament(t: Tournament) {
 /** Rated unless it was set up unrated (games from before the option are all rated). */
 export const isRated = (g: Game) => g.options?.rated !== false;
 
-/** Glicko-2 for one finished game: both players update from their ratings before it. */
+/** Glicko-2 for one finished game: both players update from their ratings before it, in its variant's ratings. */
 function applyRating(g: Game) {
   if (!g.result) return;
   // An unrated game leaves the ratings and the leaderboard record alone.
@@ -368,8 +351,8 @@ function applyRating(g: Game) {
     delete g.ratingChange;
     return;
   }
-  const pw = ensurePlayer(g.white);
-  const pb = ensurePlayer(g.black);
+  const pw = ensurePlayer(g.white, variantOf(g));
+  const pb = ensurePlayer(g.black, variantOf(g));
   const sw = g.result === "1-0" ? 1 : g.result === "0-1" ? 0 : 0.5;
   const nw = glickoUpdate(pw.glicko, pb.glicko, sw);
   const nb = glickoUpdate(pb.glicko, pw.glicko, 1 - sw);
@@ -397,10 +380,14 @@ function applyRating(g: Game) {
 
 /** Ratings are derived from game results, so a crash can never double-count a game. */
 export function rebuildRatings() {
-  // Players who no longer appear in any game (e.g. deleted test games) leave the leaderboard.
-  const inGames = new Set([...games.values()].flatMap((g) => [g.white.id, g.black.id]));
-  for (const id of Object.keys(players)) if (!inGames.has(id)) delete players[id];
-  for (const p of Object.values(players)) Object.assign(p, freshStats());
+  // Each variant has its own ratings; a player who no longer appears in any of its games (e.g. deleted test
+  // games) leaves that leaderboard.
+  for (const v of VARIANTS) {
+    const pool = ratingPool(v);
+    const inGames = new Set([...games.values()].filter((g) => variantOf(g) === v).flatMap((g) => [g.white.id, g.black.id]));
+    for (const id of Object.keys(pool)) if (!inGames.has(id)) delete pool[id];
+    for (const p of Object.values(pool)) Object.assign(p, freshStats());
+  }
   const done = [...games.values()].filter((g) => g.result).sort((a, b) => (a.endedAt ?? a.createdAt) - (b.endedAt ?? b.createdAt));
   for (const g of done) {
     // Each game keeps the ratings it was played at; one whose numbers came out different (a game rated
@@ -597,7 +584,6 @@ export function submitInterview(g: Game, color: Color, text: string) {
   if (g.phase === "pregame") {
     if (g.interviews.pre[color]) throw new ActionError("You already gave your pre-game interview.");
     g.interviews.pre[color] = { text, ts: Date.now() };
-    // The broadcaster's intro counts from the moment the second interview lands.
     if (preReady(g, "w") && preReady(g, "b")) g.interviewsCompleteAt = Date.now();
   } else if (g.phase === "postgame") {
     if (g.interviews.post[color]) throw new ActionError("You already gave your post-game interview.");
@@ -608,22 +594,9 @@ export function submitInterview(g: Game, color: Color, text: string) {
   touch(g);
 }
 
-export function say(g: Game, text: string) {
-  text = String(text ?? "").trim();
-  if (!text) throw new ActionError("Nothing to say.");
-  if (text.length > MAX_BROADCAST) throw new ActionError(`Keep each segment under ${MAX_BROADCAST} characters (yours: ${text.length}).`);
-  // A retried `say` (e.g. after a CLI timeout) must not put the same segment on air twice.
-  const prev = g.broadcast[g.broadcast.length - 1];
-  if (prev && prev.text === text && Date.now() - prev.ts < 5 * 60_000) return prev;
-  const line: BroadcastLine = { id: g.broadcast.length + 1, ts: Date.now(), text, ply: g.moves.length };
-  g.broadcast.push(line);
-  saveGameNow(g);
-  touch(g);
-  return line;
-}
-
 export function playerOf(g: Game, c: Color) {
   return c === "w" ? g.white : g.black;
 }
 
-export const ratingOf = (ref: PlayerRef) => players[ref.id]?.rating ?? 1500;
+/** A player's rating in a variant (standard unless asked). */
+export const ratingOf = (ref: PlayerRef, variant: Variant = "standard") => ratingPool(variant)[ref.id]?.rating ?? 1500;

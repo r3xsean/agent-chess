@@ -3,6 +3,7 @@ import { winPercentWhite } from "../../../shared/evalmath";
 import { engineAfter } from "../../../shared/belief";
 import { selfEvalColors, sideName } from "../../../shared/naming";
 import { sideLooks } from "../../../shared/looks";
+import { variantOf } from "../../../shared/rules";
 import { PlayerAvatar } from "./PlayerName";
 import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
 
@@ -133,7 +134,9 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
             {rv?.[c].selfEvalError != null ? `±${rv[c].selfEvalError!.toFixed(1)}%` : "–"}
           </div>
         ))}
-        <div className="lbl">Arena rating</div>
+        <div className="lbl" title={variantOf(game) === "chess960" ? "Chess960 is rated apart from standard chess" : undefined}>
+          {variantOf(game) === "chess960" ? "Chess960 rating" : "Arena rating"}
+        </div>
         {(["w", "b"] as Color[]).map((c) => (
           <div key={c} className="val" style={{ fontWeight: 600 }}>
             {ratings[c] ?? "–"}

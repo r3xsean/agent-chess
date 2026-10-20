@@ -12,13 +12,13 @@ import { agentAlive, agentOutcome, agentPrompt, anyAgentCli, canRunAgent, limitW
 import { applyUsageLimit, lastActionAt, usageLimitPauses } from "./usageLimits";
 
 /*
- * Launching agents. The server starts a player's or broadcaster's agent itself, in the background through
+ * Launching agents. The server starts a player's agent itself, in the background through
  * its provider's CLI (see agents.ts), and carries its session on whenever it stops before its seat is done.
  * A seat it can't run that way, and the video director (the user talks with it in T3), is started in its own
  * T3 thread when an agent webhook covers its model and effort. Either way the agent gets only its seat key,
  * and `start` gives it its task, and the server starts a new agent for one that goes quiet. Any other seat
  * goes to an orchestrator run, which delegates it and looks after it. The server also starts the next games
- * of an auto-run tournament and a broadcast game's video director once it's over.
+ * of an auto-run tournament. A game's video director is never started on its own: the user asks for one.
  */
 
 type Who = { provider: string; model: string; effort: string };
@@ -26,7 +26,6 @@ type Who = { provider: string; model: string; effort: string };
 /** The provider, model and effort a seat's agent runs on. */
 function whoFor(g: Game, seat: SeatRole): Who {
   if (seat === "w" || seat === "b") return seat === "w" ? g.white : g.black;
-  if (seat === "x") return g.broadcaster!;
   return directorWho(g);
 }
 
@@ -122,7 +121,7 @@ const RETRY_MS = 5 * 60_000;
 
 /** Start whatever an auto-run tournament can start now (never making games nothing could launch). */
 async function launchTournament(t: Tournament) {
-  const seats = [...t.players, ...(t.broadcaster?.enabled ? [t.broadcaster] : [])].filter((p) => !("provider" in p && p.provider === "human"));
+  const seats = t.players.filter((p) => p.provider !== "human");
   if (!orchestratorAvailable() && seats.some((p) => !startableDirect(p))) throw new Error("No orchestrator webhook, and not every player can be started without one.");
   const res = tournamentNext(t);
   if ("finished" in res) return;
@@ -148,19 +147,16 @@ function kickTournament(t: Tournament, onFail?: () => void) {
  * An agent unheard from this long has stopped: a new one takes its seat. Its commands block 5 minutes at
  * most, and the longest a player has thought over one move is about 15 minutes.
  */
-const QUIET_MS = { w: 25 * 60_000, b: 25 * 60_000, x: 25 * 60_000, d: 30 * 60_000 } as const;
+const QUIET_MS = { w: 25 * 60_000, b: 25 * 60_000, d: 30 * 60_000 } as const;
 /** An agent that hasn't turned up this long after its launch never will. */
 const NO_SHOW_MS = 10 * 60_000;
 const MAX_RELAUNCHES = 3;
-/** A game that finished longer ago than this (or before the server was up) doesn't summon its director by itself. */
-const DIRECTOR_AFTER_MS = 30 * 60_000;
 /** A summoned director that never turned up is summoned again only this soon after (not for a game left long ago). */
 const DIRECTOR_RETRY_MS = 6 * 3_600_000;
 
 /** Whether a seat still needs its agent. */
 function needsAgent(g: Game, seat: SeatRole) {
   if (seat === "w" || seat === "b") return !seatIsHuman(g, seat) && g.phase !== "finished" && !playerFinished(g, seat);
-  if (seat === "x") return g.phase !== "finished";
   return g.phase === "finished" && needsDirection(g) && !!g.directLaunch?.d;
 }
 
@@ -229,10 +225,9 @@ function handOver(g: Game, seat: SeatRole, l: { at: number; relaunches: number }
   });
 }
 
-/** Whether a seat's agent did something real since a time: a player's action, a broadcaster's line (not a status check, a wait or `help`). */
+/** Whether a player's agent did something real since a time (not a status check, a wait or `help`). */
 function actedSince(g: Game, seat: SeatRole, since: number) {
-  if (seat === "w" || seat === "b") return lastActionAt(g, seat) > since;
-  return seat === "x" && (g.broadcast.at(-1)?.ts ?? 0) > since;
+  return (seat === "w" || seat === "b") && lastActionAt(g, seat) > since;
 }
 
 /**
@@ -305,7 +300,7 @@ function seatDone(g: Game, seat: SeatRole, key: string, agent: AgentProc, now: n
   saveSeatsNow();
 }
 
-/** Every few seconds: carry stopped agents on, revive quiet ones, summon directors, start the next tournament games. */
+/** Every few seconds: carry stopped agents on, revive quiet ones, start the next tournament games. */
 export function watch() {
   // Agents already running are looked after whatever can be started now; starting anything needs a webhook or a CLI.
   const launching = summonAvailable() || anyAgentCli();
@@ -348,13 +343,7 @@ export function watch() {
         launchDirect(g, seat).catch(() => {});
       }
     if (!launching) continue;
-    // A broadcast game's video director comes once the game is over.
-    if (g.phase === "finished" && g.broadcaster?.enabled && !g.directorSummonedAt && now - (g.finishedAt ?? 0) < DIRECTOR_AFTER_MS && needsDirection(g)) {
-      g.directorSummonedAt = now;
-      saveGameNow(g);
-      launchDirector(g).catch((e) => console.error(`[launch] ${g.id} director: ${e.message}`));
-    }
-    // One summoned that never turned up (the server went down mid-summon, or T3 lost it) is summoned again.
+    // A director started that never turned up (the server went down mid-start, or T3 lost it) is started again.
     const summoned = g.directorSummonedAt ?? 0;
     if (
       g.phase === "finished" &&

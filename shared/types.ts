@@ -1,6 +1,6 @@
 export type Color = "w" | "b";
-/** A game's agent seats: the two players, the broadcaster (x) and the video director (d). */
-export type SeatRole = Color | "x" | "d";
+/** A game's agent seats: the two players and the video director (d). */
+export type SeatRole = Color | "d";
 export type Phase = "pregame" | "playing" | "postgame" | "finished";
 export type Result = "1-0" | "0-1" | "1/2-1/2";
 
@@ -138,13 +138,6 @@ export interface Interview {
   ts: number;
 }
 
-export interface BroadcastLine {
-  id: number;
-  ts: number;
-  text: string;
-  ply: number;
-}
-
 export interface SideReview {
   /** null when the engine produced no usable data for this side. */
   accuracy: number | null;
@@ -165,7 +158,6 @@ export interface Game {
   chess960?: number;
   /** The starting position, when it isn't the normal one. */
   startFen?: string;
-  broadcaster: { enabled: boolean; model: string; provider: string; effort: string } | null;
   tournamentId?: string;
   phase: Phase;
   moves: MoveRecord[];
@@ -176,10 +168,6 @@ export interface Game {
     pre: Partial<Record<Color, Interview>>;
     post: Partial<Record<Color, Interview>>;
   };
-  broadcast: BroadcastLine[];
-  broadcasterDone: boolean;
-  /** Feed event ids already handed to the broadcaster. */
-  bcDelivered: string[];
   /** Last time each seat talked to the server. */
   seen: Partial<Record<SeatRole, number>>;
   pendingIllegal: Record<Color, string[]>;
@@ -210,7 +198,7 @@ export interface Game {
   launched?: Partial<Record<SeatRole, number>>;
   /** Seats the server launched itself, each in its own T3 thread (the server watches these; an orchestrator watches the rest). */
   directLaunch?: Partial<Record<SeatRole, { at: number; relaunches: number }>>;
-  /** When the server summoned this broadcast game's video director, once the game was over. */
+  /** When the server summoned this game's video director, once the game was over. */
   directorSummonedAt?: number;
   /** How many times that director was summoned again because it never turned up. */
   directorResummons?: number;
@@ -226,7 +214,7 @@ export interface Game {
   nextTriggered?: boolean;
   /** Version of the move-classification rules the stored verdicts came from. */
   classifierVersion?: number;
-  /** The broadcaster's picks for the video replay, made after the game. */
+  /** The director's picks for the video replay, made after the game. */
   video?: VideoPlan;
   /** The user's approval of the exact video plan, before voices and rendering. */
   videoApproval?: { revision: string; at: number };
@@ -522,7 +510,6 @@ export interface Tournament {
   createdAt: number;
   players: PlayerRef[];
   doubleRound: boolean;
-  broadcaster: Game["broadcaster"];
   /** false: none of its games are rated. */
   rated?: boolean;
   /** Started from the website: each finished game automatically summons the next pairing. */
