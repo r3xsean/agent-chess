@@ -55,7 +55,7 @@ import { roundRobin } from "./schedule";
 import { summonAvailable } from "./summon";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { PROBE_COMMANDS, probeCommand } from "./probe";
-import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, setPackagingOptions } from "./publish";
+import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, resumePublishes, setPackagingOptions } from "./publish";
 import { gameToPgn } from "./pgn";
 import { analyticsRows, modelAnalytics } from "./analytics";
 import type { AnalyticsScope } from "../shared/analytics";
@@ -106,6 +106,7 @@ function startLocal() {
     if (!g.review || g.moves.some((m) => !m.analysis)) analyzeGame(g);
   }
   resumeRenders();
+  resumePublishes(games.values());
   setInterval(tick, 1000);
   setInterval(watch, 5000);
   startUsageLimitWatcher(() => games.values(), (g) => { saveGameNow(g); touch(g); });

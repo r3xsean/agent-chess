@@ -87,13 +87,31 @@ export async function requestPublish(g: Game, platforms: PublishPlatform[], visi
   g.publish = { platforms, visibility, status: "requested", requestedAt: Date.now(), attempt: (prev?.attempt ?? 0) + 1, posts: prev?.posts ?? {} };
   saveGameNow(g);
   touch(g);
+  await summonPublisher(g);
+}
+
+async function summonPublisher(g: Game) {
   try {
     await triggerOrchestrator({ action: "publish", gameId: g.id });
   } catch (e) {
-    g.publish = { ...g.publish, status: "failed", errors: Object.fromEntries(platforms.map((p) => [p, `Couldn't summon a publisher: ${(e as Error).message}`])) };
+    const s = g.publish!;
+    g.publish = { ...s, status: "failed", errors: Object.fromEntries(s.platforms.map((p) => [p, `Couldn't summon a publisher: ${(e as Error).message}`])) };
     saveGameNow(g);
     touch(g);
     throw e;
+  }
+}
+
+/**
+ * At boot: a request whose publisher was never handed out (the server went down before or while summoning the
+ * orchestrator) summons one again. The task is handed out once per request, so if the first summon did get
+ * through, only one of the two runs can post.
+ */
+export function resumePublishes(all: Iterable<Game>) {
+  for (const g of all) {
+    if (!inFlight(g.publish) || g.publish!.handedOutAt) continue;
+    console.log(`[publish] ${g.id}: its publisher was never handed out, summoning one again`);
+    summonPublisher(g).catch((e) => console.error(`[publish] ${g.id}: ${(e as Error).message}`));
   }
 }
 
