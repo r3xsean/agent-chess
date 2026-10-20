@@ -1,9 +1,10 @@
 import type { Square } from "chess.js";
-import { castlingNote, looseChess, newRules, ratingName, variantOf, type Variant } from "../shared/rules";
+import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
 import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
+import { explainIllegal, lineBreakReason } from "../shared/explain";
 import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
 import { rivalry, seriesLine } from "./rivalry";
 
@@ -14,10 +15,9 @@ const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r:
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
   // Once the game is rated, the rating it was played at (games since don't change who was the favourite).
-  // A Chess960 game is rated in Chess960 ratings, and says so.
-  const rating = `${ratingName(variantOf(g))} ${g.ratingBefore?.[c] ?? ratingOf(p, variantOf(g))}`;
-  if (isHuman(p)) return `${p.modelLabel} (a human player, ${rating})`;
-  return `${fullName(p)} (${p.effort} effort, ${rating})`;
+  const rating = g.ratingBefore?.[c] ?? ratingOf(p);
+  if (isHuman(p)) return `${p.modelLabel} (a human player, rating ${rating})`;
+  return `${fullName(p)} (${p.effort} effort, rating ${rating})`;
 }
 
 export function asciiBoard(fen: string, orientation: Color): string {
@@ -247,3 +247,60 @@ function postgameNeeds(g: Game, color: Color) {
 }
 
 const postgameSubmit = (keys: string[]) => `Submit it with \`postgame\`, as JSON: { ${keys.map((k) => `"${k}": "…"`).join(", ")} }`;
+
+/* ------------------------- broadcaster event feed ------------------------- */
+
+export interface FeedEvent {
+  id: string;
+  ts: number;
+  text: string;
+}
+
+export function broadcasterEvents(g: Game): FeedEvent[] {
+  const ev: FeedEvent[] = [];
+  const W = describePlayer(g, "w");
+  const B = describePlayer(g, "b");
+  ev.push({ id: "matchup", ts: g.createdAt, text: `[MATCHUP] White: ${W}  vs  Black: ${B}${variantOf(g) === "chess960" ? `\n${chess960Intro(g).join("\n")}` : ""}` });
+  for (const c of ["w", "b"] as Color[]) {
+    const i = g.interviews.pre[c];
+    if (i) ev.push({ id: `pre-${c}`, ts: i.ts, text: `[PRE-GAME INTERVIEW — ${colorName(c)}, ${sideName(g, c)}] "${i.text}"` });
+  }
+  if (g.playStartedAt) ev.push({ id: "start", ts: g.playStartedAt, text: "[GAME STARTED] White is on move." });
+  for (const m of g.moves) {
+    if (!m.analysis) break; // wait for the engine so every move event carries its review
+    const a = m.analysis;
+    const human = isHuman(playerOf(g, m.color));
+    const who = `${colorName(m.color)} (${sideName(g, m.color)}${human ? ", the human" : ""})`;
+    const no = `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
+    // A human shares no thinking or self-evaluation, only the move.
+    const own = human ? "" : ` Player's own eval: ${m.selfEvalRaw}.`;
+    const parts = [
+      `[MOVE ${no} ${m.san}] by ${who}, thought for ${Math.round(m.thinkMs / 1000)}s.`,
+      a.unavailable
+        ? `Engine: analysis unavailable for this move.${own}`
+        : `Engine: ${a.classification.toUpperCase()}; eval now ${formatScore(a.evalAfter)}${a.bestSan && a.bestSan !== m.san ? `; engine preferred ${a.bestSan}` : ""}.${own}`,
+    ];
+    if (!human) parts.push(`Player's thinking: "${m.commentary.slice(0, 700)}${m.commentary.length > 700 ? "…" : ""}"`);
+    if (m.lines.length)
+      parts.push(
+        `Calculated lines: ${m.lines.map((l, i) => `(${i + 1}) ${l.san.join(" ")}${l.brokenAt ? ` [breaks: ${l.brokenAt} is illegal — ${lineBreakReason(m.fenBefore, l, variantOf(g))}]` : ""}${l.note ? ` — ${l.note.slice(0, 160)}` : ""}`).join(" | ")}`,
+      );
+    if (m.illegalAttempts.length)
+      parts.push(`Before this, the player tried illegal move(s): ${m.illegalAttempts.map((t) => `${t} (${explainIllegal(m.fenBefore, t)})`).join(", ")}.`);
+    if (m.offeredDraw) parts.push(`${colorName(m.color)} offered a draw with this move.`);
+    ev.push({ id: `move-${m.ply}`, ts: m.ts, text: parts.join("\n") });
+  }
+  if (g.result && g.moves.every((m) => m.analysis)) {
+    ev.push({ id: "result", ts: Date.now(), text: `[RESULT] ${g.result} — ${g.termination}.` });
+  }
+  if (g.review) {
+    const rv = (c: Color) =>
+      g.review![c].accuracy != null ? `${colorName(c)} accuracy ${g.review![c].accuracy}% (≈${g.review![c].estElo})` : `${colorName(c)} accuracy unavailable`;
+    ev.push({ id: "review", ts: Date.now(), text: `[GAME REVIEW] ${rv("w")}, ${rv("b")}.` });
+  }
+  for (const c of ["w", "b"] as Color[]) {
+    const i = g.interviews.post[c];
+    if (i) ev.push({ id: `post-${c}`, ts: i.ts, text: `[POST-GAME INTERVIEW — ${colorName(c)}] "${i.text}"` });
+  }
+  return ev;
+}
