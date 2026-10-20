@@ -56,7 +56,7 @@ function directThread(db: DatabaseSync, g: Game, color: Color) {
 export function usageLimitPauses(g: Game, color: Color) {
   if ((color === "w" ? g.white : g.black).provider === "human") return false;
   if (g.phase === "pregame" && g.interviews.pre[color]) return false;
-  if (g.phase === "postgame" && g.interviews.post[color] && g.journalDone[color] && (!g.options?.learning || g.lessonsDone?.[color])) return false;
+  if (g.phase === "postgame" && g.interviews.post[color]) return false;
   return true;
 }
 

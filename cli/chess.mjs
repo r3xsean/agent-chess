@@ -66,7 +66,7 @@ if (cmd in JSON_BODY) {
 } else if (["probe", "options", "threat", "board"].includes(cmd)) {
   // The engine questions: where, then moves (or how many options).
   body.args = positional.slice(1);
-} else if (["interview", "journal", "lessons", "say", "bind-thread", "request-narration", "log"].includes(cmd)) {
+} else if (["interview", "say", "bind-thread", "request-narration", "log"].includes(cmd)) {
   body.text = readInput().trim();
 }
 

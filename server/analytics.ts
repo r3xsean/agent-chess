@@ -1,4 +1,4 @@
-import type { Classification, Color, Game, Lessons, MoveRecord, PlayerRef, Score } from "../shared/types";
+import type { Classification, Color, Game, MoveRecord, PlayerRef, Score } from "../shared/types";
 import type {
   AgentRow,
   AnalyticsScope,
@@ -7,7 +7,6 @@ import type {
   GamePhase,
   HeadToHead,
   IllegalKind,
-  LearningGame,
   ModelAnalytics,
   OpeningRow,
   Outcome,
@@ -21,14 +20,14 @@ import { isHuman } from "../shared/naming";
 import { scoreToCp, winPercentFor } from "../shared/evalmath";
 import { beliefs, engineAfter } from "../shared/belief";
 import { looseChess } from "../shared/rules";
-import { games, lessonsRevision, players, readLessons } from "./store";
+import { games, players } from "./store";
 import { GLICKO_START, glickoUpdate, type Glicko } from "./glicko";
 import { isRated, lineTokens } from "./game";
 import { chessComEstimates, moveReading, type MoveSample } from "./chessCom";
 
 /*
  * Everything the Agents tab shows, from the finished games: one pass over them per scope, kept until a
- * game, a review or a lessons file changes. See shared/analytics.ts for what each number means.
+ * game or a review changes. See shared/analytics.ts for what each number means.
  */
 
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
@@ -310,7 +309,7 @@ const bump = (rec: Record<string, number>, key: string, by = 1) => (rec[key] = (
 function rowOf(model: string, sides: Side[]): AgentRow {
   const ps = Object.values(players).filter((p) => p.ref.model === model && !isHuman(p.ref));
   const rated = ps.filter((p) => p.games > 0);
-  // The model's rating is its most settled player's (lowest RD, i.e. most games), not a lucky one-game personality.
+  // The model's rating is its most settled player's (lowest RD, i.e. most games), not a lucky one-game effort.
   const best = (rated.length ? rated : ps).reduce<(typeof ps)[number] | null>((a, b) => (!a || b.rd < a.rd || (b.rd === a.rd && b.rating > a.rating) ? b : a), null);
   const own = sides.flatMap((s) => s.own);
   const g = own.filter(graded);
@@ -360,7 +359,6 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
       return {
         playerId: p.id,
         effort: p.ref.effort,
-        personality: p.ref.personality,
         games: pts.length,
         current: p.rating,
         rd: p.rd,
@@ -653,7 +651,7 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
     }))
     .sort((a, b) => b.games - a.games);
 
-  /* effort and personality */
+  /* effort */
   const byEffort = new Map<string, Side[]>();
   for (const s of sides) byEffort.set(s.me.effort, [...(byEffort.get(s.me.effort) ?? []), s]);
   const effortOrder = MODELS.find((m) => m.model === model)?.efforts ?? [];
@@ -670,28 +668,11 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
     .filter((p) => p.ref.model === model)
     .map((p) => ({
       playerId: p.id,
-      personality: p.ref.personality,
       effort: p.ref.effort,
       rating: p.rating,
       rd: p.rd,
       record: { games: p.games, wins: p.wins, draws: p.draws, losses: p.losses },
     }));
-
-  /* learning */
-  const lessons = lessonsOf(model);
-  const versions = lessons.history.filter((h) => h.text.trim()).map((h) => ({ version: h.version, ts: h.ts }));
-  // The lessons file keeps only its last 50 versions: a game from before the oldest one kept can't be placed.
-  const oldest = lessons.history[0];
-  const truncated = !!oldest && oldest.version > 1;
-  const learningGames: LearningGame[] = chrono.map((s) => {
-    const start = s.g.playStartedAt ?? s.g.createdAt;
-    const entry = [...lessons.history].reverse().find((h) => h.ts < start);
-    const version = !s.g.options?.learning ? 0 : entry ? (entry.text.trim() ? entry.version : 0) : truncated ? null : 0;
-    return { gameId: s.g.id, ts: s.ts, accuracy: s.accuracy, result: s.outcome, version };
-  });
-  const versionOf = new Map(learningGames.map((x) => [x.gameId, x.version]));
-  const withL = sides.filter((s) => (versionOf.get(s.g.id) ?? 0) > 0);
-  const withoutL = sides.filter((s) => versionOf.get(s.g.id) === 0);
 
   return {
     scope: "all",
@@ -717,13 +698,6 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
     endings,
     h2h,
     setup: { efforts, players: setupPlayers },
-    learning: {
-      games: learningGames,
-      versions,
-      rewrites: lessons.version,
-      withLessons: { games: withL.length, score: scoreOf(withL), accuracy: accOf(withL) },
-      without: { games: withoutL.length, score: scoreOf(withoutL), accuracy: accOf(withoutL) },
-    },
   };
 }
 
@@ -736,26 +710,13 @@ interface Computed {
 }
 const cache = new Map<AnalyticsScope, Computed>();
 
-/** Lessons files, read once per lessons write. */
-const lessonsCache = new Map<string, Lessons>();
-let lessonsCacheRev = -1;
-function lessonsOf(model: string): Lessons {
-  if (lessonsCacheRev !== lessonsRevision) {
-    lessonsCache.clear();
-    lessonsCacheRev = lessonsRevision;
-  }
-  let l = lessonsCache.get(model);
-  if (!l) lessonsCache.set(model, (l = readLessons(model)));
-  return l;
-}
-
 /**
  * Changes whenever anything the numbers come from does: a finished game (its result, moves, review and
- * ratings; a game still being played counts for nothing yet), a player's rating, or a lessons file.
+ * ratings; a game still being played counts for nothing yet) or a player's rating.
  * Built from memory only, so a cached answer costs no disk reads.
  */
 function signature() {
-  const parts: string[] = [`lessons.${lessonsRevision}`];
+  const parts: string[] = [];
   for (const g of games.values()) {
     if (!g.result) continue;
     const pending = (g.pendingIllegal?.w.length ?? 0) + (g.pendingIllegal?.b.length ?? 0);

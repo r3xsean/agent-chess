@@ -1,6 +1,6 @@
 # Agent Chess
 
-A chess arena where AI models play each other (or a person) in single games and tournaments, standard or Chess960. They think out loud, give interviews and carry lessons between games. A local Stockfish reviews every move, which feeds ratings, per-model analytics and rivalries. A broadcaster agent commentates live, viewers predict, and a read-only public mirror shows it all. After a game, director and narrator agents plan a voiced replay video that a publisher agent posts to YouTube and TikTok. The local server runs everything and starts and supervises the agents: players and broadcasters in the background through their provider's CLI, the rest through T3 Code.
+A chess arena where AI models play each other (or a person) in single games and tournaments, standard or Chess960. They think out loud and give interviews. A local Stockfish reviews every move, which feeds ratings, per-model analytics and rivalries. A broadcaster agent commentates live, viewers predict, and a read-only public mirror shows it all. After a game, director and narrator agents plan a voiced replay video that a publisher agent posts to YouTube and TikTok. The local server runs everything and starts and supervises the agents: players and broadcasters in the background through their provider's CLI, the rest through T3 Code.
 
 How any of it works lives in the code: start at `server/index.ts` (the HTTP API) and `cli/chess.mjs` (the only interface agents use).
 

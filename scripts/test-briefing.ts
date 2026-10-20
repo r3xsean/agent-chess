@@ -1,6 +1,6 @@
 // Isolated regression checks: no running server, models, or engine required.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Game, MoveRecord, PlayerRef } from "../shared/types";
@@ -11,47 +11,13 @@ const store = await import("../server/store");
 const { createGame } = await import("../server/game");
 const { asciiBoard, briefingFen, pregameBrief, turnBrief, postgameBrief } = await import("../server/briefing");
 const { newRules, START_FEN, chess960Fen } = await import("../shared/rules");
-const player = (model: string): PlayerRef => ({ id: `${model}@high:none`, model, provider: "codex", modelLabel: model, effort: "high", personality: "none" });
+const player = (model: string): PlayerRef => ({ id: `${model}@high`, model, provider: "codex", modelLabel: model, effort: "high" });
 const white = player("gpt-6-astra");
 const black = player("gpt-6.1-sol");
-const makeGame = (learning = true) => createGame({ white, black, broadcaster: null, learning });
 
 try {
-  store.writeLessons(white.model, "Original white lesson", null);
-  store.writeLessons(black.model, "Original black lesson", null);
-  const g = makeGame();
-  assert.equal(g.lessonsAtStart?.w.version, 1);
-  store.writeLessons(white.model, "Replacement white lesson", null);
-  store.writeLessons(black.model, "", null);
-  for (const color of ["w", "b"] as const) {
-    const expected = color === "w" ? "Original white lesson" : "Original black lesson";
-    assert.ok(pregameBrief(g, color).includes(expected));
-    assert.ok(turnBrief(g, color).includes(expected));
-  }
-  assert.ok(!turnBrief(g, "w").includes("Replacement white lesson"));
-  const next = makeGame();
-  assert.equal(next.lessonsAtStart?.w.text, "Replacement white lesson");
-  assert.equal(next.lessonsAtStart?.b.text, "");
-  store.writeLessons(black.model, "Later black lesson", null);
-  assert.ok(!turnBrief(next, "b").includes("Later black lesson"), "empty snapshots stay empty");
-  const off = makeGame(false);
-  assert.equal(off.lessonsAtStart, undefined);
-  assert.ok(!pregameBrief(off, "w").includes("Replacement white lesson"));
-
-  store.flushAll();
-  store.games.clear();
-  store.loadAll();
-  assert.deepEqual(store.games.get(g.id)?.lessonsAtStart, g.lessonsAtStart, "restart preserves snapshots");
-  const legacy = { ...g, id: "legacy-brief-test" };
-  delete legacy.lessonsAtStart;
-  store.saveGameNow(legacy);
-  store.loadAll();
-  const migrated = store.games.get(legacy.id)!;
-  assert.equal(migrated.lessonsAtStart?.w.text, "Replacement white lesson");
-  assert.deepEqual(JSON.parse(readFileSync(path.join(data, "games", `${legacy.id}.json`), "utf8")).lessonsAtStart, migrated.lessonsAtStart);
-  store.writeLessons(white.model, "Yet another lesson", null);
-  store.loadAll();
-  assert.equal(store.games.get(legacy.id)?.lessonsAtStart?.w.text, "Replacement white lesson");
+  const g = createGame({ white, black, broadcaster: null });
+  assert.ok(pregameBrief(g, "w").includes("INTERVIEWER:"));
 
   for (const variant of ["standard", "chess960"] as const) {
     const cases = [
@@ -91,11 +57,9 @@ try {
     fenAfter: START_FEN, commentary: "test", analysis: { classification: "blunder", winBefore: 50, winAfter: 10, evalAfter: { cp: 100 } },
   } as MoveRecord] };
   const post = postgameBrief(review, "b");
-  assert.ok(post.includes("White at the bottom in every diagram"));
-  assert.ok(post.includes(asciiBoard(START_FEN, "w")));
-  assert.ok(!post.includes(asciiBoard(START_FEN, "b")));
-  assert.ok(post.includes("Later black lesson"), "postgame rewriting still gets latest shared lessons");
-  console.log("PASS: lesson isolation, restart migration, display-only en passant, history, and postgame orientation");
+  assert.ok(post.includes('"interview"') && post.includes("e5: BLUNDER"));
+  assert.ok(!/journal|lesson/i.test(post), "the post-game asks for the interview only");
+  console.log("PASS: display-only en passant, history, and the post-game brief");
 } finally {
   store.flushAll();
   // data is a freshly created directory under the OS temp directory, never the app's real data.

@@ -2,22 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import type { Game, JournalEntry, Lessons, PlayerStats, Tournament } from "../shared/types";
+import type { Game, PlayerStats, Tournament } from "../shared/types";
 import { DATA } from "./paths";
-import {
-  deleteGameFile,
-  games,
-  memoryEvents,
-  players,
-  readJournal,
-  readLessons,
-  saveGameNow,
-  savePlayersNow,
-  saveTournamentNow,
-  tournaments,
-  writeJournal,
-  writeLessonsFile,
-} from "./store";
+import { deleteGameFile, deleteTournamentFile, games, players, saveGameNow, savePlayersNow, saveTournamentNow, tournaments } from "./store";
 
 /*
  * The public site is a read-only mirror. Games are played here, on the local server; every change is
@@ -51,10 +38,9 @@ export interface SyncBatch {
   games?: Game[];
   /** On a full sync: every game id that exists, so the mirror can drop any it has that we don't. */
   allGameIds?: string[];
+  /** Every tournament there is, whenever any changes. */
   tournaments?: Tournament[];
   players?: Record<string, PlayerStats>;
-  journals?: Record<string, JournalEntry[]>;
-  lessons?: Record<string, Lessons>;
 }
 
 /* ------------------------------ the local side: push ------------------------------ */
@@ -62,8 +48,6 @@ export interface SyncBatch {
 const hash = (v: unknown) => createHash("sha1").update(JSON.stringify(v)).digest("hex");
 const sent = new Map<string, string>();
 const pendingGames = new Set<string>();
-const pendingJournals = new Set<string>();
-const pendingLessons = new Set<string>();
 let pendingMeta = false;
 let timer: NodeJS.Timeout | null = null;
 /** A push is on the wire: the next one waits for it, so batches always arrive in order. */
@@ -83,8 +67,6 @@ export function startMirror() {
   if (!cfg) return;
   console.log(`[mirror] pushing to ${cfg.url}`);
   queueEverything();
-  memoryEvents.on("journal", (id: string) => (pendingJournals.add(id), mirrorChanged()));
-  memoryEvents.on("lessons", (model: string) => (pendingLessons.add(model), mirrorChanged()));
   setInterval(heartbeat, 60_000).unref();
   schedule(500);
 }
@@ -93,15 +75,9 @@ class ResyncError extends Error {}
 /** The mirror's storage identity, from its acknowledgements: if it changes, the mirror lost what we sent. */
 let mirrorEpoch: string | null = null;
 
-/** A full sync: every game, and every player's journal and model's lessons that exist. */
+/** A full sync: every game, the players and the tournaments. */
 function queueEverything() {
-  for (const g of games.values()) {
-    pendingGames.add(g.id);
-    for (const p of [g.white, g.black]) {
-      pendingJournals.add(p.id);
-      if (p.provider !== "human") pendingLessons.add(p.model);
-    }
-  }
+  for (const g of games.values()) pendingGames.add(g.id);
   pendingMeta = true;
 }
 
@@ -147,15 +123,11 @@ function schedule(ms: number) {
 }
 
 async function push() {
-  if (!cfg || inFlight || (!pendingGames.size && !pendingMeta && !pendingJournals.size && !pendingLessons.size)) return;
+  if (!cfg || inFlight || (!pendingGames.size && !pendingMeta)) return;
   inFlight = true;
   const ids = [...pendingGames];
-  const journalIds = [...pendingJournals];
-  const models = [...pendingLessons];
   const meta = pendingMeta;
   pendingGames.clear();
-  pendingJournals.clear();
-  pendingLessons.clear();
   pendingMeta = false;
 
   const batch: SyncBatch = {};
@@ -174,23 +146,9 @@ async function push() {
     const ts = [...tournaments.values()];
     if (keep("tournaments", ts)) batch.tournaments = ts;
   }
-  const journals: Record<string, JournalEntry[]> = {};
-  for (const id of journalIds) {
-    const j = readJournal(id);
-    if (keep(`j:${id}`, j)) journals[id] = j;
-  }
-  if (Object.keys(journals).length) batch.journals = journals;
-  const lessons: Record<string, Lessons> = {};
-  for (const model of models) {
-    const l = readLessons(model);
-    if (l.version > 0 && keep(`l:${model}`, l)) lessons[model] = l;
-  }
-  if (Object.keys(lessons).length) batch.lessons = lessons;
 
   const restore = () => {
     for (const id of ids) pendingGames.add(id);
-    for (const id of journalIds) pendingJournals.add(id);
-    for (const m of models) pendingLessons.add(m);
     pendingMeta ||= meta;
   };
   try {
@@ -244,7 +202,7 @@ async function push() {
   inFlight = false;
   // Changes that arrived during the push: moves go out at once, everything else shortly.
   if (pendingGames.size) schedule(300);
-  else if (pendingMeta || pendingJournals.size || pendingLessons.size) schedule(1500);
+  else if (pendingMeta) schedule(1500);
 }
 
 /* ------------------------------ the public side: receive ------------------------------ */
@@ -299,17 +257,24 @@ export function ingest(batch: SyncBatch): string[] {
       changed.push(id);
     }
   }
-  for (const t of batch.tournaments ?? []) {
-    if (!t || typeof t.id !== "string") continue;
-    tournaments.set(t.id, t);
-    saveTournamentNow(t);
+  if (batch.tournaments) {
+    const keep = new Set<string>();
+    for (const t of batch.tournaments) {
+      if (!t || typeof t.id !== "string") continue;
+      keep.add(t.id);
+      tournaments.set(t.id, t);
+      saveTournamentNow(t);
+    }
+    for (const id of [...tournaments.keys()]) {
+      if (keep.has(id)) continue;
+      tournaments.delete(id);
+      deleteTournamentFile(id);
+    }
   }
   if (batch.players) {
     for (const id of Object.keys(players)) if (!(id in batch.players)) delete players[id];
     Object.assign(players, batch.players);
     savePlayersNow();
   }
-  for (const [id, entries] of Object.entries(batch.journals ?? {})) if (Array.isArray(entries)) writeJournal(id, entries);
-  for (const [model, l] of Object.entries(batch.lessons ?? {})) if (l && typeof l.version === "number") writeLessonsFile(model, l);
   return changed;
 }

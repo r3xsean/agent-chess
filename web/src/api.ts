@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Game, JournalEntry, Lessons, ModelOption, Personality, PlayerRef, PlayerStats, Tournament } from "../../shared/types";
+import type { Game, ModelOption, PlayerRef, PlayerStats, Tournament } from "../../shared/types";
 
 export interface GameSummary {
   id: string;
@@ -25,7 +25,6 @@ export interface Lobby {
 
 export interface Meta {
   models: ModelOption[];
-  personalities: Personality[];
   defaultBroadcaster: { provider: string; model: string; effort: string };
   /** A T3 webhook is configured, so the site can summon agents itself. */
   summonAvailable: boolean;
@@ -91,7 +90,5 @@ export function useFetch<T>(url: string | null, deps: unknown[] = []): T | null 
   return value;
 }
 
-export type MemoryModel = { model: string; label: string; lessons: Lessons; players: { player: PlayerStats; journal: JournalEntry[] }[] };
-
-export type PlayerPage ={ player: PlayerStats; journal: JournalEntry[]; games: GameSummary[] };
+export type PlayerPage = { player: PlayerStats; games: GameSummary[] };
 export type TournamentPage = { tournament: Tournament; games: (GameSummary | null)[]; next?: number[]; breakUntil?: number };

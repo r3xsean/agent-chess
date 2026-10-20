@@ -1,18 +1,8 @@
 import type { Color, PlayerRef } from "../../../shared/types";
-import { personalityById } from "../../../shared/personalities";
 import type { MaterialInfo } from "../../../shared/material";
 import { PlayerAvatar, PlayerName } from "./PlayerName";
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
-
-export function Avatar({ personality, size }: { personality: string; size?: number }) {
-  const p = personalityById(personality);
-  return (
-    <div className="avatar" style={{ background: p.color, ...(size ? { width: size, height: size, fontSize: size * 0.55 } : {}) }} title={p.name}>
-      {p.emoji}
-    </div>
-  );
-}
 
 /** Pieces this side has captured, and its material lead — like chess.com under each name. */
 function Captured({ info, color }: { info: MaterialInfo; color: Color }) {

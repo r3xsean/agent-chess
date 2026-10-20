@@ -26,8 +26,8 @@ const file = (name, content) => {
 };
 
 const { game, launch } = await api("/api/games", {
-  white: { model: "claude-opus-5-5", effort: "high", personality: "magician" },
-  black: { model: "gpt-6-astra", effort: "high", personality: "python" },
+  white: { model: "claude-opus-5-5", effort: "high" },
+  black: { model: "gpt-6-astra", effort: "high" },
   broadcaster: { enabled: false },
 });
 const keys = Object.fromEntries(launch.tasks.map((t) => [t.role, /--key (\S+)/.exec(t.prompt)[1]]));
@@ -67,7 +67,6 @@ console.log("result", g.result, g.termination, "phase", g.phase, "opening", g.op
 for (const m of g.moves) console.log(m.ply, m.san, m.analysis?.classification, m.analysis?.bestSan, m.illegalAttempts, m.lines.map((l) => `${l.san.join(" ")}|${l.brokenAt ?? ""}`));
 console.log("review", JSON.stringify(g.review));
 console.log(cli(["wait", "--key", keys.white]));
-console.log(cli(["interview", "--text", "Magic.", "--key", keys.white]));
-console.log(cli(["journal", "--text", "Scholar's mate works on pythons.", "--key", keys.white]));
+console.log(cli(["postgame", file("post.json", { interview: "Magic." }), "--key", keys.white]));
 console.log(cli(["wait", "--key", keys.white]));
 console.log((await (await fetch(`${URL}/api/games/${game.id}/pgn`)).text()).slice(0, 1500));

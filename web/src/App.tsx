@@ -3,7 +3,6 @@ import { GamePage } from "./pages/GamePage";
 import { Lobby } from "./pages/Lobby";
 import { PlayerPage } from "./pages/PlayerPage";
 import { TournamentPage } from "./pages/TournamentPage";
-import { MemoryPage } from "./pages/MemoryPage";
 import { AgentsPage } from "./pages/AgentsPage";
 import { NewGameModal, NewTournamentModal, PlayAgentModal } from "./components/NewGame";
 import { VideoPage } from "./video/VideoPage";
@@ -52,9 +51,7 @@ export function App() {
   if (section === "game" && id) page = <GamePage key={id} id={id} />;
   else if (section === "player" && id) page = <PlayerPage id={id} />;
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
-  else if (section === "memory") page = <MemoryPage />;
-  // "personalities" is the page's old name; old links still land here.
-  else if (section === "agents" || section === "personalities") page = <AgentsPage model={section === "agents" ? id : ""} query={new URLSearchParams(search)} />;
+  else if (section === "agents") page = <AgentsPage model={id} query={new URLSearchParams(search)} />;
   else page = <Lobby local={local} onNewGame={() => setModal("game")} onPlay={() => setModal("play")} onNewTournament={() => setModal("tournament")} />;
 
   return (
@@ -70,10 +67,7 @@ export function App() {
           <a className={`nav-item ${!section ? "active" : ""}`} href="#/" title="Watch">
             <span className="ico">📺</span> <span className="lbl">Watch</span>
           </a>
-          <a className={`nav-item ${section === "memory" ? "active" : ""}`} href="#/memory" title="Memory">
-            <span className="ico">🧠</span> <span className="lbl">Memory</span>
-          </a>
-          <a className={`nav-item ${section === "agents" || section === "personalities" ? "active" : ""}`} href="#/agents" title="Agents">
+          <a className={`nav-item ${section === "agents" ? "active" : ""}`} href="#/agents" title="Agents">
             <span className="ico">🤖</span> <span className="lbl">Agents</span>
           </a>
           {extra && (

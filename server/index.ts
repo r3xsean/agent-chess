@@ -7,11 +7,10 @@ import { startUsageLimitWatcher } from "./usageLimits";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, SeatRole, Tournament, VideoPlan } from "../shared/types";
+import type { Color, Game, MoveRecord, PlayerRef, PositionAnalysis, PublishPlatform, SeatRole, Tournament, VideoPlan } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
-import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
-import { adminToken, agentDir, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGame, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
+import { adminToken, agentDir, flushAll, games, loadAll, players, saveGame, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
   acceptDraw,
@@ -25,8 +24,6 @@ import {
   settleTournament,
   say,
   submitInterview,
-  submitJournal,
-  submitLessons,
   playerFinished,
   seatIsHuman,
   seatKeysFor,
@@ -243,23 +240,15 @@ function shared(event: string, payload: () => unknown): string {
 
 function humanRef(name: unknown): PlayerRef {
   const label = String(name ?? "").replace(/[^\p{L}\p{N} ._'-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 24) || "Human";
-  return { id: `human:${label.toLowerCase()}`, provider: "human", model: "human", modelLabel: label, effort: "", personality: "human" };
+  return { id: `human:${label.toLowerCase()}`, provider: "human", model: "human", modelLabel: label, effort: "" };
 }
 
-function playerRef(input: { model?: string; effort?: string; personality?: string; human?: boolean; name?: string }): PlayerRef {
+function playerRef(input: { model?: string; effort?: string; human?: boolean; name?: string }): PlayerRef {
   if (input.human) return humanRef(input.name);
   const m = MODELS.find((x) => x.model === input.model);
   if (!m) throw new ActionError(`Unknown model: ${input.model}`);
   const effort = m.efforts.includes(String(input.effort)) ? String(input.effort) : m.defaultEffort;
-  const personality = PERSONALITIES.some((p) => p.id === input.personality) ? String(input.personality) : PERSONALITIES[0].id;
-  return {
-    id: `${m.model}@${effort}:${personality}`,
-    provider: m.provider,
-    model: m.model,
-    modelLabel: m.label,
-    effort,
-    personality,
-  };
+  return { id: `${m.model}@${effort}`, provider: m.provider, model: m.model, modelLabel: m.label, effort };
 }
 
 /** The Chess960 choice from a request: off, a random start position, or a given one (0–959). */
@@ -350,7 +339,6 @@ app.get(
   "/api/meta",
   handle(() => ({
     models: MODELS,
-    personalities: PERSONALITIES,
     defaultBroadcaster: DEFAULT_BROADCASTER,
     summonAvailable: !PUBLIC_MODE && (summonAvailable() || anyAgentCli()),
     publicMode: PUBLIC_MODE,
@@ -538,8 +526,8 @@ app.post(
     const white = playerRef(req.body.white ?? {});
     const black = playerRef(req.body.black ?? {});
     if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
-    if (white.id === black.id) throw new ActionError("Both seats are the same player (model, effort and personality). Change one of them.");
-    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), learning: req.body.learning !== false, rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
+    if (white.id === black.id) throw new ActionError("Both seats are the same player (model and effort). Change one of them.");
+    const g = createGame({ white, black, broadcaster: broadcasterConfig(req.body.broadcaster), rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
     // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
     const human = humanSide(g);
     const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
@@ -670,72 +658,8 @@ app.get(
     if (!p) throw new ActionError("No such player");
     return {
       player: p,
-      journal: readJournal(id),
       games: [...games.values()].filter((g) => g.white.id === id || g.black.id === id).sort((a, b) => b.createdAt - a.createdAt).map(gameSummary),
     };
-  }),
-);
-
-/* ------------------------------ lessons (per model) ------------------------------ */
-
-const knownModel = (m: string) => {
-  if (!MODELS.some((x) => x.model === m)) throw new ActionError(`Unknown model: ${m}`);
-  return m;
-};
-app.get("/api/lessons/:model", handle((req) => readLessons(knownModel(String(req.params.model)))));
-app.post(
-  "/api/lessons/:model/reset",
-  localOnly,
-  handle((req) => {
-    const model = knownModel(String(req.params.model));
-    // History is kept; the active playbook starts over.
-    return writeLessons(model, "", null);
-  }),
-);
-
-/** Everything the players remember: each model's lessons plus every player's journal, grouped by model. */
-app.get(
-  "/api/memory",
-  handle(() => {
-    const models = new Set(Object.values(players).filter((p) => !isHuman(p.ref)).map((p) => p.ref.model));
-    for (const m of MODELS) if (readLessons(m.model).version > 0) models.add(m.model);
-    return [...models]
-      .map((model) => {
-        const ps = Object.values(players)
-          .filter((p) => p.ref.model === model)
-          .sort((a, b) => b.rating - a.rating)
-          .map((p) => ({ player: p, journal: readJournal(p.id) }));
-        return { model, label: MODELS.find((m) => m.model === model)?.label ?? model, lessons: readLessons(model), players: ps };
-      })
-      .sort((a, b) => (b.lessons.updatedAt ?? 0) - (a.lessons.updatedAt ?? 0) || b.players.length - a.players.length);
-  }),
-);
-
-const recordOf = (ps: PlayerStats[]) =>
-  ps.reduce((a, x) => ({ games: a.games + x.games, wins: a.wins + x.wins, draws: a.draws + x.draws, losses: a.losses + x.losses }), { games: 0, wins: 0, draws: 0, losses: 0 });
-
-/** Every model that has played, with its record and, under it, every personality (played ones first, best rating first). */
-app.get(
-  "/api/agents",
-  handle(() => {
-    const byModel = new Map<string, PlayerStats[]>();
-    for (const p of Object.values(players)) if (!isHuman(p.ref)) byModel.set(p.ref.model, [...(byModel.get(p.ref.model) ?? []), p]);
-    return [...byModel]
-      .map(([model, ps]) => {
-        const personalities = PERSONALITIES.map((persona) => {
-          const mine = ps.filter((x) => x.ref.personality === persona.id).sort((a, b) => b.rating - a.rating);
-          return { personality: persona, riskRule: riskRule(persona), record: recordOf(mine), players: mine };
-        }).sort((a, b) => (b.players[0]?.rating ?? -Infinity) - (a.players[0]?.rating ?? -Infinity));
-        return {
-          model,
-          label: MODELS.find((m) => m.model === model)?.label ?? ps[0].ref.modelLabel,
-          provider: ps[0].ref.provider,
-          record: recordOf(ps),
-          best: ps.reduce((a, b) => (b.rating > a.rating ? b : a)),
-          personalities,
-        };
-      })
-      .sort((a, b) => b.best.rating - a.best.rating);
   }),
 );
 
@@ -768,7 +692,6 @@ app.post(
       players: unique,
       doubleRound: !!req.body.doubleRound,
       broadcaster: broadcasterConfig(req.body.broadcaster),
-      learning: req.body.learning !== false,
       rated: req.body.rated !== false,
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
@@ -942,38 +865,16 @@ function playerTodo(g: Game, c: Color): string | null {
   }
 }
 
-/**
- * The post-game in one call: interview, journal and lessons. Parts already done are skipped, so after
- * a rejection the player can send the same JSON again with the bad part fixed.
- */
+/** The post-game interview, as JSON: { "interview": "…" }. */
 function submitPostgame(g: Game, c: Color, input: any): string {
   // A retry of one that went through (its shell timed out mid-wait) just carries on.
-  if ((g.phase === "postgame" || g.phase === "finished") && !postgameMissing(g, c).length) return "OK — your post-game is already in.";
+  if ((g.phase === "postgame" || g.phase === "finished") && g.interviews.post[c]) return "OK — your post-game is already in.";
   if (g.phase !== "postgame") throw new ActionError("`postgame` is for after the game.");
-  if (!input || typeof input !== "object") throw new ActionError('Send a JSON object: { "interview": "…", "journal": "…", "lessons": "…" }.');
-  const parts = [
-    // Lessons first: they have the strictest checks, so a rejection there leaves nothing half-done.
-    { key: "lessons", todo: !!g.options?.learning && !g.lessonsDone?.[c], save: (t: string) => submitLessons(g, c, t) },
-    { key: "interview", todo: !g.interviews.post[c], save: (t: string) => submitInterview(g, c, t) },
-    { key: "journal", todo: !g.journalDone[c], save: (t: string) => submitJournal(g, c, t) },
-  ].filter((p) => p.todo && typeof input[p.key] === "string" && input[p.key].trim());
-  if (!parts.length) throw new ActionError(`Nothing to save: include what's still to do (${postgameMissing(g, c).join(", ") || "nothing"}).`);
-  const saved: string[] = [];
-  for (const p of parts) {
-    try {
-      p.save(input[p.key]);
-    } catch (e) {
-      if (!(e instanceof ActionError)) throw e;
-      throw new ActionError(`"${p.key}" was not saved: ${e.message}${saved.length ? ` (${saved.join(" and ")} saved — send the JSON again with "${p.key}" fixed).` : ""}`);
-    }
-    saved.push(p.key);
-  }
-  const missing = postgameMissing(g, c);
-  return `OK — saved ${saved.join(", ")}.${missing.length ? ` Still missing: ${missing.join(", ")}.` : ""}`;
+  if (!input || typeof input !== "object" || typeof input.interview !== "string" || !input.interview.trim())
+    throw new ActionError('Send a JSON object: { "interview": "…" }.');
+  submitInterview(g, c, input.interview);
+  return "OK — saved interview.";
 }
-
-const postgameMissing = (g: Game, c: Color) =>
-  [!g.interviews.post[c] && "interview", !g.journalDone[c] && "journal", !!g.options?.learning && !g.lessonsDone?.[c] && "lessons"].filter(Boolean) as string[];
 
 function waitingReason(g: Game, c: Color) {
   if (g.clockPause) return `game paused: ${g.clockPause.reason}`;
@@ -1271,12 +1172,6 @@ app.post(
         if (![g.interviews.pre[c]?.text, g.interviews.post[c]?.text].includes(t)) submitInterview(g, c, t);
         return next("OK — interview recorded.");
       }
-      case "lessons":
-        if (!g.lessonsDone?.[c]) submitLessons(g, c, readText(req.body));
-        return next("OK — lessons saved.");
-      case "journal":
-        if (!g.journalDone[c]) submitJournal(g, c, readText(req.body));
-        return next("OK — journal saved.");
       case "postgame":
         return next(submitPostgame(g, c, req.body.postgame));
       default:

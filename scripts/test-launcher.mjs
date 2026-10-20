@@ -77,8 +77,8 @@ const check = (label, cond, detail = "") => {
 try {
   // White has an agent webhook, Black doesn't.
   const { game, launch } = await req("POST", "/api/games", {
-    white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" },
-    black: { model: "gpt-6-luna", effort: "low", personality: "trickster" },
+    white: { model: "claude-haiku-5-5", effort: "low" },
+    black: { model: "gpt-6-luna", effort: "low" },
     broadcaster: { enabled: false },
   });
   const wKey = /--key (\S+)/.exec(launch.tasks[0].prompt)[1];

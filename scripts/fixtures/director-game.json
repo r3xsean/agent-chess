@@ -192,20 +192,18 @@
     }
   },
   "white": {
-    "id": "claude-fable-5-1@high:none",
+    "id": "claude-fable-5-1@high",
     "provider": "claudeAgent",
     "model": "claude-fable-5-1",
     "modelLabel": "Fable 5.1",
-    "effort": "high",
-    "personality": "none"
+    "effort": "high"
   },
   "black": {
-    "id": "gpt-6.1-sol@high:none",
+    "id": "gpt-6.1-sol@high",
     "provider": "codex",
     "model": "gpt-6.1-sol",
     "modelLabel": "GPT-6.1 Sol",
-    "effort": "high",
-    "personality": "none"
+    "effort": "high"
   },
   "review": {
     "w": {

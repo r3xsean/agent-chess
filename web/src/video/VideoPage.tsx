@@ -4,7 +4,6 @@ import { looseChess, newRules, START_FEN, variantOf, type RulesMove, type Varian
 import type { Classification, Color, Game, LineReach, LineRef, PlayerRef, Rivalry, Score } from "../../../shared/types";
 import { seriesLine } from "../../../shared/series";
 import type { VoiceManifest } from "../../../shared/voices";
-import { personalityById, RISK_LABEL } from "../../../shared/personalities";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
 import { makerOf } from "../../../shared/models";
@@ -1398,9 +1397,8 @@ const fitFont = (size: number, len: number) => (len > 450 ? size * 0.68 : len > 
 
 function ThoughtLabel({ g, t }: { g: Game; t: Said }) {
   const ref = t.color === "w" ? g.white : g.black;
-  const p = personalityById(ref.personality);
   return (
-    <div className="v-thought-label" style={{ color: p.color }}>
+    <div className="v-thought-label" style={{ color: makerOf(ref.provider).color }}>
       💭 {sideName(g, t.color)} thinks{t.selfEval && <span className="v-selfeval">self-eval {t.selfEval}</span>}
     </div>
   );
@@ -1892,23 +1890,22 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
 }
 
 
+/** Under a player's name: a human, or the effort the model plays at. */
+const whoLine = (ref: PlayerRef) => (isHuman(ref) ? "Human player" : `${ref.effort} effort`);
+
 function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: number }) {
   const ref = color === "w" ? g.white : g.black;
-  const p = personalityById(ref.personality);
   return (
     <div className="v-hero">
       <Avatar player={ref} size={170} />
       <div className="v-hero-name" style={{ color: makerOf(ref.provider).color }}>
         {ref.modelLabel}
       </div>
-      <div className="v-hero-as">{isHuman(ref) ? "Human player" : p.plain ? "No personality" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</div>
+      <div className="v-hero-as">{whoLine(ref)}</div>
       <div className="v-hero-tags">
         <span className={`v-side ${color}`}>{color === "w" ? "White" : "Black"}</span>
-        {!isHuman(ref) && <span className="v-chip">{ref.effort} effort</span>}
         {rating !== undefined && <span className="v-chip">Rated {rating}</span>}
-        {!isHuman(ref) && !p.plain && <span className={`v-risk ${p.risk}`}>{RISK_LABEL[p.risk].label}</span>}
       </div>
-      <div className="v-hero-tagline">“{p.tagline}”</div>
     </div>
   );
 }
@@ -1942,7 +1939,6 @@ function VersusScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: b
 
 function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: "interview" }>; v: View; wide: boolean }) {
   const ref = s.color === "w" ? g.white : g.black;
-  const p = personalityById(ref.personality);
   const ws = s.text.split(/\s+/);
   const len = s.text.length;
   const font = wide ? (len > 650 ? 42 : len > 420 ? 50 : 56) : len > 650 ? 42 : len > 420 ? 48 : 54;
@@ -1956,12 +1952,12 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
             {ref.modelLabel}
           </div>
           <div className="v-interview-sub">
-            <span className="v-hero-as">{isHuman(ref) ? "Human player" : p.plain ? "No personality" : <>as <span style={{ color: p.color }}>{p.name}</span></>}</span>
+            <span className="v-hero-as">{whoLine(ref)}</span>
             <span className={`v-side ${s.color}`}>{s.color === "w" ? "White" : "Black"}</span>
           </div>
         </div>
       </div>
-      <div className="v-quote" style={{ fontSize: font, borderColor: p.color }}>
+      <div className="v-quote" style={{ fontSize: font, borderColor: makerOf(ref.provider).color }}>
         {ws.map((w, i) => (
           <span key={i} style={{ opacity: i < (v.reveal ?? 0) ? 1 : 0 }}>
             {w}{" "}
@@ -1988,7 +1984,7 @@ function ResultScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: b
           {ref.modelLabel}
         </div>
         <div className="v-hero-as small">
-          {isHuman(ref) ? "Human player" : personalityById(ref.personality).plain ? "No personality" : <>as <span style={{ color: personalityById(ref.personality).color }}>{personalityById(ref.personality).name}</span></>}
+          {whoLine(ref)}
         </div>
         <div className="v-time-total">
           ⏱ {clock(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0))} thinking · {took(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0) / Math.max(1, g.moves.filter((m) => m.color === c).length))} a move

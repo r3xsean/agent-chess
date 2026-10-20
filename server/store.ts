@@ -1,13 +1,12 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { EventEmitter } from "node:events";
-import type { Game, JournalEntry, Lessons, PlayerRef, PlayerStats, SeatRole, Tournament } from "../shared/types";
+import type { Game, PlayerRef, PlayerStats, SeatRole, Tournament } from "../shared/types";
 import { DATA } from "./paths";
 import { GLICKO_START } from "./glicko";
 import type { AgentProc } from "./agents";
 
-const dirs = ["games", "tournaments", "journals", "agents"].map((d) => path.join(DATA, d));
+const dirs = ["games", "tournaments", "agents"].map((d) => path.join(DATA, d));
 for (const d of dirs) mkdirSync(d, { recursive: true });
 
 export function writeJson(file: string, value: unknown) {
@@ -23,9 +22,6 @@ export const readJson = <T>(file: string, fallback: T): T => {
   }
 };
 const safe = (id: string) => id.replace(/[^a-zA-Z0-9._-]/g, "_");
-
-/** "journal" (player id) and "lessons" (model) when a player's memory changes — the mirror follows them. */
-export const memoryEvents = new EventEmitter();
 
 export const games = new Map<string, Game>();
 export const tournaments = new Map<string, Tournament>();
@@ -47,11 +43,7 @@ export function loadAll() {
   for (const f of readdirSync(path.join(DATA, "games"))) {
     if (!f.endsWith(".json")) continue;
     const g = readJson<Game | null>(path.join(DATA, "games", f), null);
-    if (g) {
-      // Older active games have no snapshot; freeze once now and persist across later restarts.
-      if (!g.result && captureGameLessons(g)) saveGameNow(g);
-      games.set(g.id, g);
-    }
+    if (g) games.set(g.id, g);
   }
   for (const f of readdirSync(path.join(DATA, "tournaments"))) {
     if (!f.endsWith(".json")) continue;
@@ -83,6 +75,12 @@ export function deleteGameFile(id: string) {
   clearTimeout(pending.get(`g:${id}`));
   pending.delete(`g:${id}`);
   rmSync(path.join(DATA, "games", `${safe(id)}.json`), { force: true });
+}
+/** The public mirror drops a tournament the local server no longer has. */
+export function deleteTournamentFile(id: string) {
+  clearTimeout(pending.get(`t:${id}`));
+  pending.delete(`t:${id}`);
+  rmSync(path.join(DATA, "tournaments", `${safe(id)}.json`), { force: true });
 }
 export function saveSeatsNow() {
   clearTimeout(pending.get("seats"));
@@ -128,56 +126,6 @@ export function ensurePlayer(ref: PlayerRef): PlayerStats {
     savePlayers();
   }
   return players[ref.id];
-}
-
-const journalFile = (playerId: string) => path.join(DATA, "journals", `${safe(playerId)}.json`);
-export const readJournal = (playerId: string): JournalEntry[] => readJson(journalFile(playerId), []);
-/** Replace a player's whole journal (the public mirror, receiving it). */
-export const writeJournal = (playerId: string, entries: JournalEntry[]) => writeJson(journalFile(playerId), entries);
-export function appendJournal(playerId: string, entry: JournalEntry) {
-  const all = readJournal(playerId).filter((e) => !(e.gameId === entry.gameId && e.color === entry.color));
-  all.push(entry);
-  writeJson(journalFile(playerId), all);
-  memoryEvents.emit("journal", playerId);
-}
-
-/* Lessons: one short, self-curated playbook per model, shared by all its personalities. */
-const lessonsFile = (model: string) => path.join(DATA, "lessons", `${safe(model)}.json`);
-export const readLessons = (model: string): Lessons =>
-  readJson(lessonsFile(model), { model, version: 0, text: "", updatedAt: null, history: [] } as Lessons);
-/** Capture even an empty playbook, so later updates cannot enter a running game. */
-export function captureGameLessons(g: Game): boolean {
-  if (!g.options?.learning || g.lessonsAtStart) return false;
-  const snapshot = (model: string) => {
-    const { version, text } = readLessons(model);
-    return { version, text };
-  };
-  g.lessonsAtStart = { w: snapshot(g.white.model), b: snapshot(g.black.model) };
-  return true;
-}
-/** Goes up with every lessons write, here or arriving at the mirror, so readers can cache lessons files. */
-export let lessonsRevision = 0;
-export function writeLessons(model: string, text: string, gameId: string | null) {
-  lessonsRevision++;
-  const cur = readLessons(model);
-  const next: Lessons = {
-    model,
-    version: cur.version + 1,
-    text,
-    updatedAt: Date.now(),
-    history: [...cur.history, { version: cur.version + 1, ts: Date.now(), gameId, text }].slice(-50),
-  };
-  mkdirSync(path.join(DATA, "lessons"), { recursive: true });
-  writeJson(lessonsFile(model), next);
-  memoryEvents.emit("lessons", model);
-  return next;
-}
-
-/** Store a model's lessons as they are (the public mirror, receiving them). */
-export function writeLessonsFile(model: string, lessons: Lessons) {
-  lessonsRevision++;
-  mkdirSync(path.join(DATA, "lessons"), { recursive: true });
-  writeJson(lessonsFile(model), lessons);
 }
 
 export const agentDir = (gameId: string, role: string) => {

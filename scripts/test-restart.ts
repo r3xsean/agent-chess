@@ -78,7 +78,7 @@ try {
   await up();
   token = readFileSync(path.join(data, "admin-token.txt"), "utf8").trim();
   const newGame = async () => {
-    const created = (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low", personality: "none" }, black: { model: "gpt-6-luna", effort: "low", personality: "none" }, broadcaster: { enabled: false }, learning: false })).json();
+    const created = (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } })).json();
     const keys: Record<string, string> = Object.fromEntries(created.launch.tasks.map((t: any) => [t.seat, /--key (\S+)/.exec(t.prompt)![1]]));
     const act = (seat: string, cmd: string, body = {}) => request(`/api/agent/${cmd}`, { key: keys[seat], noWait: true, ...body }, false);
     const game = async (): Promise<Game> => (await request(`/api/games/${created.game.id}`)).json();

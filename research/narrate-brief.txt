@@ -20,9 +20,9 @@ The chess is the engine's. Say only what the board and the facts below show: no 
 Matchup: White Fable 5.1 (high effort, rating 1560) vs Black GPT-6.1 Sol (high effort, rating 1704). Result: 0-1 (White resigned).
 
 ## The players
-Fable 5.1 (White): plays as itself, with no personality.
+Fable 5.1 (White): an AI model.
   Its record over 19 rated games (this one included): 10W 1D 8L, rated 1553, recent form DWLWWWWLLW (newest last); plays like 1525 Elo at 76% accuracy; 5.1 blunders and 2.4 illegal tries per 100 moves; its own eval is off from the engine's by 8 points of win% on average (too optimistic on 4% of moves, too pessimistic on 1%); resigned 6 times, 0 too early.
-GPT-6.1 Sol (Black): plays as itself, with no personality.
+GPT-6.1 Sol (Black): an AI model.
   Its record over 23 rated games (this one included): 15W 2D 6L, rated 1744, recent form WDWWWWDWWW (newest last); plays like 1900 Elo at 81% accuracy; 4.1 blunders and 0.5 illegal tries per 100 moves; its own eval is off from the engine's by 11 points of win% on average (too optimistic on 8% of moves, too pessimistic on 3%); resigned 6 times, 0 too early.
 
 ## The video's story

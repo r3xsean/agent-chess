@@ -20,8 +20,8 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
   const score = (both ? 10 : 0) + n("brilliant") * 4 + n("great") * 2 + n("blunder") * 2 + n("miss") * 2 + n("mistake") + Math.min(illegal, 3) + interviews + (g.moves.length > 40 && g.moves.length < 140 ? 3 : 0);
   rows.push({
     id: g.id,
-    w: `${g.white.model}/${g.white.personality}`,
-    b: `${g.black.model}/${g.black.personality}`,
+    w: g.white.id,
+    b: g.black.id,
     res: `${g.result} ${g.termination}`,
     plies: g.moves.length,
     bril: n("brilliant"),

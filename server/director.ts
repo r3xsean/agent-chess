@@ -11,7 +11,6 @@ import { spokenText, VOICE_BUDGET } from "./voice";
 import { LATE_INTERVIEW_CHARS, lineSig, lineVoice, videoLines, voiceOf } from "../shared/videoLines";
 import { asciiBoard, describePlayer, pvSan } from "./briefing";
 import { modelAnalytics } from "./analytics";
-import { personalityById, RISK_LABEL } from "../shared/personalities";
 import { variantOf, type RulesMove } from "../shared/rules";
 import { ActionError, isRated } from "./game";
 import { branchOptions, fenAt, lineOptions, lineRefProblems, lineVerdicts, obvious, planBranch, planLine, resolveLineRefs, shownLine, type ShownBranch, type ShownLine } from "../shared/engineLine";
@@ -278,8 +277,8 @@ export function directorBrief(g: Game): string {
 }
 
 /**
- * Who the players are beyond their names: the personality each was given (its style and voice), and each
- * model's record across its rated games, this one included: material for the narrator and the titles.
+ * Who the players are beyond their names: each model's record across its rated games, this one included:
+ * material for the narrator and the titles.
  */
 function characterLines(g: Game): string[] {
   const out: string[] = ["", "## The players"];
@@ -290,12 +289,7 @@ function characterLines(g: Game): string[] {
       out.push(`${who}: a human player.`);
       continue;
     }
-    const pers = personalityById(p.personality);
-    out.push(
-      pers.plain
-        ? `${who}: plays as itself, with no personality.`
-        : `${who}: plays as ${pers.name} (${pers.tagline}). Style: ${pers.style} Risk: ${RISK_LABEL[pers.risk].label.toLowerCase()}. Voice: ${pers.voice}`,
-    );
+    out.push(`${who}: an AI model.`);
     const a = modelAnalytics(p.model, "rated");
     if (!a || !a.row.games) continue;
     const r = a.row;

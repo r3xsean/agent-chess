@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Classification } from "../../../shared/types";
-import type { LearningGame, RatingSeries } from "../../../shared/analytics";
+import type { RatingSeries } from "../../../shared/analytics";
 import { CLASS_META } from "./ClassIcon";
 
 /*
@@ -373,98 +373,6 @@ export function CalibrationChart({ curve }: { curve: { bin: number; n: number; s
         );
       }}
     </Frame>
-  );
-}
-
-/* ------------------------------ learning ------------------------------ */
-
-export function LearningChart({ games }: { games: LearningGame[] }) {
-  const [tip, setTip] = useState<Tip | null>(null);
-  const pts = games.filter((g) => g.accuracy !== null);
-  if (pts.length < 2) return <div className="viz-empty">Not enough reviewed games yet.</div>;
-  const H = 210;
-  const pad = { l: 36, r: 14, t: 18, b: 22 };
-  const lo = Math.max(0, Math.floor((Math.min(...pts.map((p) => p.accuracy!)) - 5) / 10) * 10);
-  // A five-game rolling average carries the trend; single games bounce around a lot.
-  const rolling = pts.map((_, i) => {
-    const w = pts.slice(Math.max(0, i - 4), i + 1);
-    return w.reduce((a, p) => a + p.accuracy!, 0) / w.length;
-  });
-  return (
-    <>
-      <Frame height={H} tip={tip}>
-        {(W) => {
-          const x = (i: number) => pad.l + (pts.length === 1 ? 0 : (i / (pts.length - 1)) * (W - pad.l - pad.r));
-          const y = (v: number) => pad.t + (1 - (v - lo) / (100 - lo)) * (H - pad.t - pad.b);
-          // Lessons are rewritten after nearly every game, so only the games played without them are marked.
-          const step = pts.length > 1 ? (W - pad.l - pad.r) / (pts.length - 1) : 0;
-          const without = pts.flatMap((p, i) => (p.version === 0 ? [i] : []));
-          return (
-            <svg width={W} height={H} onPointerLeave={() => setTip(null)}>
-              {ticks(lo, 100, 3).map((v) => (
-                <g key={v}>
-                  <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke={GRID} />
-                  <text x={pad.l - 6} y={y(v)} className="viz-axis" textAnchor="end" dominantBaseline="middle">
-                    {v}
-                  </text>
-                </g>
-              ))}
-              {without.map((i) => (
-                <rect key={i} x={x(i) - step / 2} y={pad.t} width={step} height={H - pad.t - pad.b} fill="#ffffff" opacity={0.05} />
-              ))}
-              <polyline points={rolling.map((v, i) => `${x(i)},${y(v)}`).join(" ")} fill="none" stroke={SERIES[1]} strokeWidth={2} strokeLinejoin="round" />
-              {pts.map((p, i) => (
-                <g
-                  key={p.gameId}
-                  onPointerMove={() =>
-                    setTip({
-                      x: x(i),
-                      y: y(p.accuracy!) - 12,
-                      content: (
-                        <>
-                          <b>{p.accuracy!.toFixed(1)}% accuracy</b>
-                          <div>
-                            {p.result === "W" ? "Won" : p.result === "L" ? "Lost" : "Drew"} · {fmtDate(p.ts)}
-                          </div>
-                          <div className="muted">{p.version ? `Lessons v${p.version}` : p.version === 0 ? "No lessons" : "Lessons version not kept"}</div>
-                        </>
-                      ),
-                    })
-                  }
-                  onClick={() => (location.hash = `#/game/${p.gameId}`)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <circle cx={x(i)} cy={y(p.accuracy!)} r={12} fill="transparent" />
-                  <circle cx={x(i)} cy={y(p.accuracy!)} r={4} fill={SERIES[0]} stroke={SURFACE} strokeWidth={2} />
-                </g>
-              ))}
-              <text x={pad.l} y={H - 4} className="viz-axis">
-                first game
-              </text>
-              <text x={W - pad.r} y={H - 4} className="viz-axis" textAnchor="end">
-                latest
-              </text>
-            </svg>
-          );
-        }}
-      </Frame>
-      <div className="viz-legend">
-        <span>
-          <i style={{ background: SERIES[0], width: 8, height: 8, borderRadius: 4 }} />
-          game accuracy
-        </span>
-        <span>
-          <i style={{ background: SERIES[1] }} />
-          5-game average
-        </span>
-        {pts.some((p) => p.version === 0) && (
-          <span>
-            <i style={{ background: "#ffffff", opacity: 0.15, width: 10, height: 10 }} />
-            played without lessons
-          </span>
-        )}
-      </div>
-    </>
   );
 }
 

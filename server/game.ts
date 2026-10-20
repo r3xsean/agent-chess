@@ -12,11 +12,7 @@ import { scoresChanged } from "./predictions";
 import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, variantOf, type Rules } from "../shared/rules";
 import {
-  appendJournal,
-  captureGameLessons,
   freshStats,
-  readLessons,
-  writeLessons,
   ensurePlayer,
   games,
   players,
@@ -32,7 +28,6 @@ import {
 const BROADCAST_GATE_MS = 90_000;
 const MAX_COMMENTARY = 6000;
 const MAX_INTERVIEW = 800;
-const MAX_JOURNAL = 600;
 const MAX_BROADCAST = 600;
 
 export const bus = new EventEmitter();
@@ -74,7 +69,6 @@ export function createGame(opts: {
   black: PlayerRef;
   broadcaster: Game["broadcaster"];
   tournamentId?: string;
-  learning?: boolean;
   rated?: boolean;
   /** A Chess960 game from this starting position (0–959). */
   chess960?: number;
@@ -93,7 +87,6 @@ export function createGame(opts: {
     result: null,
     termination: null,
     interviews: { pre: {}, post: {} },
-    journalDone: {},
     broadcast: [],
     broadcasterDone: !opts.broadcaster?.enabled,
     bcDelivered: [],
@@ -106,10 +99,9 @@ export function createGame(opts: {
     playStartedAt: null,
     interviewsCompleteAt: null,
     ...(opts.chess960 !== undefined ? { opening: { eco: "960", name: `Chess960 #${opts.chess960}` } } : {}),
-    options: { pieceList: true, learning: opts.learning ?? true, rated: opts.rated ?? true },
+    options: { pieceList: true, rated: opts.rated ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
-  captureGameLessons(g);
   ensurePlayer(opts.white);
   ensurePlayer(opts.black);
   games.set(g.id, g);
@@ -247,12 +239,11 @@ function maybeFinishReview(g: Game) {
 
 /* ------------------------------ phases ------------------------------ */
 
-/** A human seat: plays its moves on the website and owes nothing else (no interviews, commentary or journal). */
+/** A human seat: plays its moves on the website and owes nothing else (no interviews or commentary). */
 export const seatIsHuman = (g: Game, c: Color) => isHuman(playerOf(g, c));
 
-/** A player's post-game duties: interview, journal, and (when learning is on) their lessons rewrite. */
-export const playerFinished = (g: Game, c: Color) =>
-  seatIsHuman(g, c) || (!!g.interviews.post[c] && !!g.journalDone[c] && (!g.options?.learning || !!g.lessonsDone?.[c]));
+/** A player's post-game duty: the interview. */
+export const playerFinished = (g: Game, c: Color) => seatIsHuman(g, c) || !!g.interviews.post[c];
 
 /** Ready to start: the pre-game interview is in (a human is always ready). */
 const preReady = (g: Game, c: Color) => seatIsHuman(g, c) || !!g.interviews.pre[c];
@@ -343,7 +334,7 @@ function endGame(g: Game, result: Result, termination: string) {
   g.phase = "postgame";
   g.drawOffer = null;
   g.turnStartedAt = null;
-  // Unrecovered players may still owe their post-game interview/journal.
+  // Unrecovered players may still owe their post-game interview.
   g.endedAt = Date.now();
   applyRating(g);
   maybeFinishReview(g);
@@ -612,77 +603,6 @@ export function submitInterview(g: Game, color: Color, text: string) {
     if (g.interviews.post[color]) throw new ActionError("You already gave your post-game interview.");
     g.interviews.post[color] = { text, ts: Date.now() };
   } else throw new ActionError("Interviews happen before and after the game only.");
-  playerActed(g, color);
-  saveGameNow(g);
-  touch(g);
-}
-
-export function submitJournal(g: Game, color: Color, text: string) {
-  requireActionAllowed(g);
-  text = String(text ?? "").trim();
-  if (g.phase !== "postgame") throw new ActionError("Journal entries are written after the game.");
-  if (!text) throw new ActionError("Journal entry is empty.");
-  if (text.length > MAX_JOURNAL) throw new ActionError(`Keep it under ${MAX_JOURNAL} characters (yours: ${text.length}).`);
-  const me = color === "w" ? g.white : g.black;
-  const opp = color === "w" ? g.black : g.white;
-  appendJournal(me.id, {
-    gameId: g.id,
-    ts: Date.now(),
-    opponent: opp.id,
-    color,
-    result: g.result ?? "*",
-    text,
-  });
-  g.journalDone[color] = true;
-  playerActed(g, color);
-  saveGameNow(g);
-  touch(g);
-}
-
-export const MAX_LESSONS = 1200;
-export const MAX_LESSON_LINES = 10;
-
-/** Lesson items: bullet/numbered lines start an item, plain lines continue the previous one (so wrapping is fine). */
-export function lessonItems(text: string): string[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const bulleted = lines.some((l) => /^([-*•]|\d+[.)])\s+/.test(l));
-  if (!bulleted) return lines;
-  const items: string[] = [];
-  for (const l of lines) {
-    if (/^([-*•]|\d+[.)])\s+/.test(l) || !items.length) items.push(l);
-    else items[items.length - 1] += " " + l;
-  }
-  return items;
-}
-
-/** The player rewrites its model's whole lessons file (shared by every personality of that model). */
-export function submitLessons(g: Game, color: Color, text: string) {
-  requireActionAllowed(g);
-  if (!g.options?.learning) throw new ActionError("Learning is off for this game.");
-  if (g.phase !== "postgame") throw new ActionError("Lessons are updated after the game.");
-  text = String(text ?? "").trim();
-  if (!text) throw new ActionError("Lessons are empty. Rewrite the full list (keep what still matters, add what you learned).");
-  if (text.length > MAX_LESSONS) throw new ActionError(`Keep the whole list under ${MAX_LESSONS} characters (yours: ${text.length}). Merge or drop the least useful items.`);
-  const items = lessonItems(text);
-  if (items.length > MAX_LESSON_LINES) throw new ActionError(`At most ${MAX_LESSON_LINES} lessons (yours: ${items.length}). Merge or drop the least useful ones.`);
-  const vague = items.filter((i) => !/→|->/.test(i));
-  if (vague.length)
-    throw new ActionError(
-      `Every lesson must be a trigger and an action: "When [situation] → [what to do]". These are missing the "→": ${vague.map((v) => `"${v.slice(0, 60)}"`).join(", ")}`,
-    );
-  const model = playerOf(g, color).model;
-  const current = readLessons(model);
-  const seen = g.lessonsSeen?.[color];
-  if (seen !== undefined && seen !== current.version) {
-    // Another game with the same model updated the file since this player read it.
-    g.lessonsSeen = { ...g.lessonsSeen, [color]: current.version };
-    touch(g);
-    throw new ActionError(
-      `Your model's lessons were just updated by another of your games. Here is the latest version — rewrite your list starting from it:\n\n${current.text || "(empty)"}`,
-    );
-  }
-  writeLessons(model, text, g.id);
-  g.lessonsDone = { ...g.lessonsDone, [color]: true };
   playerActed(g, color);
   saveGameNow(g);
   touch(g);

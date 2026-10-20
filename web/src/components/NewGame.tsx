@@ -40,24 +40,6 @@ export function BroadcasterPicker({ meta, value, onChange }: { meta: Meta; value
   );
 }
 
-export function LearningToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div className="seat" style={{ marginTop: 14 }}>
-      <h3>
-        📚 Learning
-        <span className={`toggle ${value ? "on" : ""}`} style={{ marginLeft: "auto" }} onClick={() => onChange(!value)}>
-          {value ? "On" : "Off"} <span className="sw" />
-        </span>
-      </h3>
-      <div style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.45 }}>
-        {value
-          ? "Players read their model's lessons before and during the game, study their worst moves afterwards, and rewrite the lessons."
-          : "Players start fresh: no lessons shown, none written. Useful as a control for experiments."}
-      </div>
-    </div>
-  );
-}
-
 export function RatedToggle({ value, onChange, tournament }: { value: boolean; onChange: (v: boolean) => void; tournament?: boolean }) {
   return (
     <div className="seat" style={{ marginTop: 14 }}>
@@ -199,10 +181,9 @@ export function SummonInfo({ gameId, tournamentId }: { gameId?: string; tourname
 
 export function NewGameModal({ onClose }: { onClose: () => void }) {
   const meta = useFetch<Meta>("/api/meta");
-  const [white, setWhite] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
-  const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high", personality: "python" });
+  const [white, setWhite] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high" });
+  const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
-  const [learning, setLearning] = useState(true);
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [created, setCreated] = useState<string | null>(null);
@@ -228,7 +209,6 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
             </div>
             <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
-            <LearningToggle value={learning} onChange={setLearning} />
             <RatedToggle value={rated} onChange={setRated} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
@@ -239,7 +219,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, learning, rated, chess960: chess960Body(c960) });
+                    const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, broadcaster: bc, rated, chess960: chess960Body(c960) });
                     setCreated(r.game.id);
                   } catch (e) {
                     setErr(String(e));
@@ -261,9 +241,8 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const meta = useFetch<Meta>("/api/meta");
   const [name, setName] = useState(savedName);
   const [side, setSide] = useState<"w" | "b" | "random">("w");
-  const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high", personality: "magician" });
+  const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
-  const [learning, setLearning] = useState(true);
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [busy, setBusy] = useState(false);
@@ -281,7 +260,6 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
         white: me === "w" ? human : agent,
         black: me === "b" ? human : agent,
         broadcaster: bc,
-        learning,
         rated,
         chess960: chess960Body(c960),
       });
@@ -342,12 +320,11 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
               </div>
               <div className="seat">
                 <h3>🤖 Your opponent</h3>
-                <SeatPicker meta={meta} value={agent} compact onChange={setAgent} />
+                <SeatPicker meta={meta} value={agent} onChange={setAgent} />
               </div>
             </div>
             <Chess960Toggle value={c960} onChange={setC960} />
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
-            <LearningToggle value={learning} onChange={setLearning} />
             <RatedToggle value={rated} onChange={setRated} />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
@@ -369,15 +346,14 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   const meta = useFetch<Meta>("/api/meta");
   const [name, setName] = useState("Agent Invitational");
   const [seats, setSeats] = useState<SeatChoice[]>([
-    { model: "claude-opus-5-5", effort: "high", personality: "magician" },
-    { model: "gpt-6-astra", effort: "high", personality: "python" },
-    { model: "claude-sonnet-5-5", effort: "high", personality: "grinder" },
-    { model: "gpt-6.1-sol", effort: "high", personality: "streamer" },
+    { model: "claude-opus-5-5", effort: "high" },
+    { model: "gpt-6-astra", effort: "high" },
+    { model: "claude-sonnet-5-5", effort: "high" },
+    { model: "gpt-6.1-sol", effort: "high" },
   ]);
   const [double, setDouble] = useState(false);
   const [boards, setBoards] = useState(0);
   const [breakHours, setBreakHours] = useState(0);
-  const [learning, setLearning] = useState(true);
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [bc, setBc] = useState({ enabled: true, model: DEFAULT_BROADCASTER.model, effort: DEFAULT_BROADCASTER.effort });
@@ -386,6 +362,11 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   if (!meta) return null;
   const n = seats.length;
   const games = ((n * (n - 1)) / 2) * (double ? 2 : 1);
+  // A player is a model and effort, so the new seat takes a model not seated yet.
+  const addSeat = () => {
+    const m = meta.models.find((x) => !seats.some((s) => s.model === x.model)) ?? meta.models[0];
+    setSeats([...seats, { model: m.model, effort: m.defaultEffort }]);
+  };
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -407,12 +388,12 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                       ✕
                     </button>
                   </h3>
-                  <SeatPicker meta={meta} value={s} compact onChange={(v) => setSeats(seats.map((x, j) => (j === i ? v : x)))} />
+                  <SeatPicker meta={meta} value={s} onChange={(v) => setSeats(seats.map((x, j) => (j === i ? v : x)))} />
                 </div>
               ))}
             </div>
             <div className="row-actions" style={{ justifyContent: "space-between" }}>
-              <button className="btn" onClick={() => setSeats([...seats, { model: "claude-sonnet-5-5", effort: "high", personality: meta.personalities[seats.length % meta.personalities.length].id }])}>
+              <button className="btn" onClick={addSeat}>
                 + Add player
               </button>
               <span className={`toggle ${double ? "on" : ""}`} onClick={() => setDouble(!double)}>
@@ -431,7 +412,6 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
               <small>After all active boards finish. Set to 0 for no break.</small>
             </label>
             <BroadcasterPicker meta={meta} value={bc} onChange={setBc} />
-            <LearningToggle value={learning} onChange={setLearning} />
             <RatedToggle value={rated} onChange={setRated} tournament />
             {err && <p style={{ color: "var(--c-blunder)" }}>{err}</p>}
             <div className="row-actions">
@@ -445,7 +425,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
                 className="btn green big"
                 onClick={async () => {
                   try {
-                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, learning, rated, chess960: c960.on, boards: boards || undefined, breakHours });
+                    const t = await api<Tournament>("/api/tournaments", { name, players: seats, doubleRound: double, broadcaster: bc, rated, chess960: c960.on, boards: boards || undefined, breakHours });
                     setCreated(t.id);
                   } catch (e) {
                     setErr(String(e));

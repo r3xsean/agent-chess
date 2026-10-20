@@ -6,7 +6,6 @@ import { PlayerAvatar } from "./PlayerName";
 import { formatScore } from "../../../shared/evalmath";
 import { explainIllegal, lineBreakReason, triesOf } from "../../../shared/explain";
 import { START_FEN, variantOf } from "../../../shared/rules";
-import { Avatar } from "./PlayerBar";
 import { CLASS_META, ClassIcon } from "./ClassIcon";
 import { scrollIntoPanel } from "../scroll";
 

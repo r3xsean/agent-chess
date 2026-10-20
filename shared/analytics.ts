@@ -29,7 +29,7 @@ export interface AgentRow {
   model: string;
   label: string;
   provider: string;
-  /** Its best-rated player (model + effort + personality), from rated games. */
+  /** Its best-rated player (model + effort), from rated games. */
   rating: number | null;
   rd: number | null;
   bestPlayerId: string | null;
@@ -68,7 +68,6 @@ export interface RatingPoint {
 export interface RatingSeries {
   playerId: string;
   effort: string;
-  personality: string;
   games: number;
   current: number;
   rd: number;
@@ -124,15 +123,6 @@ export interface HeadToHead extends WDL {
   provider: string;
   myAccuracy: number | null;
   theirAccuracy: number | null;
-}
-
-export interface LearningGame {
-  gameId: string;
-  ts: number;
-  accuracy: number | null;
-  result: Outcome;
-  /** The lessons version it played with (0: none, or learning off for that game; null: older than the lessons history kept). */
-  version: number | null;
 }
 
 export interface ModelAnalytics {
@@ -199,14 +189,6 @@ export interface ModelAnalytics {
   h2h: HeadToHead[];
   setup: {
     efforts: { effort: string; games: number; score: number | null; accuracy: number | null; think: TimeStats }[];
-    players: { playerId: string; personality: string; effort: string; rating: number; rd: number; record: WDL }[];
-  };
-  learning: {
-    games: LearningGame[];
-    versions: { version: number; ts: number }[];
-    /** How many times its lessons have been written, in all (the history keeps only the latest). */
-    rewrites: number;
-    withLessons: { games: number; score: number | null; accuracy: number | null };
-    without: { games: number; score: number | null; accuracy: number | null };
+    players: { playerId: string; effort: string; rating: number; rd: number; record: WDL }[];
   };
 }

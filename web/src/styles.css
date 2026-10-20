@@ -885,11 +885,6 @@ cg-board square.check {
   font-weight: 700;
   color: #ff8a7a;
 }
-.thought .avatar {
-  width: 34px;
-  height: 34px;
-  font-size: 18px;
-}
 .thought-body {
   flex: 1;
   min-width: 0;
@@ -1321,14 +1316,6 @@ cg-board square.check {
   margin-top: 20px;
   padding: 18px 20px;
 }
-.persona-detail {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 14px;
-  margin-top: 10px;
-  font-size: 14px;
-  line-height: 1.5;
-}
 .card {
   background: var(--panel);
   border-radius: 8px;
@@ -1476,39 +1463,6 @@ input[type="number"] {
   font: inherit;
   font-size: 14px;
 }
-.persona-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-}
-.persona {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: #2f2d2a;
-  border: 2px solid transparent;
-  text-align: left;
-  font-size: 12px;
-}
-.persona .avatar {
-  width: 30px;
-  height: 30px;
-  font-size: 16px;
-}
-.persona b {
-  display: block;
-  font-size: 13px;
-  color: white;
-}
-.persona span {
-  color: var(--muted);
-}
-.persona.on {
-  border-color: var(--green);
-  background: #2c3424;
-}
 .row-actions {
   display: flex;
   gap: 10px;
@@ -1526,37 +1480,8 @@ input[type="number"] {
   word-break: break-all;
   color: #d8d6d3;
 }
-.journal-entry {
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
-  font-size: 14px;
-  line-height: 1.45;
-}
-.journal-entry .meta {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 3px;
-}
 
-/* risk appetite badge */
-.risk-badge.risk-calm,
-.risk-badge.risk-bold,
-.risk-badge.risk-wild {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 3px;
-  vertical-align: middle;
-  line-height: 1.5;
-}
-.risk-badge.risk-calm { background: #3d5a46; color: #b9e0c3; }
-.risk-badge.risk-bold { background: #6b5320; color: #f5d27a; }
-.risk-badge.risk-wild { background: #7a2b2b; color: #ffb3a8; }
-
-/* model tags: the model is half of a player's identity */
+/* model tags */
 .model-tag {
   display: inline-flex;
   align-items: center;
@@ -1587,7 +1512,7 @@ input[type="number"] {
   padding: 2px 12px;
 }
 
-/* players: the model leads, the personality is the style it plays in */
+/* players */
 .player-avatar {
   position: relative;
   flex-shrink: 0;
@@ -1598,16 +1523,6 @@ input[type="number"] {
   font-weight: 900;
   letter-spacing: -0.3px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-.player-avatar .persona-badge {
-  position: absolute;
-  right: -14%;
-  bottom: -14%;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-style: normal;
-  box-shadow: 0 0 0 2px var(--bg);
 }
 .player-fullname {
   display: inline-flex;
@@ -1626,15 +1541,6 @@ input[type="number"] {
   padding: 0 5px;
   border-radius: 4px;
   background: #3d3b38;
-}
-.player-fullname .as {
-  color: var(--muted);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.player-fullname .as span {
-  font-weight: 700;
 }
 
 /* ---- playing an agent yourself ---- */
@@ -2124,10 +2030,6 @@ input[type="number"] {
   .agent-card {
     padding: 14px 12px;
   }
-  .persona-detail {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
   .seat {
     padding: 10px;
   }
@@ -2368,9 +2270,6 @@ input[type="number"] {
   .nav-main .nav-item {
     width: 54px;
   }
-  .persona-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @keyframes sheet-up {
@@ -2415,10 +2314,6 @@ input[type="number"] {
 .agents .table.tight td { padding: 7px 10px; }
 .agents .table.tight th { padding: 8px 10px; }
 .agents .table tr.faded td { opacity: 0.5; }
-.agents .click-cell { cursor: pointer; }
-.agents .click-cell:hover { background: #2f2d2a; }
-.agents .table.grid td.num { text-align: center; }
-.agents .table.grid th.num { text-align: center; }
 
 .model-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .model-head h1 { margin: 0 0 2px; }
@@ -2485,20 +2380,11 @@ input[type="number"] {
 .viz-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-2); margin-top: 8px; }
 .viz-legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 
-.persona-list { display: flex; flex-direction: column; gap: 6px; }
-.persona-details { background: var(--panel-2); border-radius: 8px; padding: 8px 12px; }
-.persona-details.unplayed { opacity: 0.7; }
-.persona-details summary { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; list-style: none; }
-.persona-details summary::-webkit-details-marker { display: none; }
-.persona-details summary .muted { font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.persona-details .section-title { margin-bottom: 4px; }
-
 @media (max-width: 860px) {
   .panels { grid-template-columns: minmax(0, 1fr); }
   .split, .split.even { grid-template-columns: minmax(0, 1fr); }
   .agents-top { flex-direction: column; }
   .model-head { flex-wrap: wrap; }
-  .persona-detail { grid-template-columns: 1fr; }
 }
 .stat-row + .bars { margin-top: 18px; }
 .table-scroll { overflow-x: auto; }

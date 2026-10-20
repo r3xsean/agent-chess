@@ -12,7 +12,7 @@ const { roundRobin } = await import("../server/schedule");
 let ok = true;
 const fail = (msg: string) => ((ok = false), console.log("FAIL", msg));
 const models = ["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna"];
-const refs = models.map((m) => ({ id: `${m}@high:none`, model: m }) as any);
+const refs = models.map((m) => ({ id: `${m}@high`, model: m }) as any);
 let n = 0;
 const fakeGame = (white: any, black: any) => {
   const g = { id: `fake${n++}`, phase: "playing", white, black } as any;

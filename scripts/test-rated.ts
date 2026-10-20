@@ -9,8 +9,8 @@ const { rebuildRatings } = await import("../server/game");
 
 let ok = true;
 const fail = (msg: string) => ((ok = false), console.log("FAIL", msg));
-const a = { id: "opus@high:none", model: "opus", provider: "claudeAgent", modelLabel: "Opus", effort: "high", personality: "none" } as any;
-const b = { id: "sol@high:none", model: "sol", provider: "codex", modelLabel: "Sol", effort: "high", personality: "none" } as any;
+const a = { id: "opus@high", model: "opus", provider: "claudeAgent", modelLabel: "Opus", effort: "high" } as any;
+const b = { id: "sol@high", model: "sol", provider: "codex", modelLabel: "Sol", effort: "high" } as any;
 let n = 0;
 const game = (result: string, rated?: boolean) => {
   const g = { id: `g${n}`, createdAt: n, endedAt: ++n, white: a, black: b, result, moves: [], options: rated === undefined ? undefined : { rated } } as any;

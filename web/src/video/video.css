@@ -823,26 +823,6 @@
 .v-hero-tags .v-side {
   font-size: 20px;
 }
-.v-risk {
-  font-size: 20px;
-  font-weight: 800;
-  padding: 4px 10px;
-  border-radius: 6px;
-}
-.v-risk.calm {
-  background: #2f4a5c;
-}
-.v-risk.bold {
-  background: #7a5a1c;
-}
-.v-risk.wild {
-  background: #8a2a1f;
-}
-.v-hero-tagline {
-  font-size: 24px;
-  color: #e8e6e3;
-  font-style: italic;
-}
 
 /* ---------- interviews ---------- */
 
@@ -997,7 +977,6 @@
 .v-frame.portrait .v-logo.huge {
   font-size: 90px;
 }
-
 
 /* ---------- the mover's thinking ---------- */
 
@@ -1341,12 +1320,6 @@
 .v-frame .player-fullname {
   font-size: 24px;
   gap: 10px;
-}
-.v-frame .player-fullname .as {
-  font-size: 20px;
-}
-.v-frame .player-avatar .persona-badge {
-  box-shadow: 0 0 0 3px #262522;
 }
 .v-clock {
   font-family: "Roboto Mono", Consolas, monospace;

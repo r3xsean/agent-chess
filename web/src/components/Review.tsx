@@ -3,7 +3,6 @@ import { winPercentWhite } from "../../../shared/evalmath";
 import { engineAfter } from "../../../shared/belief";
 import { selfEvalColors, sideName } from "../../../shared/naming";
 import { PlayerAvatar } from "./PlayerName";
-import { Avatar } from "./PlayerBar";
 import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
 
 /** Engine score for a ply, or undefined while pending / if the engine failed (never a made-up 0.00). */
@@ -110,7 +109,7 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
         {(["w", "b"] as Color[]).map((c) => (
           <div className="hdr" key={c}>
             <PlayerAvatar player={c === "w" ? game.white : game.black} size={36} />
-            {sideName(game, c).replace("The ", "")}
+            {sideName(game, c)}
           </div>
         ))}
         <div className="lbl">Accuracy</div>

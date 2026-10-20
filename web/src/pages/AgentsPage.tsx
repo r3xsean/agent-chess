@@ -1,12 +1,8 @@
 import { useState, type ReactNode } from "react";
-import type { Personality } from "../../../shared/types";
 import type { AgentRow, AnalyticsScope, ModelAnalytics, Outcome, RatingSeries, TimeStats } from "../../../shared/analytics";
-import { useFetch, useMeta } from "../api";
-import { Avatar } from "../components/PlayerBar";
-import { RiskBadge } from "../components/RiskBadge";
-import { RISK_LABEL, personalityById, riskRule } from "../../../shared/personalities";
+import { useFetch } from "../api";
 import { makerOf } from "../../../shared/models";
-import { Bars, CalibrationChart, LearningChart, ModelScatter, RatingChart, VerdictMix, fmtMs, fmtNum } from "../components/Charts";
+import { Bars, CalibrationChart, ModelScatter, RatingChart, VerdictMix, fmtMs, fmtNum } from "../components/Charts";
 
 /*
  * The Agents tab: every model side by side, and each model's analytics in five tabs. Stats resting on only
@@ -249,7 +245,7 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
 
 /* ------------------------------ one model ------------------------------ */
 
-const seriesName = (s: RatingSeries) => `${personalityById(s.personality).name} · ${s.effort}`;
+const seriesName = (s: RatingSeries) => `${cap(s.effort)} effort`;
 
 function OverviewTab({ a }: { a: ModelAnalytics }) {
   const q = a.quality;
@@ -621,7 +617,7 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
         </div>
       </Panel>
 
-      <Panel title="Head to head" hint="Against every other model, whatever personality or effort either played in." wide>
+      <Panel title="Head to head" hint="Against every other model, whatever effort either played at." wide>
         {a.h2h.length ? (
           <div className="table-scroll">
             <table className="table tight">
@@ -670,171 +666,67 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
   );
 }
 
-function SetupTab({ a, personalities }: { a: ModelAnalytics; personalities: Personality[] }) {
+function SetupTab({ a }: { a: ModelAnalytics }) {
   const s = a.setup;
-  const efforts = [...new Set(s.players.map((p) => p.effort))];
-  const order = personalities.map((p) => p.id);
-  const personas = [...new Set(s.players.map((p) => p.personality))].sort((x, y) => order.indexOf(x) - order.indexOf(y));
-  const l = a.learning;
   return (
     <div className="panels">
-      <Panel
-        title="Effort and personality"
-        hint="Effort is how hard the model is told to think. Each personality × effort is its own player, with its own rating (click one for its games and journal)."
-        wide
-      >
-        <div className="split even">
-          <div>
-            <div className="mini-title">By effort</div>
-            {s.efforts.length ? (
-              <div className="table-scroll">
-                <table className="table tight">
-                  <thead>
-                    <tr>
-                      <th>Effort</th>
-                      <th className="num">Games</th>
-                      <th className="num">Score</th>
-                      <th className="num">Accuracy</th>
-                      <th className="num">Avg think</th>
+      <Panel title="Effort" hint="How hard the model is told to think. Each effort is its own player, with its own rating (click one for its games)." wide>
+        {s.efforts.length ? (
+          <div className="table-scroll">
+            <table className="table tight">
+              <thead>
+                <tr>
+                  <th>Effort</th>
+                  <th className="num">Games</th>
+                  <th className="num">Score</th>
+                  <th className="num">Accuracy</th>
+                  <th className="num">Avg think</th>
+                  <th className="num">Rating</th>
+                  <th className="num">Rated W/D/L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.efforts.map((e) => {
+                  const x = s.players.find((q) => q.effort === e.effort);
+                  return (
+                    <tr
+                      key={e.effort}
+                      className={`${x ? "click" : ""} ${e.games < FEW_GAMES ? "faded" : ""}`}
+                      onClick={() => x && (location.hash = `#/player/${encodeURIComponent(x.playerId)}`)}
+                    >
+                      <td>{cap(e.effort)}</td>
+                      <td className="num">{e.games}</td>
+                      <td className="num">{fmtNum(e.score, 0, "%")}</td>
+                      <td className="num">{fmtNum(e.accuracy, 1, "%")}</td>
+                      <td className="num">{fmtMs(e.think.avgMs)}</td>
+                      <td className="num">
+                        {x ? (
+                          <b>
+                            {x.rating}
+                            {x.rd > PROVISIONAL_RD && "?"}
+                          </b>
+                        ) : (
+                          <span className="muted">·</span>
+                        )}
+                      </td>
+                      <td className="num">{x ? `${x.record.wins}/${x.record.draws}/${x.record.losses}` : <span className="muted">·</span>}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {s.efforts.map((e) => (
-                      <tr key={e.effort} className={e.games < FEW_GAMES ? "faded" : ""}>
-                        <td>{cap(e.effort)}</td>
-                        <td className="num">{e.games}</td>
-                        <td className="num">{fmtNum(e.score, 0, "%")}</td>
-                        <td className="num">{fmtNum(e.accuracy, 1, "%")}</td>
-                        <td className="num">{fmtMs(e.think.avgMs)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="muted small">No games yet.</div>
-            )}
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          <div>
-            <div className="mini-title">Players: rating and rated W/D/L</div>
-            <div className="table-scroll">
-              <table className="table tight grid">
-                <thead>
-                  <tr>
-                    <th>Personality</th>
-                    {efforts.map((e) => (
-                      <th key={e} className="num">
-                        {cap(e)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {personas.map((pid) => {
-                    const p = personalityById(pid);
-                    return (
-                      <tr key={pid}>
-                        <td>
-                          <div className="pcell">
-                            <Avatar personality={pid} size={22} />
-                            {p.name}
-                          </div>
-                        </td>
-                        {efforts.map((e) => {
-                          const x = s.players.find((q) => q.personality === pid && q.effort === e);
-                          return (
-                            <td key={e} className={`num ${x ? "click-cell" : ""}`} onClick={() => x && (location.hash = `#/player/${encodeURIComponent(x.playerId)}`)}>
-                              {x ? (
-                                <>
-                                  <b>
-                                    {x.rating}
-                                    {x.rd > PROVISIONAL_RD && "?"}
-                                  </b>
-                                  <div className="muted small">
-                                    {x.record.wins}/{x.record.draws}/{x.record.losses}
-                                  </div>
-                                </>
-                              ) : (
-                                <span className="muted">·</span>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </Panel>
-
-      <Panel
-        title="Is it learning?"
-        hint="Each game's accuracy in order. Its shared lessons are rewritten after nearly every game (hover a game for the version it played with); they only reach games played with learning on."
-        wide
-      >
-        <LearningChart games={l.games} />
-        <div className="stat-row" style={{ marginTop: 12 }}>
-          <Stat
-            label="With lessons"
-            value={fmtNum(l.withLessons.accuracy, 1, "%")}
-            sub={`${fmtNum(l.withLessons.score, 0, "%")} score · ${plural(l.withLessons.games, "game")}`}
-            few={l.withLessons.games < FEW_GAMES}
-          />
-          <Stat
-            label="Without"
-            value={fmtNum(l.without.accuracy, 1, "%")}
-            sub={`${fmtNum(l.without.score, 0, "%")} score · ${plural(l.without.games, "game")}`}
-            few={l.without.games < FEW_GAMES}
-          />
-          <Stat label="Lessons rewrites" value={l.rewrites} sub={<a href="#/memory">read the latest</a>} />
-        </div>
-      </Panel>
-
-      <Panel title="Personalities" hint="Each plays in a style, a voice and a risk appetite. No personality is the control group: the model as itself." wide>
-        <div className="persona-list">
-          {personalities.map((p) => (
-            <PersonaDetails key={p.id} p={p} played={personas.includes(p.id)} />
-          ))}
-        </div>
+        ) : (
+          <div className="muted small">No games yet.</div>
+        )}
       </Panel>
     </div>
-  );
-}
-
-function PersonaDetails({ p, played }: { p: Personality; played: boolean }) {
-  return (
-    <details className={`persona-details ${played ? "" : "unplayed"}`}>
-      <summary>
-        <Avatar personality={p.id} size={28} />
-        <b>{p.name}</b> {!p.plain && <RiskBadge risk={p.risk} />}
-        <span className="muted">{p.tagline}</span>
-        {!played && <span className="few">not played</span>}
-      </summary>
-      <div className="persona-detail">
-        <div>
-          <div className="section-title">♟ Style</div>
-          {p.style || "—"}
-        </div>
-        <div>
-          <div className="section-title">🗣 Voice</div>
-          {p.voice || "—"}
-        </div>
-        <div>
-          <div className="section-title">🎲 Risk — {p.plain ? "None" : RISK_LABEL[p.risk].label}</div>
-          {riskRule(p)}
-        </div>
-      </div>
-    </details>
   );
 }
 
 function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: AnalyticsScope }) {
   const a = useFetch<ModelAnalytics>(`/api/analytics/${encodeURIComponent(model)}?scope=${scope}`, [model, scope]);
   const rows = useFetch<AgentRow[]>(`/api/analytics?scope=${scope}`, [scope]);
-  const meta = useMeta();
   // Another model's numbers are never shown under this one's name; a scope switch dims the old ones until the new arrive.
   if (!a || a.row.model !== model) return <div className="empty">Loading…</div>;
   const r = a.row;
@@ -846,7 +738,7 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1>{r.label}</h1>
           <div className="muted">
-            {makerOf(r.provider).name} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated · <a href="#/memory">lessons &amp; journals</a>
+            {makerOf(r.provider).name} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated
           </div>
         </div>
         {rows && rows.length > 1 && (
@@ -902,7 +794,7 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
       {tab === "thinking" && <ThinkingTab a={a} />}
       {tab === "mind" && <MindTab a={a} />}
       {tab === "results" && <ResultsTab a={a} />}
-      {tab === "setup" && <SetupTab a={a} personalities={meta?.personalities ?? []} />}
+      {tab === "setup" && <SetupTab a={a} />}
     </div>
   );
 }

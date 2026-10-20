@@ -27,13 +27,12 @@ export type Classification =
   | "blunder";
 
 export interface PlayerRef {
-  /** Stable identity: model + effort + personality. Journals and ratings key off this. */
+  /** Stable identity: "model@effort" (a human: "human:name"). Ratings key off this. */
   id: string;
   provider: string;
   model: string;
   modelLabel: string;
   effort: string;
-  personality: string;
 }
 
 /** Engine score, always from White's point of view. */
@@ -177,7 +176,6 @@ export interface Game {
     pre: Partial<Record<Color, Interview>>;
     post: Partial<Record<Color, Interview>>;
   };
-  journalDone: Partial<Record<Color, boolean>>;
   broadcast: BroadcastLine[];
   broadcasterDone: boolean;
   /** Feed event ids already handed to the broadcaster. */
@@ -207,10 +205,7 @@ export interface Game {
   /** All post-game duties completed; used for tournament breaks. */
   finishedAt?: number;
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
-  options?: { pieceList?: boolean; learning?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
-  lessonsDone?: Partial<Record<Color, boolean>>;
-  /** Playbook text and version frozen at creation (legacy active games snapshot on first load). */
-  lessonsAtStart?: Record<Color, Pick<Lessons, "version" | "text">>;
+  options?: { pieceList?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<SeatRole, number>>;
   /** Seats the server launched itself, each in its own T3 thread (the server watches these; an orchestrator watches the rest). */
@@ -229,8 +224,6 @@ export interface Game {
   summonRequestedAt?: number;
   /** Tournament auto-run: the next pairing has been requested after this game finished. */
   nextTriggered?: boolean;
-  /** Lessons version each seat was shown in its post-game brief (optimistic concurrency for shared lessons). */
-  lessonsSeen?: Partial<Record<Color, number>>;
   /** Version of the move-classification rules the stored verdicts came from. */
   classifierVersion?: number;
   /** The broadcaster's picks for the video replay, made after the game. */
@@ -523,15 +516,6 @@ export interface PlayerStats {
   losses: number;
 }
 
-export interface JournalEntry {
-  gameId: string;
-  ts: number;
-  opponent: string;
-  color: Color;
-  result: string;
-  text: string;
-}
-
 export interface Tournament {
   id: string;
   name: string;
@@ -539,7 +523,6 @@ export interface Tournament {
   players: PlayerRef[];
   doubleRound: boolean;
   broadcaster: Game["broadcaster"];
-  learning?: boolean;
   /** false: none of its games are rated. */
   rated?: boolean;
   /** Started from the website: each finished game automatically summons the next pairing. */
@@ -556,30 +539,6 @@ export interface Tournament {
   breakSkippedAt?: number;
   /** Last time the server asked T3 to start more pairings (so it doesn't ask twice in a row). */
   lastKickAt?: number;
-}
-
-export interface Lessons {
-  model: string;
-  version: number;
-  text: string;
-  updatedAt: number | null;
-  history: { version: number; ts: number; gameId: string | null; text: string }[];
-}
-
-/** How much objective soundness a personality will trade for practical chances. */
-export type Risk = "calm" | "bold" | "wild";
-
-export interface Personality {
-  id: string;
-  name: string;
-  emoji: string;
-  color: string;
-  tagline: string;
-  risk: Risk;
-  style: string;
-  voice: string;
-  /** "No personality": the model plays as itself — no style, voice or risk instructions in its prompt. */
-  plain?: boolean;
 }
 
 export interface ModelOption {

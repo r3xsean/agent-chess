@@ -35,12 +35,13 @@ const check = (label, cond, detail = "") => {
   if (!cond) ok = false;
   console.log(`${cond ? "PASS" : "FAIL"} ${label}${detail ? ` -> ${detail}` : ""}`);
 };
-const keyOf = (prompt) => /--key (\S+)/.exec(prompt)[1];
+// Keys are letters, digits and dashes; a prompt may end the sentence right after one ("--key dt-….").
+const keyOf = (prompt) => /--key ([\w-]+)/.exec(prompt)[1];
 
 // A broadcast game: its brief has the three seats, how to look after them and its director, and nothing else.
 const { game, launch } = await req("POST", "/api/games", {
-  white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" },
-  black: { model: "gpt-6-luna", effort: "low", personality: "trickster" },
+  white: { model: "claude-haiku-5-5", effort: "low" },
+  black: { model: "gpt-6-luna", effort: "low" },
   broadcaster: { enabled: true },
 });
 check("launch tasks carry their seat", launch.tasks.map((t) => t.seat).join() === "w,b,x", launch.tasks.map((t) => t.seat).join());
@@ -57,8 +58,8 @@ check("seats a brief handed out aren't handed out again", b3.includes("nothing f
 
 // Two runs asking at once never get the same seat; a seat already recorded as launched stays out.
 const twin = await req("POST", "/api/games", {
-  white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" },
-  black: { model: "gpt-6-luna", effort: "low", personality: "trickster" },
+  white: { model: "claude-haiku-5-5", effort: "low" },
+  black: { model: "gpt-6-luna", effort: "low" },
   broadcaster: { enabled: true },
 });
 await req("POST", `/api/games/${twin.game.id}/launched`, { seat: "w" });
@@ -66,7 +67,7 @@ const [c1, c2] = await Promise.all([brief({ action: "start-game", gameId: twin.g
 const counts = [prompts(c1.text ?? ""), prompts(c2.text ?? "")];
 check("concurrent briefs split the seats, the launched one left out", counts.sort().join() === "0,2" && ![c1.text, c2.text].some((t) => t.includes(`${twin.game.id}-w"`)), counts.join());
 await req("POST", `/api/games/${twin.game.id}/abort`, {});
-const chatOnly = await req("POST", "/api/games", { white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" }, black: { model: "gpt-6-luna", effort: "low", personality: "monk" }, broadcaster: { enabled: false } });
+const chatOnly = await req("POST", "/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } });
 const cb = (await brief({ action: "start-game", gameId: chatOnly.game.id, source: "chat" })).text ?? "";
 check("a chat run leaves the user's thread alone", cb.includes("Leave your own thread as it is") && !cb.includes("settle your own thread") && !cb.includes("video director"));
 await req("POST", `/api/games/${chatOnly.game.id}/abort`, {});
@@ -81,8 +82,8 @@ await req("POST", `/api/games/${game.id}/abort`, {});
 
 // A game without a broadcaster, played to the end: the direct-video brief launches a director with its own key.
 const g2 = await req("POST", "/api/games", {
-  white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" },
-  black: { model: "gpt-6-luna", effort: "low", personality: "monk" },
+  white: { model: "claude-haiku-5-5", effort: "low" },
+  black: { model: "gpt-6-luna", effort: "low" },
   broadcaster: { enabled: false },
 });
 const k2 = Object.fromEntries(g2.launch.tasks.map((t) => [t.seat, ["--key", keyOf(t.prompt)]]));
@@ -92,7 +93,7 @@ await sleep(2000);
 await cli(["wait", ...k2.w]);
 await cli(["move", "-", ...k2.w, "--no-wait"], JSON.stringify({ move: "e4", commentary: "The centre.", eval: "+0.3" }));
 await cli(["resign", ...k2.b, "--no-wait"]);
-for (const s of ["w", "b"]) await cli(["postgame", "-", ...k2[s]], JSON.stringify({ interview: "GG.", journal: "Short game.", lessons: "- When ahead → trade down." }));
+for (const s of ["w", "b"]) await cli(["postgame", "-", ...k2[s]], JSON.stringify({ interview: "GG." }));
 let phase = "";
 for (let i = 0; i < 30 && phase !== "finished"; i++) phase = ((await sleep(1000)), (await req("GET", `/api/games/${g2.game.id}`)).phase);
 check("second game finished", phase === "finished", phase);
@@ -101,10 +102,11 @@ const d1 = (await brief({ action: "direct-video", gameId: g2.game.id })).text ??
 check("direct-video brief has one task, and only the director's job", prompts(d1) === 1 && d1.includes('{"seat":"d"}') && !/PUBLISH_RESULT|## 2\. Look after them|tournament-next/.test(d1), d1.match(/PUBLISH_RESULT|## 2\. Look after them|tournament-next/)?.[0] ?? `${prompts(d1)} tasks`);
 const dPrompt = d1.split("<prompt>\n")[1]?.split("\n</prompt>")[0] ?? "";
 const dKey = keyOf(dPrompt);
-check("the director has its own key", /-d-/.test(dKey) && !Object.values(k2).some((k) => k[1] === dKey), dKey);
-check("director help lists only its commands", ((h) => h.includes("brief") && h.includes("confirm") && !h.includes("bc-wait") && !h.includes("move -"))(await cli(["help", "--key", dKey])));
+// The director works as a session (like the user's conversation from the video tab), so its key is a session key.
+check("the director has its own key", /^dt-[0-9a-f]+$/.test(dKey) && !Object.values(k2).some((k) => k[1] === dKey), dKey);
+check("director help lists only its commands", ((h) => h.startsWith("🎬 Video director") && h.includes("`brief`") && h.includes("`confirm`") && h.includes("request-narration") && !h.includes("bc-wait") && !h.includes("move -"))(await cli(["help", "--key", dKey])));
 check("director's brief is the VIDEO DIRECTOR brief", (await cli(["brief", "--key", dKey])).startsWith("VIDEO DIRECTOR"));
-check("director can't commentate", (await cli(["say", "--text", "hi", "--key", dKey])).includes("Unknown command: say"));
+check("director can't commentate", (await cli(["say", "--text", "hi", "--key", dKey])).includes("Command say isn't available here"));
 const [d2, d3] = await Promise.all([brief({ action: "direct-video", gameId: g2.game.id }), req("GET", `/api/games/${g2.game.id}/director-launch`)]);
 check("a director handed out isn't handed out again", prompts(d2.text ?? "") === 0 && d2.text.includes("Another run launched") && d3.tasks?.length === 0, (d2.text ?? "").slice(0, 160));
 const agents = await req("GET", `/api/games/${g2.game.id}/agents`);
@@ -116,8 +118,8 @@ check("publish with nothing requested: nothing to do", p1.includes("Nothing is w
 // A tournament that isn't auto-run: the brief starts its game and says how to carry on.
 const t = await req("POST", "/api/tournaments", {
   players: [
-    { model: "claude-haiku-5-5", effort: "low", personality: "monk" },
-    { model: "gpt-6-luna", effort: "low", personality: "monk" },
+    { model: "claude-haiku-5-5", effort: "low" },
+    { model: "gpt-6-luna", effort: "low" },
   ],
   broadcaster: { enabled: false },
   rated: false,

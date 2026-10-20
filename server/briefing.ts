@@ -1,22 +1,17 @@
 import type { Square } from "chess.js";
 import { castlingNote, looseChess, newRules, variantOf, type Variant } from "../shared/rules";
 import type { Color, Game, MoveRecord } from "../shared/types";
-import { personalityById } from "../shared/personalities";
 import { fullName, isHuman, sideName } from "../shared/naming";
 import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { explainIllegal, lineBreakReason } from "../shared/explain";
 import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
-import { games, readJournal, readLessons } from "./store";
-import { MAX_LESSONS, MAX_LESSON_LINES } from "./game";
-import { modelLabel } from "../shared/models";
+import { games } from "./store";
 import { rivalry, seriesLine } from "./rivalry";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
 const SYMBOL: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
-/** How a player answers interviews: in character, or (with no personality) as itself. */
-const voiceOf = (g: Game, c: Color) => (personalityById(playerOf(g, c).personality).plain ? "in your own voice" : "in character");
 
 export function describePlayer(g: Game, c: Color) {
   const p = playerOf(g, c);
@@ -149,9 +144,6 @@ export function turnBrief(g: Game, color: Color): string {
   }
   out.push(g.pendingIllegal[color].length ? `Rejected attempts this turn (not played): ${g.pendingIllegal[color].join(", ")}` : "No rejected attempts this turn.");
   out.push(capturedSummary(g));
-  const lessons = g.options?.learning ? g.lessonsAtStart?.[color].text ?? "" : "";
-  const plain = personalityById(playerOf(g, color).personality).plain;
-  if (lessons) out.push("", "=== YOUR GENERAL LESSONS ===", plain ? "From your past games:" : "From your past games (execution, not style or risk):", lessons);
   out.push(
     "",
     toMove === color
@@ -176,12 +168,12 @@ function headToHead(g: Game, color: Color) {
     else if ((x.result === "1-0") === (myColor === "w")) w++;
     else l++;
   }
-  // The same two models may have met in other personalities or efforts: that's the series the
-  // interviewer asks about, so say both, and which is which.
+  // The same two models may have met at other efforts: that's the series the interviewer asks about,
+  // so say both, and which is which.
   const r = rivalry(g);
   const series = r ? { w: r.before[color], d: r.before.draws, l: r.before[other(color)] } : { w: 0, d: 0, l: 0 };
-  const exact = w + d + l ? `Your record against this exact opponent (this personality and effort): ${w} wins, ${d} draws, ${l} losses.` : "";
-  const model = series.w + series.d + series.l ? `Your record against ${sideName(g, other(color))} in any personality or effort: ${series.w} wins, ${series.d} draws, ${series.l} losses.` : "";
+  const exact = w + d + l ? `Your record against this exact opponent (this effort): ${w} wins, ${d} draws, ${l} losses.` : "";
+  const model = series.w + series.d + series.l ? `Your record against ${sideName(g, other(color))} at any effort: ${series.w} wins, ${series.d} draws, ${series.l} losses.` : "";
   return [exact, model].filter(Boolean).join(" ") || "You have never played this opponent before.";
 }
 
@@ -211,29 +203,17 @@ function pregameQuestion(g: Game, color: Color): string {
 }
 
 export function pregameBrief(g: Game, color: Color): string {
-  const me = playerOf(g, color);
-  const opp = playerOf(g, other(color)).id;
-  const all = readJournal(me.id);
-  // Last 3 entries overall, plus the last 2 against this opponent (so rivalry notes don't scroll away).
-  const picked = new Set([...all.slice(-3), ...all.filter((e) => e.opponent === opp).slice(-2)]);
-  const journal = all.filter((e) => picked.has(e));
   const out = [
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
-    isHuman(playerOf(g, other(color)))
-      ? "Your opponent is a human, playing their own moves on the website."
-      : `Opponent's style: ${personalityById(playerOf(g, other(color)).personality).tagline}`,
+    ...(isHuman(playerOf(g, other(color))) ? ["Your opponent is a human, playing their own moves on the website."] : []),
     headToHead(g, color),
     ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
     "",
-    journal.length ? "Your journal — recent games, plus your notes on this opponent (oldest first):" : "Your journal is empty — this is your first game.",
-    ...journal.map((e) => `- [${new Date(e.ts).toISOString().slice(0, 10)} vs ${e.opponent}, result ${e.result}, you were ${colorName(e.color)}] ${e.text}`),
-    "",
-    ...lessonsBlock(g, color),
     `INTERVIEWER: "${pregameQuestion(g, color)}"`,
-    `Answer ${voiceOf(g, color)}, under 800 characters, with: interview -  (text on standard input)`,
+    "Answer in your own voice, under 800 characters, with: interview -  (text on standard input)",
   ];
   return out.join("\n");
 }
@@ -248,15 +228,6 @@ export function chess960Intro(g: Game): string[] {
     castlingNote(fen),
     'To castle, send "O-O" or "O-O-O".',
   ];
-}
-
-function lessonsBlock(g: Game, color: Color): string[] {
-  if (!g.options?.learning) return [];
-  const model = playerOf(g, color).model;
-  const l = g.lessonsAtStart?.[color];
-  return l?.text
-    ? [`Your LESSONS — your own playbook, written by you after past games (a snapshot of ${modelLabel(model)}'s lessons for this game):`, l.text, ""]
-    : ["You have no lessons yet. After this game you'll study your worst moves and write your first ones.", ""];
 }
 
 /** Engine line as SAN, starting from a position. */
@@ -274,38 +245,8 @@ export function pvSan(fen: string, pv: string[] | undefined, plies = 6, variant:
   return out.join(" ");
 }
 
-/** The player's worst moves, explained: position, their own thinking at the time, the engine's best line and refutation. */
-function worstMoves(g: Game, color: Color, limit = 5): string[] {
-  const mine = g.moves
-    .filter((m) => m.color === color && m.analysis && !m.analysis.unavailable)
-    .filter((m) => ["blunder", "mistake", "miss", "inaccuracy"].includes(m.analysis!.classification))
-    .sort((a, b) => b.analysis!.winBefore - b.analysis!.winAfter - (a.analysis!.winBefore - a.analysis!.winAfter))
-    .slice(0, limit)
-    .sort((a, b) => a.ply - b.ply);
-  if (!mine.length) return ["No mistakes worth reviewing — clean game."];
-  const out: string[] = [];
-  for (const m of mine) {
-    const a = m.analysis!;
-    const no = `${Math.ceil(m.ply / 2)}${m.color === "w" ? "." : "..."}`;
-    const before = g.analysis[m.fenBefore];
-    const after = g.analysis[m.fenAfter];
-    out.push(
-      `--- ${no} ${m.san} — ${a.classification.toUpperCase()} (your winning chances ${Math.round(a.winBefore)}% → ${Math.round(a.winAfter)}%)`,
-      asciiBoard(m.fenBefore, "w"),
-      `FEN before your move: ${m.fenBefore}`,
-      `What you thought: "${m.commentary.slice(0, 350)}${m.commentary.length > 350 ? "…" : ""}" (your eval ${m.selfEvalRaw}, engine after your move ${formatScore(a.evalAfter)})`,
-      `Engine's best was ${a.bestSan ?? "?"}: ${pvSan(m.fenBefore, before?.pv, 6, variantOf(g))}`,
-      `What punishes ${m.san}: ${pvSan(m.fenAfter, after?.pv, 6, variantOf(g)) || "(no line available)"}`,
-      "",
-    );
-  }
-  return out;
-}
-
 export function postgameBrief(g: Game, color: Color): string {
   const needs = postgameNeeds(g, color);
-  // Once part of it is in, the player already has the review: just say what's left.
-  if (g.interviews.post[color] || g.journalDone[color] || g.lessonsDone?.[color]) return ["=== GAME OVER — still to do ===", ...needs.lines, "", postgameSubmit(needs.keys)].join("\n");
   const r = g.review?.[color];
   const res = g.result === "1/2-1/2" ? "Draw" : (g.result === "1-0") === (color === "w") ? "You WON" : "You LOST";
   const mine = g.moves.filter((m) => m.color === color && m.analysis);
@@ -326,12 +267,6 @@ export function postgameBrief(g: Game, color: Color): string {
       return `- ${no} ${m.san}: ${a.classification.toUpperCase()}${a.bestSan && a.bestSan !== m.san ? ` (engine preferred ${a.bestSan})` : ""}, eval after ${formatScore(a.evalAfter)}`;
     }),
   ];
-  if (personalityById(playerOf(g, color).personality).risk === "wild")
-    out.push(
-      "",
-      "Note: you play for practical chances, so the engine will mark some deliberate risks as inaccuracies or mistakes. Judge a risk by whether it was a real practical chance, not by the engine's number — but a risk that simply lost material for nothing is still a mistake.",
-    );
-  if (g.options?.learning) out.push("", "Your worst moves, in detail (White at the bottom in every diagram):", ...worstMoves(g, color));
   if (needs.lines.length) out.push("", "Still to do:", ...needs.lines, "", postgameSubmit(needs.keys));
   return out.join("\n");
 }
@@ -344,39 +279,13 @@ function postgameNeeds(g: Game, color: Color) {
     keys.push("interview");
     lines.push(
       `1) "interview": INTERVIEWER: "Walk us through that game — what was the key moment, and how do you feel about it?${seriesNow(g, color)}"`,
-      `   Answer ${voiceOf(g, color)}, under 800 characters.`,
-    );
-  }
-  if (!g.journalDone[color]) {
-    keys.push("journal");
-    lines.push(
-      g.options?.learning
-        ? '2) "journal": a SHORT private journal entry (under 600 characters) about this game and this opponent — what happened, what they like to do. Future-you reads your recent entries before each game.'
-        : '2) "journal": a SHORT private journal entry (under 600 characters) with lessons you want to remember for future games — about your own play, and about this opponent. Future-you will read it before the next game.',
-    );
-  }
-  if (g.options?.learning && !g.lessonsDone?.[color]) {
-    keys.push("lessons");
-    const model = playerOf(g, color).model;
-    const l = readLessons(model);
-    // Remember which version this player was shown, so a concurrent update can't be silently overwritten.
-    g.lessonsSeen = { ...g.lessonsSeen, [color]: l.version };
-    lines.push(
-      `3) "lessons": update your LESSONS — your playbook, shown to you before and during every future game (shared by all your ${modelLabel(model)} personalities).`,
-      `   Study your worst moves above. Then rewrite the WHOLE list: at most ${MAX_LESSON_LINES} bullet items and ${MAX_LESSONS} characters in total. Keep what still matters, merge duplicates, sharpen vague items, drop what's stale, add what this game taught you.`,
-      "   Each item is one bullet in the form \"- When [situation] → [what to do]\", e.g. \"- When a piece leaves a diagonal or file → re-check what that line now opens for BOTH sides, especially a queen or bishop standing behind it.\" Separate the bullets with \\n in the JSON string.",
-      "   Lessons are GENERAL PRINCIPLES about how you think, calculate and check moves — no opening move sequences, no specific positions.",
-      personalityById(playerOf(g, color).personality).plain
-        ? "   They're shared by every personality your model is ever asked to play, calm or wild, so keep them about EXECUTION, never about how much risk to take: no \"avoid gambits\", \"play solid\" or \"don't sacrifice\" (e.g. \"- When I sacrifice for an attack → count the attackers and defenders around the king before committing.\")."
-        : "   They're shared by every personality you play, calm or wild, so they're about EXECUTION, never about how much risk to take: no \"avoid gambits\", \"play solid\" or \"don't sacrifice\". Your personality decides the risk; lessons make you better at whatever style you're playing (e.g. \"- When I sacrifice for an attack → count the attackers and defenders around the king before committing.\").",
-      `   Your current lessons: ${l.text ? `\n${l.text}` : "(none yet)"}`,
+      "   Answer in your own voice, under 800 characters.",
     );
   }
   return { lines, keys };
 }
 
-const postgameSubmit = (keys: string[]) =>
-  `Submit ${keys.length > 1 ? "them all at once" : "it"} with \`postgame\`, as JSON: { ${keys.map((k) => `"${k}": "…"`).join(", ")} }`;
+const postgameSubmit = (keys: string[]) => `Submit it with \`postgame\`, as JSON: { ${keys.map((k) => `"${k}": "…"`).join(", ")} }`;
 
 /* ------------------------- broadcaster event feed ------------------------- */
 

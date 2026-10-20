@@ -1,7 +1,7 @@
 import type { PlayerRef } from "../../../shared/types";
 import { makerOf } from "../../../shared/models";
 
-/** The model behind a player, in its maker's colour: as prominent as the personality, not a footnote. */
+/** The model behind a player, in its maker's colour. */
 export function ModelTag({ player, effort = true, className = "" }: { player: Pick<PlayerRef, "provider" | "modelLabel" | "effort">; effort?: boolean; className?: string }) {
   const maker = makerOf(player.provider);
   return (

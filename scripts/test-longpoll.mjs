@@ -34,7 +34,7 @@ const check = (label, cond, detail = "") => {
 
 const { game, launch } = await post(
   "/api/games",
-  { white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" }, black: { model: "gpt-6-luna", effort: "low", personality: "trickster" }, broadcaster: { enabled: true } },
+  { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: true } },
   true,
 );
 const key = Object.fromEntries(launch.tasks.map((t) => [t.role, /--key (\S+)/.exec(t.prompt)[1]]));
@@ -77,29 +77,27 @@ check("third move releases the batch", ["[MOVE 1. e4]", "[MOVE 1... e5]", "[MOVE
 // Black resigns: resign waits on to the post-game brief once the engine review is in.
 const bResign = await cli(["resign", ...k("black")]);
 check("resign waits on to GAME OVER", after(bResign)?.startsWith("=== GAME OVER"), after(bResign));
-check("post-game asks for one postgame JSON", bResign.includes('Submit them all at once with `postgame`'));
+check("post-game asks for one postgame JSON", bResign.includes('Submit it with `postgame`'));
 const w3 = await wMove2;
 check("White's pending move call ends at GAME OVER", w3.includes("=== GAME OVER"));
 
-const bad = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "GG.", journal: "They like the Italian.", lessons: "- Check every capture twice." }));
-check("bad lessons reject the whole postgame", first(bad).includes('"lessons" was not saved'), first(bad));
-const good = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "GG.", journal: "They like the Italian.", lessons: "- When I'm about to capture → check the recapture." }));
-check("postgame saves all and reaches DONE", first(good).startsWith("OK — saved lessons, interview, journal") && after(good)?.startsWith("DONE"), first(good));
-const part = await cli(["postgame", "-", ...k("white")], JSON.stringify({ interview: "A clean win." }));
-check("partial postgame lists what's left, briefly", first(part).includes("Still missing: journal, lessons") && after(part)?.startsWith("=== GAME OVER — still to do"), first(part));
-const rest = await cli(["postgame", "-", ...k("white")], JSON.stringify({ interview: "A clean win.", journal: "Resigned early.", lessons: "- When ahead → trade down." }));
-check("resending with the rest finishes", after(rest)?.startsWith("DONE"), first(rest));
+const bad = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "" }));
+check("an empty interview is rejected", first(bad).includes('{ "interview": "…" }'), first(bad));
+const good = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "GG." }));
+check("postgame saves the interview and reaches DONE", first(good).startsWith("OK — saved interview") && after(good)?.startsWith("DONE"), first(good));
+const rest = await cli(["postgame", "-", ...k("white")], JSON.stringify({ interview: "A clean win." }));
+check("White's postgame finishes too", after(rest)?.startsWith("DONE"), first(rest));
 
 // Retries that arrive after the game has moved on just carry on.
 const reInterview = await cli(["interview", "--text", "Tricky.", ...k("black")]);
 check("pre-game interview resent after the game carries on", first(reInterview) === "OK — interview recorded." && after(reInterview)?.startsWith("DONE"), first(reInterview));
-const rePost = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "GG.", journal: "They like the Italian." }));
+const rePost = await cli(["postgame", "-", ...k("black")], JSON.stringify({ interview: "GG." }));
 check("finished postgame resent carries on to DONE", first(rePost).includes("already in") && after(rePost)?.startsWith("DONE"), first(rePost));
 
 // The same JSON as the last turn is a retry until the player has seen the new position, and a real move after.
 const g2 = await post(
   "/api/games",
-  { white: { model: "claude-haiku-5-5", effort: "low", personality: "monk" }, black: { model: "gpt-6-luna", effort: "low", personality: "monk" }, broadcaster: { enabled: false } },
+  { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } },
   true,
 );
 const k2 = Object.fromEntries(g2.launch.tasks.map((t) => [t.role, ["--key", /--key (\S+)/.exec(t.prompt)[1]]]));

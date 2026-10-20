@@ -43,9 +43,9 @@ try {
   await until(async () => { try { return (await fetch(url + "/api/meta")).ok; } catch { return false; } }, "server start");
   token = readFileSync(path.join(data, "admin-token.txt"), "utf8").trim();
   const created = (await request("/api/games", {
-    white: { model: "claude-sonnet-5-5", effort: "high", personality: "none" },
-    black: { model: "gpt-6-astra", effort: "high", personality: "none" },
-    broadcaster: { enabled: false }, learning: false,
+    white: { model: "claude-sonnet-5-5", effort: "high" },
+    black: { model: "gpt-6-astra", effort: "high" },
+    broadcaster: { enabled: false },
   }, true)).json();
   const id = created.game.id;
   const keys = Object.fromEntries(created.launch.tasks.map((t: any) => [t.seat, /--key (\S+)/.exec(t.prompt)![1]]));

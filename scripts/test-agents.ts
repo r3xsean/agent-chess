@@ -241,7 +241,7 @@ try {
     return res.json();
   };
   const game = async (id: string): Promise<Game> => request(`/api/games/${id}`);
-  const newGame = async () => (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low", personality: "none" }, black: { model: "gpt-6-luna", effort: "low", personality: "none" }, broadcaster: { enabled: false }, learning: false })).game.id as string;
+  const newGame = async () => (await request("/api/games", { white: { model: "claude-haiku-5-5", effort: "low" }, black: { model: "gpt-6-luna", effort: "low" }, broadcaster: { enabled: false } })).game.id as string;
   const seatRuns = (id: string, seat: string) => runs().filter((r) => r.seatId === `${id}-${seat}`);
 
   // Game 1: White hits a usage limit, then acts once carried on; Black just stops, then keeps running.

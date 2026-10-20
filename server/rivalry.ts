@@ -2,8 +2,8 @@ import type { Color, Game, Rivalry } from "../shared/types";
 import { games } from "./store";
 
 /*
- * The series between two models, whatever personality or effort they played in: viewers follow
- * "Sonnet vs Astra", not one persona against another. Counted from the games that finished before
+ * The series between two models, whatever effort they played at: viewers follow "Sonnet vs Astra",
+ * not one effort setting against another. Counted from the games that finished before
  * this one started, plus (once it's over) this game itself.
  */
 

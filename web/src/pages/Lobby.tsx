@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from "../api";
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
-import { personalityById } from "../../../shared/personalities";
 import { PauseNotice } from "../components/PauseNotice";
 
 export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
@@ -148,11 +147,10 @@ function Predictors({ base, live }: { base: string; live: number }) {
 const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
 const ALL = "";
 
-/** The leaderboard, narrowed by model, effort and personality (each "All" by default). Ranks count within the filter. */
+/** The leaderboard, narrowed by model and effort (each "All" by default). Ranks count within the filter. */
 function Leaderboard({ players }: { players: PlayerStats[] }) {
   const [model, setModel] = useState(ALL);
   const [effort, setEffort] = useState(ALL);
-  const [personality, setPersonality] = useState(ALL);
   const options = (key: (r: PlayerRef) => string, label: (r: PlayerRef) => string, order?: (a: string, b: string) => number) =>
     // A human has no effort: no blank option for it.
     [...new Map(players.filter((p) => key(p.ref)).map((p) => [key(p.ref), label(p.ref)])).entries()].sort(([a, la], [b, lb]) => order?.(a, b) || la.localeCompare(lb));
@@ -162,11 +160,8 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
     (r) => r.effort,
     (a, b) => (EFFORT_ORDER.indexOf(a) + 1 || 99) - (EFFORT_ORDER.indexOf(b) + 1 || 99),
   );
-  const personalities = options((r) => r.personality, (r) => personalityById(r.personality).name);
-  const shown = players.filter(
-    (p) => (model === ALL || p.ref.model === model) && (effort === ALL || p.ref.effort === effort) && (personality === ALL || p.ref.personality === personality),
-  );
-  const filtered = model !== ALL || effort !== ALL || personality !== ALL;
+  const shown = players.filter((p) => (model === ALL || p.ref.model === model) && (effort === ALL || p.ref.effort === effort));
+  const filtered = model !== ALL || effort !== ALL;
   const picker = (label: string, value: string, set: (v: string) => void, opts: [string, string][]) => (
     <label className="field" style={{ marginBottom: 0, minWidth: 150 }}>
       {label}
@@ -186,14 +181,12 @@ function Leaderboard({ players }: { players: PlayerStats[] }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
         {picker("Model", model, setModel, models)}
         {picker("Effort", effort, setEffort, efforts)}
-        {picker("Personality", personality, setPersonality, personalities)}
         {filtered && (
           <button
             className="btn"
             onClick={() => {
               setModel(ALL);
               setEffort(ALL);
-              setPersonality(ALL);
             }}
           >
             Clear
