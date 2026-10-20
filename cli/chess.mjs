@@ -63,7 +63,10 @@ if (cmd in JSON_BODY) {
     console.error(`Your ${JSON_BODY[cmd]} JSON is not valid: ${e.message}`);
     process.exit(2);
   }
-} else if (["interview", "journal", "lessons", "say", "bind-thread", "request-narration"].includes(cmd)) {
+} else if (["probe", "options", "threat", "board"].includes(cmd)) {
+  // The engine questions: where, then moves (or how many options).
+  body.args = positional.slice(1);
+} else if (["interview", "journal", "lessons", "say", "bind-thread", "request-narration", "log"].includes(cmd)) {
   body.text = readInput().trim();
 }
 
@@ -92,7 +95,7 @@ function post(cmdName, payload, timeoutMs) {
 }
 
 // Waiting (and showing the position) is safe to repeat; anything that acts may already have gone through.
-const repeatable = ["start", "wait", "bc-wait", "status", "brief", "chat-brief", "narrate-brief", "packaging-brief", "help"].includes(cmd);
+const repeatable = ["start", "wait", "bc-wait", "status", "brief", "chat-brief", "narrate-brief", "packaging-brief", "help", "probe", "options", "threat", "board"].includes(cmd);
 const resume = String(key).startsWith("dt-") ? "chat-brief" : cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
 const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 

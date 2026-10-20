@@ -40,7 +40,7 @@ export function attacksFrom(board: Map<string, Piece>, from: string): string[] {
 }
 
 /** Whether a side attacks a square on this board. */
-function attacked(board: Map<string, Piece>, target: string, by: Color): boolean {
+export function attacked(board: Map<string, Piece>, target: string, by: Color): boolean {
   for (const [s, pc] of board) if (pc.color === by && attacksFrom(board, s).includes(target)) return true;
   return false;
 }

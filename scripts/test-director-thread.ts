@@ -10,7 +10,7 @@ const dir = mkdtempSync(path.join(tmpdir(), "chess-director-test-"));
 process.env.AGENT_CHESS_DATA = dir;
 process.env.T3_STATE_DB = path.join(dir, "t3.sqlite");
 const { games } = await import("../server/store");
-const { openDirectorThread, directorThreadState, directorThreadBusy, directorThreadCommand } = await import("../server/directorThread");
+const { openDirectorThread, autoDirectorSession, directorThreadState, directorThreadBusy, directorThreadCommand } = await import("../server/directorThread");
 const { videoApproved, videoRevision } = await import("../server/videoApproval");
 const { startRender, jobsFor } = await import("../server/render");
 const { desktopThreadUrl, findDirectorThread } = await import("../server/directorThreadLink");
@@ -43,15 +43,24 @@ await assert.rejects(directorThreadCommand(key, "narrate", { narration: { lines:
 await assert.rejects(directorThreadCommand(key, "revise", { plan: { moments: [{ ply: 53, line: { beats: [] } }] } }), /request-narration/);
 
 const task = JSON.parse(await directorThreadCommand(key, "request-narration", { text: "Shorten only ply 53's explanation; preserve its rewind cue." }));
-assert.ok(task.task.includes("separate narration agent"));
+assert.ok(task.task.includes("narrator") && task.task.includes("REQUESTS:"), "the narrator works in rounds with its director");
 const narratorKey = /--key (dt-[a-f0-9]+)/.exec(task.task)![1];
 assert.notEqual(narratorKey, key);
 assert.equal(directorThreadState(g).status, "narrating");
-await assert.rejects(directorThreadCommand(key, "revise", { plan: {} }), /narration agent is working/);
+await assert.rejects(directorThreadCommand(key, "request-narration", { text: "again" }), /still at work/, "one narrator at a time");
 await directorThreadCommand(narratorKey, "narrate", { narration: { lines: [{ ply: 53, end: 3, beats: [
   { at: "start", text: "Rewind. Knight takes f5.", enter: "Rewind", cues: [{ words: "Knight", moves: 1 }] },
 ] }] } });
 assert.equal(g.video!.moments[0].line!.beats![0].text, "Rewind. Knight takes f5.");
+// The narrator asks, the director agrees and changes the plan between its turns; the narrator then has to re-read it.
+await directorThreadCommand(narratorKey, "log", { text: "REQUESTS: retitle ply 53's chapter" });
+await directorThreadCommand(key, "chat-brief", {});
+await directorThreadCommand(key, "revise", { plan: { moments: [{ ply: 53, chapter: "The knight's jump" }] } });
+await directorThreadCommand(key, "confirm", {});
+await directorThreadCommand(key, "log", { text: "Agreed: retitled." });
+await assert.rejects(directorThreadCommand(narratorKey, "narrate", { narration: { lines: [] } }), /changed the plan/, "a narration against the old plan is refused");
+assert.match(await directorThreadCommand(key, "chat-brief", {}), /\[narrator\] REQUESTS: retitle[\s\S]*\[director\] Agreed/, "the exchange is kept, round by round");
+await assert.rejects(directorThreadCommand(key, "done", {}), /Wait for the narration agent/, "the director finishes after its narrator");
 await directorThreadCommand(narratorKey, "done", {});
 await directorThreadCommand(key, "done", {});
 assert.equal(directorThreadState(g).status, "ready");
@@ -80,9 +89,21 @@ assert.equal(findDirectorThread("different-key", at, "delivery:relay:delivery-12
 assert.equal(findDirectorThread("different-key", at), undefined);
 assert.equal(desktopThreadUrl("thread:one/test"), "t3code://threads/environment%3Atest/thread%3Aone%2Ftest");
 
+// The auto director's own thread becomes the user's conversation once it's done: no new launch, same key.
+const auto = structuredClone(g); auto.id = "director-auto"; games.set(auto.id, auto);
+const as = autoDirectorSession(auto)!;
+await directorThreadCommand(as.key, "bind-thread", { text: "thread:auto/test" });
+await assert.rejects(openDirectorThread(auto, {}, fakeLaunch), /still at work/);
+await directorThreadCommand(as.key, "done", {});
+const opened = await openDirectorThread(auto, { context: { time: 12, format: "landscape" } }, fakeLaunch);
+assert.equal(calls, 1, "talking reuses the auto director's thread");
+assert.equal(opened.threadUrl, desktopThreadUrl("thread:auto/test"));
+assert.match(await directorThreadCommand(as.key, "chat-brief", {}), /"time":12/, "the playback position reaches the same thread");
+assert.match(await directorThreadCommand(as.key, "done", {}), /Reply in T3 Code/);
+
 const failed = structuredClone(g); failed.id = "director-failure"; games.set(failed.id, failed);
 await openDirectorThread(failed, {}, async () => { throw new Error("offline"); });
 assert.equal(directorThreadState(failed).status, "failed");
 await openDirectorThread(failed, { retry: true }, async () => {});
 assert.equal(directorThreadState(failed).status, "opening");
-console.log("Director workflow passed: thread reuse, private credentials, draft preservation, delegated narration, stale edits, approval/render gate, desktop links and launch retry.");
+console.log("Director workflow passed: thread reuse, private credentials, draft preservation, the director-narrator rounds, stale edits, approval/render gate, desktop links, the auto director's thread reused for talking, and launch retry.");

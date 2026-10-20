@@ -1,8 +1,8 @@
-import type { Classification, Color, Game, ThoughtMark } from "../../../shared/types";
+import type { Classification, Color, Game, LineBeat, ThoughtMark } from "../../../shared/types";
 import { VOICE_RATE, type VoiceManifest } from "../../../shared/voices";
 import { markColors, pointsAt, quoteWords, sentenceEnd, spokenWord } from "../../../shared/thoughtMarks";
-import { beatId, interviewText, lineSig, lineVoice, videoLines } from "../../../shared/videoLines";
-import { lineVerdicts, planLine, shownLine, type LineKind } from "../../../shared/engineLine";
+import { beatId, branchBeatId, interviewText, lineSig, lineVoice, videoLines } from "../../../shared/videoLines";
+import { lineVerdicts, planBranch, planLine, shownLine, type LineKind } from "../../../shared/engineLine";
 
 export type Format = "landscape" | "portrait";
 export const FRAME: Record<Format, { w: number; h: number }> = {
@@ -53,6 +53,14 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
       beats?: { at: number; end: number; text: string; draws?: { word: number; last?: number; at: number; from?: string; to?: string; ring?: string }[] }[];
       first?: boolean;
       punish?: LinePunishScene;
+      /**
+       * The line's branches (see LineBranch), by their index in the plan: each one's moves with their badges, and
+       * when each of them first lands. With branches the board follows `steps` (see LineStep), and winds back
+       * from `backFrom` (what's on it then) at the end.
+       */
+      branches?: ({ at: number; when: "before" | "after"; sans: string[]; verdicts: (Classification | undefined)[]; moveAt: number[] } | undefined)[];
+      steps?: LineStep[];
+      backFrom?: { seg: number; count: number };
     }
   /** After the cold open: "how did we get here?", winding back from move i to the start. */
   | { kind: "rewind"; i: number }
@@ -62,6 +70,15 @@ export type Scene = { start: number; dur: number; voice?: { url: string; rate: n
   | { kind: "result" }
   | { kind: "end" }
 );
+
+/**
+ * A change to the board of a line with branches, in seconds into its scene: the kth move of a path lands
+ * (sliding in from `at`; `k` counts the path's moves from the line's start; `hold`: nothing moves, the board just
+ * switches to that path where it shares the moves on it), or a path winds back from `from`
+ * of its moves to `to` over [at, end]. Path -1 is the line; path j is the line's first `branches[j].at` moves,
+ * then branch j's.
+ */
+export type LineStep = { at: number; seg: number; k: number; hold?: true } | { at: number; end: number; seg: number; from: number; to: number };
 
 export interface LinePunishScene {
   sans: string[];
@@ -85,6 +102,13 @@ const LINE_STRONG_HOLD = 0.9;
 const LINE_AFTER_MOVE = 0.5;
 /** How far apart the moves a narrator's cue brings on land, the last on its word. */
 const LINE_BURST = 0.35;
+/**
+ * The least time between two moves of an engine line landing: the slide, the badge popping in (LINE_BADGE, as
+ * the video draws it), and a moment to read it. A cue's run of moves and a forced reply never go quicker. The
+ * line played again quickly after a branch (moves already seen) still uses LINE_BURST.
+ */
+const LINE_BADGE = 0.3;
+export const LINE_MIN_STEP = LINE_SLIDE + LINE_BADGE + 0.25;
 const LINE_SETTLE = 0.15;
 
 /**
@@ -384,7 +408,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const ln = planLine(g, i, ask);
     if (!ln) return;
     const per = (wide ? 0.8 : 0.65) / pace;
-    const step = (v: Classification | undefined) => (v === "forced" ? per * 0.6 : per) + (v === "great" || v === "brilliant" ? LINE_STRONG_HOLD / pace : 0);
+    const step = (v: Classification | undefined) => Math.max(LINE_MIN_STEP, v === "forced" ? per * 0.6 : per) + (v === "great" || v === "brilliant" ? LINE_STRONG_HOLD / pace : 0);
     const said: AsideCue[] = [];
     let at = 0;
     // What the move played allowed, when the director explains it: played out, a pause on the move its
@@ -418,17 +442,33 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
     const moveAt: number[] = [];
     let enterAt = 0;
     let readyAt = !punish && ln.kind === "instead" && !first ? LINE_RESTORE : 0;
-    // The line's moves up to k, one after another at their pace, from now.
-    const playTo = (k: number) => {
-      while (moveAt.length < Math.min(k, n)) {
-        moveAt.push(at);
-        at += step(verdicts[moveAt.length - 1]);
-      }
-      if (moveAt.length) at = Math.max(at, moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE);
+    // The board as one track (see LineStep): what's on it (`onSeg`'s path, `onCount` of its moves) and each
+    // change. Path -1 is the line; branch j's path is the line's first `at` moves, then the branch's.
+    const brs = (ask.branches ?? []).flatMap((b, j) => {
+      const br = planBranch(g, ln, b);
+      return br ? [{ b, j, br }] : [];
+    });
+    const steps: LineStep[] = [];
+    let onSeg = -1;
+    let onCount = 0;
+    type Track = { seg: number; base: number; n: number; verdicts: (Classification | undefined)[]; moveAt: number[] };
+    const main: Track = { seg: -1, base: 0, n, verdicts, moveAt };
+    const pushMove = (tr: Track, when: number) => {
+      tr.moveAt.push(when);
+      onSeg = tr.seg;
+      onCount = tr.base + tr.moveAt.length;
+      steps.push({ at: when, seg: tr.seg, k: onCount });
     };
-    for (const b of beats) {
-      playTo(b.at);
-      const id = beatId(ply, b.n);
+    // A track's moves up to k, one after another at their pace, from now.
+    const playTo = (tr: Track, k: number) => {
+      while (tr.moveAt.length < Math.min(k, tr.n)) {
+        pushMove(tr, at);
+        at += step(tr.verdicts[tr.moveAt.length - 1]);
+      }
+      if (tr.moveAt.length) at = Math.max(at, tr.moveAt[tr.moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE);
+    };
+    const sayBeat = (tr: Track, b: LineBeat & { n: number }, id: string) => {
+      playTo(tr, b.at);
       const v = voiced(id, 0.3 + read(b.text));
       const from = at;
       // When word k of the beat is said: by the recording's word timings, else spread over it, else at reading speed.
@@ -439,33 +479,92 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
         const w = spokenWord(b.text, k);
         return from + VOICE_AT + (clip.words?.length ? clip.words[Math.min(w, clip.words.length - 1)] : (w / total) * clip.dur) / rate;
       };
-      if (b.enter !== undefined && b.n === 0 && b.at === 0 && !punish) {
+      if (tr === main && b.enter !== undefined && b.n === 0 && b.at === 0 && !punish) {
         enterAt = wordAt(b.enter);
         readyAt = enterAt + (ln.kind === "instead" && !first ? LINE_RESTORE : 0);
       }
-      // The board moves on the words: a cued move lands as its word is said, the ones before it just ahead, quickly.
+      // The board moves on the words: a cued move lands as its word is said, the ones before it just ahead, each
+      // with time for its badge.
       for (const c of b.cues ?? []) {
-        const k = Math.min(c.moves, n);
-        const count = k - moveAt.length;
+        const k = Math.min(c.moves, tr.n);
+        const count = k - tr.moveAt.length;
         if (count <= 0) continue;
-        const gap = LINE_BURST / pace;
+        const gap = LINE_MIN_STEP;
         const land = wordAt(c.word) - LINE_SLIDE;
-        const prev = moveAt.length ? moveAt[moveAt.length - 1] + gap : Math.max(from, readyAt + LINE_SETTLE);
-        const first = Math.max(prev, land - (count - 1) * gap);
-        for (let j = 0; j < count; j++) moveAt.push(first + j * gap);
+        const prev = tr.moveAt.length ? tr.moveAt[tr.moveAt.length - 1] + gap : Math.max(from, at, readyAt + LINE_SETTLE);
+        const start = Math.max(prev, land - (count - 1) * gap);
+        for (let j = 0; j < count; j++) pushMove(tr, start + j * gap);
       }
       const end = from + v.dur;
       said.push({ start: from, dur: v.dur, i, text: b.text, narrator: true, ...(v.voice && { voice: v.voice }) });
       shown.push({ at: from, end, text: b.text, draws: (b.draw ?? []).map((d) => ({ ...d, at: wordAt(d.word) - from })) });
-      at = Math.max(end, readyAt + LINE_SETTLE, moveAt.length ? moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE : end);
+      at = Math.max(end, readyAt + LINE_SETTLE, tr.moveAt.length ? tr.moveAt[tr.moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE : end);
+    };
+    // The moves two paths share: a branch shares the line's first `at` moves (two branches, the fewer of theirs).
+    // Paths go by the branch's index in the plan (a branch that can't be shown any more is skipped, not renumbered).
+    const splitOf = (seg: number) => (seg < 0 ? Infinity : (ask.branches?.[seg]?.at ?? 0));
+    const shared = (a: number, b: number) => Math.min(splitOf(a), splitOf(b));
+    // Gets the board to `count` moves of path `seg`: winds back to where the paths part, then plays the rest quickly.
+    const goTo = (seg: number, count: number) => {
+      const keep = seg === onSeg ? Math.min(onCount, count) : Math.min(onCount, count, shared(seg, onSeg));
+      if (onCount > keep) {
+        const d = lineRewindDuration(onCount - keep);
+        steps.push({ at, end: at + d, seg: onSeg, from: onCount, to: keep });
+        at += d + 0.15;
+      }
+      // Onto the other path, at once, so what's up top (the callout, the variation) follows before its moves come.
+      if (seg !== onSeg) steps.push({ at, seg, k: keep, hold: true });
+      for (let k = keep + 1; k <= count; k++) {
+        steps.push({ at, seg, k });
+        at += LINE_BURST / pace;
+      }
+      if (count > keep) at += LINE_SLIDE + LINE_SETTLE;
+      onSeg = seg;
+      onCount = count;
+    };
+    const branchScenes: NonNullable<Extract<Scene, { kind: "line" }>["branches"]> = [];
+    // A branch: the board to where it splits, a breath, its moves under its beats, and a moment to take it in.
+    const runBranch = ({ b, j, br }: (typeof brs)[number]) => {
+      goTo(j, b.at);
+      at += 0.3 / pace;
+      const tr: Track = { seg: j, base: b.at, n: br.moves.length, verdicts: lineVerdicts(g, br.moves), moveAt: [] };
+      for (const x of (b.beats ?? []).map((x, n) => ({ ...x, n })).sort((p, q) => p.at - q.at || p.n - q.n)) sayBeat(tr, x, branchBeatId(ply, j, x.n));
+      playTo(tr, tr.n);
+      at += b.beats?.length ? 0.3 : 1.5;
+      branchScenes[j] = { at: b.at, when: b.when, sans: br.moves.map((mv) => mv.san), verdicts: tr.verdicts, moveAt: tr.moveAt };
+    };
+    // "before" branches play as the line reaches their point (after the line's beats there), and the board winds
+    // back to the line before it goes on; "after" ones once the line has played out.
+    const before = brs.filter((x) => x.b.when === "before").sort((p, q) => p.b.at - q.b.at);
+    const later = brs.filter((x) => x.b.when === "after");
+    let nextBefore = 0;
+    // A "before" branch plays just ahead of the first of the line's beats that moves the board on from its point
+    // (one past it, or one there with a cue), so the line's own move lands on the words that answer it.
+    const branchesBefore = (b: { at: number; cues?: { moves: number }[] } | null) => {
+      const past = (k: number) => !b || b.at > k || (b.at === k && (b.cues ?? []).some((c) => c.moves > k));
+      while (nextBefore < before.length && past(before[nextBefore].b.at)) {
+        const x = before[nextBefore++];
+        playTo(main, x.b.at);
+        runBranch(x);
+        goTo(-1, x.b.at);
+      }
+    };
+    for (const b of beats) {
+      branchesBefore(b);
+      sayBeat(main, b, beatId(ply, b.n));
     }
-    playTo(n);
+    branchesBefore(null);
+    playTo(main, n);
+    if (onSeg !== -1 || onCount < n) goTo(-1, n);
     const settled = moveAt[moveAt.length - 1] + LINE_SLIDE + LINE_SETTLE;
     const captionAt = Math.max(settled, at);
     // With the narrator telling it, the line ends on the last thing said unless the director also wrote a caption.
     const caption = ask.caption ?? (beats.length ? "" : ln.caption);
-    const backAt = captionAt + (caption ? Math.max(2.6, 0.8 + read(caption)) : 0.2);
-    const back: [number, number] = [backAt, backAt + lineRewindDuration(n)];
+    at = captionAt + (caption ? Math.max(2.6, 0.8 + read(caption)) : 0.2);
+    for (const x of later) runBranch(x);
+    if (later.length) at += 0.2;
+    const backAt = at;
+    const back: [number, number] = [backAt, backAt + lineRewindDuration(onCount)];
     const restoreEnd = back[1] + (ln.kind === "instead" && !first ? LINE_RESTORE : 0);
     const start = t;
     push({
@@ -484,6 +583,7 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
       ...(shown.length && { beats: shown }),
       ...(first && { first: true }),
       ...(punish && { punish }),
+      ...(brs.length && { branches: branchScenes, steps: steps.sort((p, q) => p.at - q.at), backFrom: { seg: onSeg, count: onCount } }),
       dur: restoreEnd + 0.15,
     });
     for (const c of said) asides.push({ ...c, start: start + c.start });
@@ -642,11 +742,30 @@ export function sfxCues(tl: Timeline, g: Game): SfxCue[] {
         });
         at(s.start + s.punish.back[0], "transition", 0.35);
       }
-      s.sans.forEach((san, k) => {
-        const land = s.start + s.moveAt[k] + LINE_SLIDE - 0.02;
-        board(land, san, 0.5);
-        sting(land, s.verdicts[k]);
-      });
+      if (s.steps) {
+        // With branches, every move that lands on the board (a branch's, or the line's played again after one),
+        // and a soft change each time the board winds back to where a branch splits.
+        for (const st of s.steps) {
+          if ("end" in st) {
+            at(s.start + st.at, "transition", 0.25);
+            continue;
+          }
+          if (st.hold) continue;
+          const br = st.seg >= 0 ? s.branches?.[st.seg] : undefined;
+          const own = br ? st.k - br.at - 1 : st.k - 1;
+          const [san, v] = br && own >= 0 ? [br.sans[own], br.verdicts[own]] : [s.sans[st.k - 1], s.verdicts[st.k - 1]];
+          if (!san) continue;
+          const land = s.start + st.at + LINE_SLIDE - 0.02;
+          board(land, san, 0.5);
+          // Only a move's first landing stings (not the line played again quickly after a branch).
+          if (br ? own >= 0 : s.moveAt[st.k - 1] === st.at) sting(land, v);
+        }
+      } else
+        s.sans.forEach((san, k) => {
+          const land = s.start + s.moveAt[k] + LINE_SLIDE - 0.02;
+          board(land, san, 0.5);
+          sting(land, s.verdicts[k]);
+        });
     } else if (s.kind === "think") at(s.start + 0.05, "think", 0.7);
     else if (s.kind === "illegal") at(s.start + 0.05, "illegal", 0.8);
     else if (s.kind === "draw") at(s.start + 0.05, "draw", 0.8);

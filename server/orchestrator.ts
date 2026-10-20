@@ -195,7 +195,7 @@ function directVideo(g: Game, source: BriefSource) {
     taskBlock(task, `POST ${API}/api/games/${g.id}/launched with JSON {"seat":"d"} (admin)`),
     "",
     "## 2. When it finishes",
-    `GET ${API}/api/games/${g.id}/agents: \`director.done: true\` means the plan is saved, and the user reviews and approves it before rendering. If not, continue it once with \`t3_thread_send\` ("Your task isn't done: run \`brief\` and carry on until \`confirm\` prints DONE."); if it can't be continued, delegate its task again with clientRequestId \`${task.clientRequestId}-r2\` (a model's safety filter occasionally refuses a long brief; a second try usually works).`,
+    `GET ${API}/api/games/${g.id}/agents: \`director.done: true\` means the plan and its narration are saved (the director launches its own narrator and works it through with it), and the user reviews and approves it before rendering. If not, continue it once with \`t3_thread_send\` ("Your task isn't done: run \`chat-brief\` and carry on: the plan, then your narrator, then \`done\`."); if it can't be continued, delegate its task again with clientRequestId \`${task.clientRequestId}-r2\` (a model's safety filter occasionally refuses a long brief; a second try usually works).`,
     "",
     finish(source, "the director is done"),
   ].join("\n");

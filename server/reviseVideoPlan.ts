@@ -17,7 +17,7 @@ export function reviseVideoPlan(g: Game, raw: any): VideoPlan {
   for (const update of raw.moments ?? []) {
     if (!update || seen.has(update.ply) || remove.has(update.ply)) throw new ActionError("Each revised ply must appear only once and cannot also be removed.");
     seen.add(update.ply);
-    if (update.line?.beats !== undefined) throw new ActionError("Hand narration changes to request-narration.");
+    if (update.line?.beats !== undefined || update.line?.branches !== undefined) throw new ActionError("Hand narration changes to request-narration.");
     const i = moments.findIndex(m => m.ply === update.ply);
     if (i < 0) moments.push(update);
     else moments[i] = { ...moments[i], ...update };

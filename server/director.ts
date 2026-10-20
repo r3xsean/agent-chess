@@ -1,10 +1,10 @@
-import type { Classification, Color, Game, LineBeat, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoAside, VideoHook, VideoMoment, VideoPackaging, VideoPackagingOptions, VideoPlan } from "../shared/types";
+import type { Classification, Color, Game, LineBeat, LineBranch, LineReach, LineRef, MoveRecord, ThoughtMark, ThoughtRef, VideoAside, VideoHook, VideoMoment, VideoPackaging, VideoPackagingOptions, VideoPlan } from "../shared/types";
 import type { VoiceManifest } from "../shared/voices";
 import { speakable } from "../shared/speech";
 import { triesOf } from "../shared/explain";
 import { buildTimeline, LINE_SLIDE, silences, type Scene } from "../web/src/video/timeline";
 import { humanSide, isHuman, sideName } from "../shared/naming";
-import { formatScore } from "../shared/evalmath";
+import { formatScore, winPercentFor } from "../shared/evalmath";
 import { beliefs } from "../shared/belief";
 import { rivalry, seriesLine } from "./rivalry";
 import { spokenText, VOICE_BUDGET } from "./voice";
@@ -14,7 +14,10 @@ import { modelAnalytics } from "./analytics";
 import { personalityById, RISK_LABEL } from "../shared/personalities";
 import { variantOf, type RulesMove } from "../shared/rules";
 import { ActionError, isRated } from "./game";
-import { fenAt, lineOptions, lineRefProblems, lineVerdicts, obvious, planLine, resolveLineRefs, shownLine, type ShownLine } from "../shared/engineLine";
+import { branchOptions, fenAt, lineOptions, lineRefProblems, lineVerdicts, obvious, planBranch, planLine, resolveLineRefs, shownLine, type ShownBranch, type ShownLine } from "../shared/engineLine";
+import { walk } from "../shared/why";
+import { investigated, PROBE_COMMANDS } from "./probe";
+import { mustUnderstand, questionLines, questionWeight, understandLines } from "./lineQuestions";
 import { moveFacts } from "../shared/lineFacts";
 import { leftEnPrise } from "./wintr";
 import { boardOf, describe, drawnLine, imagined, isHit, markColors, moverKind, moveWordAt, phraseAt, phraseEnd, quoteWords, refProblems, resolveRefs, sanKey, squareWordAt } from "../shared/thoughtMarks";
@@ -127,6 +130,13 @@ export function directorBrief(g: Game): string {
     }
 
   out.push(...shapeLines(g), "", ...showpieceLines(g), "");
+  out.push(
+    "## Asking the engine",
+    "Before you choose a line, find out why it is what it is. From any position of the game or of a line, as often and as deep as you need:",
+    ...PROBE_COMMANDS.split("\n"),
+    "What a sacrifice is for (probe it being taken), what a quiet move threatens (threat), whether the losing side had any way out (options: when even its best move loses the piece, nothing saves it). Open every candidate line this way, the ones below the top of the list too, before you choose: the strongest story is often a line that doesn't look best at first. A line whose why you can see and say is the one worth the video's time.",
+    "",
+  );
 
   out.push("## The game, move by move", "(eval and win% are White's view, win% before → after the move; self-eval is what the mover believed)", "");
   const belief = beliefs(g);
@@ -149,10 +159,12 @@ export function directorBrief(g: Game): string {
       if (prev && cls && SWING.includes(cls))
         out.push(`  ${back === 1 ? "answers" : "reacts to"} ${moveNo(prev.ply)} ${prev.san} (${cls}, ply ${prev.ply}): ${back === 1 ? "the punishment, or the miss" : `${name(m.color)}'s first words after it`}`);
     }
-    for (const l of lineOptions(g, i))
+    for (const l of lineOptions(g, i)) {
       out.push(
         `  line option "${l.kind}" (${l.moves.length} moves): ${lineMoves(g, l.moves)} → ${l.fact}${l.punish ? `; allows: ${lineMoves(g, l.punish.moves.slice(1))} → ${l.punish.fact}` : ""}`,
       );
+      for (const b of branchOptions(g, l).slice(0, 2)) out.push(`    branch: ${b.question} ${lineMoves(g, b.moves)} → ${b.fact}`);
+    }
     if (m.illegalAttempts.length) out.push(`  tried illegal moves first: ${m.illegalAttempts.join(", ")}`);
     triesOf(m.illegalAttempts, m.tries).forEach((t, n) => {
       if (t?.commentary.trim()) out.push(`  said with illegal attempt ${m.illegalAttempts[n]}: ${t.commentary.trim()}`);
@@ -246,7 +258,7 @@ export function directorBrief(g: Game): string {
     "    - the doomed plan, the trap they're proud of, the threat they fear, and what they say they missed;",
     "    - but never an arrow for what the quote says can't or won't happen (\"the rook cannot capture the knight\", \"Kxe2 isn't possible\"): an arrow always reads as \"this goes there\" or \"this hits that\", so it would show the opposite. Circle the pieces instead.",
     "  - Usually 2–6 marks per quote; a long quote can take 8. Start each mark on words that draw something straight away, so the board isn't empty while the idea is being said. A hook that quotes words of one of your moments draws that moment's marks for them, unless you give it its own.",
-    "- The narration over each line (what the narrator says, where the board moves on the words, how far the line runs, whether it plays before the move) is written in its own step once the plan is saved (`narrate-brief`), so leave `beats`, `end` and `first` out here: choose the lines, and say in each moment's `why` what its line is for.",
+    "- The narration over each line (what the narrator says, where the board moves on the words, how far the line runs, whether it plays before the move) is written by your narrator once the plan is saved (see your instructions), so leave `beats`, `end`, `first` and `branches` out here: choose the lines, and say in each moment's `why` what its line is for.",
     "- line.caption (optional, one line, at most 14 words; with beats, usually left out): why the side the line favours is better at its end, in your own words and grounded in the moves listed: the fork, the overloaded queen, the back rank, the pawn that can't be stopped. Say what it wins (or, for an `instead` line that just keeps everything, what the move played gave away), but never a tactic or square the line doesn't show. Leave it out and the listed fact is shown instead.",
     "  - line.squares, line.draw, line.refs: what the board shows with the caption, at the end of the line, as in marks. The line's moves are played out on the board, but nothing else is drawn unless you say: `squares` circles pieces or squares (\"e6\"), each up while its piece stays there; `draw` adds a piece's attack or defence as \"from>to\" (\"e6>e2\": the rook guarding the pawn), checked against the board. `refs`: every word of the caption that names a square, a move or a piece goes in a ref saying what it points at: { \"words\": \"the rook\", \"to\": \"e6\" }, or one of the line's moves: { \"words\": \"Kg4\", \"to\": \"Kg4\" }. A square a ref points at must be drawn: circled, at an end of a reach, or where one of the line's moves went from or to (a piece the line takes can be pointed at where it was taken). Those words light up in the colour of what they point at: green for the side the line favours, red for the other, amber for an empty square. A caption without refs lights nothing.",
     "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
@@ -326,6 +338,8 @@ function lineWorth(g: Game, i: number, l: ShownLine): { score: number; why: stri
   else if (vs.includes("great")) (hard += 15), why.push("it has an only move");
   if (l.mate) (hard += 10), why.push(`it ends in mate in ${l.mate}`);
   if (!l.moves[0].captured && !/[+#]/.test(l.moves[0].san)) (hard += 10), why.push("it starts with a quiet move");
+  const q = questionWeight(g, l);
+  if (q.top) (hard += q.weight), why.push(`it raises a question worth answering on the board: ${q.top.question} → ${q.top.answer}`);
   return { score: swing + hard, why };
 }
 
@@ -349,13 +363,61 @@ function rankedLines(g: Game): { i: number; l: ShownLine; score: number; why: st
   return out.sort((a, b) => b.score - a.score);
 }
 
+/** A line's code, as the engine questions name its positions ("42a3" → "42a"). */
+const lineCode = (g: Game, i: number, kind: "instead" | "after") => `${g.moves[i].ply}${kind === "after" ? "a" : "i"}`;
+
+/**
+ * What the director has investigated, for its plan's readback: the lines it chose without asking the engine
+ * about them, and the strong lines it never looked at (a line ruled out should be one probed and found weaker).
+ * A line counts as looked at when any position of it, or of its move in the game, was asked about.
+ */
+export function investigationNotes(g: Game, plan: VideoPlan): string[] {
+  const inv = investigated(g.id, "director");
+  const seen = (i: number, kind: "instead" | "after") => inv.lines.has(lineCode(g, i, kind)) || inv.plies.has(g.moves[i].ply);
+  const chosen = plan.moments.flatMap((x) => {
+    const i = g.moves.findIndex((m) => m.ply === x.ply);
+    return x.line ? [{ i, kind: x.line.kind }] : [];
+  });
+  const unprobed = chosen.filter((c) => !seen(c.i, c.kind));
+  const skipped = rankedLines(g)
+    .slice(0, SHOWPIECES)
+    .filter((x) => !chosen.some((c) => c.i === x.i && c.kind === x.l.kind) && !seen(x.i, x.l.kind));
+  const name = (i: number, kind: string) => `ply ${g.moves[i].ply} ${moveNo(g.moves[i].ply)} ${g.moves[i].san} ("${kind}", ${lineCode(g, i, kind as "instead" | "after")}0)`;
+  return [
+    `Your investigation so far: ${inv.count} engine question${inv.count === 1 ? "" : "s"}${inv.lines.size ? `, about lines ${[...inv.lines].join(", ")}` : ""}.`,
+    ...(unprobed.length ? [`⚠ Lines in this plan you haven't asked the engine about: ${unprobed.map((c) => name(c.i, c.kind)).join("; ")}. Probe them: you can't hand over their why without seeing it.`] : []),
+    ...(skipped.length
+      ? [`⚠ Strong lines you haven't looked at: ${skipped.map((x) => name(x.i, x.l.kind)).join("; ")}. A line you leave out should be one you probed and found weaker, not one you never opened.`]
+      : []),
+  ];
+}
+
+/** What the narrator has investigated, for its narration's readback: the plan's lines it hasn't asked the engine about yet. */
+export function narratorInvestigationNotes(g: Game, plan: VideoPlan): string[] {
+  const inv = investigated(g.id, "narrator");
+  const unprobed = plan.moments.flatMap((x) => {
+    const i = g.moves.findIndex((m) => m.ply === x.ply);
+    return x.line && !inv.lines.has(lineCode(g, i, x.line.kind)) && !inv.plies.has(x.ply) ? [`ply ${x.ply} ${moveNo(x.ply)} ${g.moves[i].san} (${lineCode(g, i, x.line.kind)}0)`] : [];
+  });
+  return [
+    `Your investigation so far: ${inv.count} engine question${inv.count === 1 ? "" : "s"}${inv.lines.size ? `, about lines ${[...inv.lines].join(", ")}` : ""}.`,
+    ...(unprobed.length ? [`⚠ Lines you're narrating without having asked the engine about them: ${unprobed.join("; ")}. Look before you tell the viewer why.`] : []),
+  ];
+}
+
+/** How many of the game's strongest lines the brief lists (the video takes as many as its story needs). */
+const SHOWPIECES = 6;
+
 function showpieceLines(g: Game): string[] {
-  const top = rankedLines(g).slice(0, 3);
+  const top = rankedLines(g).slice(0, SHOWPIECES);
   if (!top.length) return [];
   return [
     "## Lines worth narrating",
-    "(the engine lines that most deserve the video's time: the biggest swings, and the moves hardest to find; a line the move's best-move arrow already shows isn't offered at all)",
-    ...top.map((x, n) => `${n + 1}. ply ${g.moves[x.i].ply}, ${moveNo(g.moves[x.i].ply)} ${g.moves[x.i].san}, "${x.l.kind}": ${x.l.moves.map((mv) => mv.san).join(" ")} → ${x.l.fact}. Why: ${x.why.join("; ")}.`),
+    "(the strongest of the engine lines, best first: the biggest swings and the moves hardest to find; a line the move's best-move arrow already shows isn't offered at all. This is not a limit: the video takes as many lines as its story needs, and any line option in the game below can be one. Look into each of these before you narrow them down. A line with a `branch:` listed under it raises a question a viewer would ask (why not the natural move? what if they try this instead?), and the narration answers it on the board, branch and all, so such a line makes the strongest showpiece: give its moment importance 3 and say in its `why` what question the line answers)",
+    ...top.flatMap((x, n) => [
+      `${n + 1}. ply ${g.moves[x.i].ply}, ${moveNo(g.moves[x.i].ply)} ${g.moves[x.i].san}, "${x.l.kind}": ${x.l.moves.map((mv) => mv.san).join(" ")} → ${x.l.fact}. Why: ${x.why.join("; ")}.`,
+      ...questionLines(g, x.l, 4).map((s) => `   ${s}`),
+    ]),
   ];
 }
 
@@ -515,6 +577,18 @@ const int = (raw: unknown) => (typeof raw === "number" ? raw : typeof raw === "s
 const str = (raw: unknown) => (typeof raw === "string" ? raw : "");
 
 export function validatePlan(g: Game, raw: unknown, existing?: VideoPlan): VideoPlan {
+  const notes: string[] = [];
+  markNotes = notes;
+  try {
+    const plan = checkPlan(g, raw, existing);
+    if (notes.length) planNotes.set(plan, notes);
+    return plan;
+  } finally {
+    markNotes = null;
+  }
+}
+
+function checkPlan(g: Game, raw: unknown, existing?: VideoPlan): VideoPlan {
   const p = raw as any;
   if (!p || typeof p !== "object" || !Array.isArray(p.moments)) throw new ActionError("The plan needs a `moments` array.");
   if (p.moments.length < 3 || p.moments.length > 20) throw new ActionError(`Pick 8–16 moments (you gave ${p.moments.length}).`);
@@ -893,6 +967,8 @@ function lineChoice(g: Game, i: number, raw: unknown, where: string): VideoMomen
     ...(end && { end }),
     ...(first && { first }),
   };
+  const branches = lineBranches(g, sl, cut, beats, r.branches, `${where}.line.branches`);
+  if (branches) out.branches = branches;
   const p = r.punish;
   if (p !== undefined && p !== null && p !== "") {
     const m = g.moves[i];
@@ -916,6 +992,65 @@ function lineChoice(g: Game, i: number, raw: unknown, where: string): VideoMomen
 /** How many narrator lines one engine line may have, and how long each may run. */
 const MAX_BEATS = 8;
 const MAX_BEAT_WORDS = 70;
+/** How many branches one line may have, and how many narrator lines each. */
+const MAX_BRANCHES = 2;
+const MAX_BRANCH_BEATS = 4;
+
+/**
+ * A line's branches (see LineBranch), as the narrator asks for them: each one the brief offered for the line
+ * (branchOptions), splitting off at a point of the line as cut, "before" (played as the line gets there) or
+ * "after" (once it's played out), cut to `end`, with its own beats. A "before" branch needs the board at its
+ * point when it comes: the line's beats up to there can't have played past it.
+ */
+function lineBranches(g: Game, sl: ShownLine, cut: ShownLine, beats: LineBeat[] | undefined, raw: unknown, where: string): LineBranch[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new ActionError(`${where} must be a list.`);
+  if (raw.length > MAX_BRANCHES) throw new ActionError(`${where}: ${raw.length} branches; keep it to at most ${MAX_BRANCHES}.`);
+  const offered = branchOptions(g, sl);
+  const out: LineBranch[] = [];
+  raw.forEach((b: any, j) => {
+    const w = `${where}[${j}]`;
+    const at = lineStep(cut, b?.at, `${w}.at`);
+    if (at >= cut.moves.length) throw new ActionError(`${w}.at: a branch splits off where the line still has a move to play (0–${cut.moves.length - 1}${cut.moves.length < sl.moves.length ? `; the line is cut to ${cut.moves.length} moves` : ""}).`);
+    const fen = at ? cut.moves[at - 1].after : cut.fen;
+    const thenRaw = b?.then === undefined || b?.then === null ? [] : Array.isArray(b.then) ? b.then.map((x: unknown) => str(x).trim()) : null;
+    if (!thenRaw) throw new ActionError(`${w}.then must be a list of moves.`);
+    const chosen = walk(fen, [str(b?.move).trim(), ...thenRaw], variantOf(g));
+    const alt = chosen[0];
+    const list = offered.map((o) => `at ${o.at}: ${o.moves[0].san}`).join(", ") || "none";
+    if (!alt) throw new ActionError(`${w}.move: "${str(b?.move)}" isn't a legal move there. The branches on offer: ${list}.`);
+    if (chosen.length < 1 + thenRaw.length) throw new ActionError(`${w}.then: ${thenRaw[chosen.length - 1]} isn't legal after ${chosen.map((mv) => mv.san).join(" ")}.`);
+    if (alt.uci === cut.moves[at].uci) throw new ActionError(`${w}.move: ${alt.san} is the line's own move there; a branch plays something else.`);
+    const then = chosen.slice(1).map((mv) => mv.uci);
+    // An offered branch, or any move the director has probed there (its positions analysed).
+    const br = planBranch(g, cut, { at, uci: alt.uci, then });
+    const probeAt = `${g.moves[sl.i].ply}${sl.kind === "after" ? "a" : "i"}${at}`;
+    if (!br) throw new ActionError(`${w}: ${[alt, ...chosen.slice(1)].map((mv) => mv.san).join(" ")} at ${at} hasn't been analysed yet. Probe it first (\`probe ${probeAt} ${chosen.map((mv) => mv.san).join(" ")}\`), or pick one of the branches on offer: ${list}.`);
+    if (out.some((o) => o.at === at && o.uci === alt.uci && (o.then ?? []).join() === then.join())) throw new ActionError(`${w}: the same branch twice.`);
+    const when = b?.when === undefined || b?.when === null ? "after" : b.when;
+    if (when !== "before" && when !== "after") throw new ActionError(`${w}.when must be "before" or "after".`);
+    const whole: ShownLine = { ...cut, fen: br.fen, moves: br.moves };
+    let end: number | undefined;
+    if (b?.end !== undefined && b?.end !== null && b?.end !== "") {
+      end = lineStep(whole, b.end, `${w}.end`);
+      if (end < 1) throw new ActionError(`${w}.end: the branch shows at least its first move.`);
+      if (end >= br.moves.length) end = undefined;
+    }
+    const shown: ShownLine = end ? { ...whole, moves: br.moves.slice(0, end) } : whole;
+    if (Array.isArray(b?.beats) && b.beats.length > MAX_BRANCH_BEATS) throw new ActionError(`${w}.beats: ${b.beats.length} lines; keep it to at most ${MAX_BRANCH_BEATS}.`);
+    if (Array.isArray(b?.beats) && b.beats.some((x: any) => x?.enter !== undefined)) throw new ActionError(`${w}.beats: enter is for the line's first beat only.`);
+    const bb = lineBeats(g, shown, b?.beats, `${w}.beats`);
+    if (when === "before") {
+      // It plays just ahead of the first beat that moves the board on from its point (see the timeline), so no beat
+      // before its point may already have brought the line past it.
+      const over = (beats ?? []).find((x) => x.at < at && (x.cues ?? []).some((c) => c.moves > at));
+      if (over)
+        throw new ActionError(`${w}: a "before" branch at ${at} plays when the line gets there, but the beat "${over.text.slice(0, 40)}…" (at ${over.at}) already brings the line past ${at}. Move that cue into a beat at ${at} or later, or make the branch "after".`);
+    }
+    out.push({ at, uci: alt.uci, ...(then.length && { then }), when, ...(end && { end }), ...(bb && { beats: bb }) });
+  });
+  return out.length ? out : undefined;
+}
 
 /**
  * A point in a line, as a count of its moves on the board (0: none yet), "start", or one of its moves in SAN
@@ -1105,21 +1240,46 @@ function markItem(raw: unknown, key: "draw" | "sq"): { what: string; at?: string
  * says), or else from one earlier in the game, for moves looked back on. Every word naming a move, a square
  * or a piece is in one of its mark's refs, which say what it points at (checkRefs).
  */
-function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: unknown, where: string): ThoughtMark[] | undefined {
+function thoughtMarks(g: Game, m: MoveRecord, quote: string | undefined, raw: unknown, where: string, strict = false): ThoughtMark[] | undefined {
   const list = raw === undefined || raw === null ? [] : raw;
   if (!Array.isArray(list)) throw new ActionError(`${where}.marks must be a list.`);
   if (!quote) {
     if (list.length) throw new ActionError(`${where}.marks: marks are drawn while the quote is spoken, and there's no quote.`);
     return undefined;
   }
-  const marks = list.length ? markList(g, m, quote, list, where) : [];
-  checkRefs(g, m, quote, marks, where);
-  return marks.length ? marks : undefined;
+  try {
+    const marks = list.length ? markList(g, m, quote, list, where) : [];
+    checkRefs(g, m, quote, marks, where);
+    return marks.length ? marks : undefined;
+  } catch (e) {
+    if (!(e instanceof ActionError) || strict) throw e;
+    // Drawings are best effort: they never cost a quote, a moment or its line. Every mark that can be drawn is
+    // kept, in order; when what they light up can't be checked, their refs go (the words are coloured as found).
+    const kept: unknown[] = [];
+    for (const x of list) {
+      try {
+        markList(g, m, quote, [...kept, x], where);
+        kept.push(x);
+      } catch {}
+    }
+    let marks = kept.length ? markList(g, m, quote, kept, where) : [];
+    const refsOff = !!marks.length && refProblems(quote, marks, markFens(g, m), m.color).length > 0;
+    if (refsOff) marks = marks.map(({ refs: _, ...mk }) => mk);
+    markNotes?.push(
+      `${where}: ${list.length - kept.length ? `${list.length - kept.length} of its ${list.length} marks couldn't be drawn and were left out` : "its marks are kept"}${refsOff ? ", and the words they light are found automatically" : ""}. Why: ${e.message.split("\n").slice(0, 3).join(" ")}`,
+    );
+    return marks.length ? marks : undefined;
+  }
 }
+
+/** Where the best-effort drawings note what they left out, while a plan is checked (read back with it). */
+let markNotes: string[] | null = null;
+/** What each checked plan's drawings left out, for its readback. */
+export const planNotes = new WeakMap<VideoPlan, string[]>();
 
 /** One quote's marks, as the director would submit them for move `ply`, checked as a plan's are (scripts/test-marks.ts). */
 export function checkedMarks(g: Game, ply: number, quote: string, raw: unknown): ThoughtMark[] | undefined {
-  return thoughtMarks(g, moveAt(g, ply, "test"), quote, raw, "marks");
+  return thoughtMarks(g, moveAt(g, ply, "test"), quote, raw, "marks", true);
 }
 
 /** One moment's engine line, as the director would submit it for move `ply`, checked as a plan's is. */
@@ -1294,6 +1454,13 @@ export function planReadback(g: Game, plan: VideoPlan): string {
     ...plan.moments.flatMap((x) => (x.thought && x.marks?.length ? [{ label: `Ply ${x.ply}`, ply: x.ply, quote: x.thought, marks: x.marks }] : [])),
   ];
   const out: string[] = [];
+  const dropped = planNotes.get(plan);
+  if (dropped?.length)
+    out.push(
+      "Drawings left out (the quotes, moments and lines all stay; fix these only if the drawing matters, otherwise leave them):",
+      ...dropped.map((n) => `  - ${n}`),
+      "",
+    );
   for (const q of quotes) {
     const m = g.moves.find((x) => x.ply === q.ply)!;
     const fens = markFens(g, m);
@@ -1475,6 +1642,7 @@ export function narratedReadback(g: Game, plan: VideoPlan): string[] {
       out.push(`  ${k + 1}. ${mv.san}${verdicts[k] ? ` (${verdicts[k]})` : ""}, eval ${formatScore(g.analysis[mv.after]?.score)}${timing}${warn}`);
       beatsAt(k + 1);
     });
+    out.push(...branchReadback(g, sl, ln, scene), ...understoodReadback(g, sl, ln));
     // The whole exchange around it, in order, so three voices in a row can be read as one conversation; a
     // player's line that walks through the same squares as the narrator's is flagged (it probably repeats it).
     const near = speechAround(g, plan, i);
@@ -1493,6 +1661,85 @@ export function narratedReadback(g: Game, plan: VideoPlan): string[] {
   const nudge = sameSide(g, plan);
   if (nudge) out.push(`Where the lines play: ${placements(g, plan).map((s) => s.trim()).join("; ")}. ${nudge}`, "");
   return out;
+}
+
+/** How much a branch must be worth (see branchLine's score) to be recommended: the natural move that fails, or a player's own idea. */
+const RECOMMEND = 40;
+
+/** The branch the brief recommends for a moment's line (★): its best one, when it's worth it and the moment is shown in both cuts. */
+function recommendedBranch(g: Game, x: VideoMoment, sl: ShownLine): ShownBranch | undefined {
+  if (x.importance < 2) return undefined;
+  const top = branchOptions(g, sl)[0];
+  return top && top.score >= RECOMMEND ? top : undefined;
+}
+
+/** The narrator's beats as they'll play, with where the board moves (⟨…lands⟩) and what's drawn ({…}) in their words; `on` is where the board starts. */
+function markedBeats(beats: LineBeat[], moves: RulesMove[], k: number, on: { n: number }, indent = "    "): string[] {
+  return beats
+    .filter((b) => b.at === k)
+    .map((b) => {
+      on.n = Math.max(on.n, b.at);
+      const ws = quoteWords(b.text);
+      const marked = ws.map((wd, j) => {
+        const tags: string[] = [];
+        if (b.enter === j) tags.push("⟨engine view opens; rewind if after the move⟩");
+        for (const c of (b.cues ?? []).filter((c) => c.word === j)) {
+          tags.push(`⟨${moves.slice(on.n, c.moves).map((mv) => mv.san).join(" ")} lands⟩`);
+          on.n = c.moves;
+        }
+        for (const d of (b.draw ?? []).filter((d) => d.word === j)) tags.push(d.ring ? `{circle ${d.ring}}` : `{${d.from}→${d.to}}`);
+        return tags.length ? `${wd} ${tags.join(" ")}` : wd;
+      });
+      return `${indent}narrator${b.delivery ? ` (${b.delivery})` : ""}: "${marked.join(" ")}"`;
+    });
+}
+
+/** A line's branches as they'll play, for the readback: where each splits, its moves with their timing, and its beats. */
+function branchReadback(g: Game, sl: ShownLine, ln: NonNullable<VideoMoment["line"]>, scene: Extract<Scene, { kind: "line" }> | undefined): string[] {
+  const out: string[] = [];
+  (ln.branches ?? []).forEach((b, j) => {
+    const br = planBranch(g, sl, b);
+    if (!br) return void out.push(`  branch ${j + 1}: can't be shown any more (drop it)`);
+    const bs = scene?.branches?.[j];
+    const split = b.at ? `after ${sl.moves.slice(0, b.at).map((mv) => mv.san).join(" ")}` : "at the start of the line";
+    out.push(`  branch ${j + 1} (${b.when === "before" ? `played as the line gets there, then the board winds back and the line goes on` : "played once the line is done: the board winds back to where it splits"}), splitting ${split}: ${br.question} → ${br.fact}`);
+    const vs = lineVerdicts(g, br.moves);
+    const on = { n: 0 };
+    out.push(...markedBeats(b.beats ?? [], br.moves, 0, on, "      "));
+    br.moves.forEach((mv, k) => {
+      const land = bs ? bs.moveAt[k] + LINE_SLIDE : undefined;
+      const alone = bs && land !== undefined ? (bs.moveAt[k + 1] ?? land + ROOM) - land : undefined;
+      const hard = vs[k] === "great" || vs[k] === "brilliant";
+      const timing = land !== undefined ? `; lands ${land.toFixed(1)} s in` : "";
+      const warn = hard && alone !== undefined && alone < ROOM ? ` ⚠ the ${vs[k]} move is gone before it can land: shape the words to give it room` : "";
+      out.push(`    ${k + 1}. ${mv.san}${vs[k] ? ` (${vs[k]})` : ""}, eval ${formatScore(g.analysis[mv.after]?.score)}${timing}${warn}`);
+      out.push(...markedBeats(b.beats ?? [], br.moves, k + 1, on, "      "));
+    });
+    if (!b.beats?.length) out.push("    ⚠ no beats: the branch plays in silence; say what question it answers");
+  });
+  return out;
+}
+
+/**
+ * What the viewer must understand of a line (see mustUnderstand), each with whether the beats look like they say
+ * it: its piece or threat named, and for a "can't get out", words that say so. A nudge for the narrator, not a check.
+ */
+function understoodReadback(g: Game, sl: ShownLine, ln: NonNullable<VideoMoment["line"]>): string[] {
+  const qs = mustUnderstand(g, sl).filter((q) => q.at <= sl.moves.length);
+  if (!qs.length) return [];
+  const said = [...(ln.beats ?? []), ...(ln.branches ?? []).flatMap((b) => b.beats ?? [])].map((b) => b.text.toLowerCase()).join(" ");
+  // Said in one sentence: the piece (or the threat's move) and, for a "can't get out", words that say there's no way out.
+  const sentences = said.split(/[.!?…]+/);
+  const cant = /\b(can't|cannot|can not|nothing|no way|nowhere|whatever|every|anything|unstoppable|doomed|trapped|lost)\b/;
+  return [
+    "  What the viewer must understand (from the engine; ⚠ where the beats don't seem to say it):",
+    ...qs.map((q) => {
+      const names = (s: string) => !q.keys?.length || q.keys.some((k) => s.includes(k.toLowerCase()));
+      // A "can't get out" is said by any sentence that says so (the piece may be named around it); a threat, by naming it.
+      const ok = q.kind === "decided" ? sentences.some((s) => cant.test(s)) : sentences.some(names);
+      return `    ${ok ? "✓" : "⚠"} ${q.question} → ${q.answer}`;
+    }),
+  ];
 }
 
 /** Whether a line can play before its move: an `instead` line without a punishment (which needs the move on the board). */
@@ -1569,7 +1816,16 @@ function speechAround(g: Game, plan: VideoPlan, i: number): SpeechNear[] {
 function lineSteps(g: Game, sl: ShownLine): string[] {
   const vs = lineVerdicts(g, sl.moves);
   return sl.moves.map((mv, k) => {
-    const notes = [vs[k] && vs[k] !== "best" ? vs[k] : "", moveFacts(mv)].filter(Boolean).join("; ");
+    // For the losing side, how forced its best move is: what its next best would have cost on top.
+    const a = g.analysis[mv.before];
+    const forced =
+      mv.color !== sl.for && a && !a.failed && a.second && (a.bestUci ?? a.pv[0]) === mv.uci
+        ? (() => {
+            const drop = winPercentFor(a.score, mv.color) - winPercentFor(a.second, mv.color);
+            return drop >= 10 ? `its best try, and the next best is ${Math.round(drop)} points worse` : "";
+          })()
+        : "";
+    const notes = [vs[k] && vs[k] !== "best" ? vs[k] : "", moveFacts(mv), forced].filter(Boolean).join("; ");
     return `    ${k + 1}. ${mv.san}${notes ? ` (${notes})` : ""}, eval ${formatScore(g.analysis[mv.after]?.score)}`;
   });
 }
@@ -1628,6 +1884,28 @@ export function narrateBrief(g: Game): string {
     "Mix them across the video: every line a puzzle (or every line a reveal) gets predictable, and two lines a few moves apart read better as one of each. A line that shows a punishment, or isn't an \"instead\" line, always plays after its move.",
     "Where the lines play now:",
     ...placements(g, plan),
+    "",
+    "## Seeing the picture: work out WHY before you write",
+    "An engine line on its own is just moves. Your job is to find out why they are the moves, the way a strong commentator does at the board, and then say that. You can ask the engine three questions, from any position of the game or of a line, as often and as deep as you need (run them like your other commands):",
+    ...PROBE_COMMANDS.split("\n"),
+    "How to read the answers:",
+    "- The engine's line is both sides' best play. If the losing side's BEST move still loses the bishop, every other move loses at least as much: the bishop can't be saved. `options` at that point shows it: every one of its moves loses it, and how. That is the sentence the viewer needs (\"the bishop has nowhere to go and nothing can defend it\"), not \"the rook steps aside\".",
+    "- A quiet move in a line nearly always threatens something: `threat` right after it says what, and `options` for the other side shows whether it can be met.",
+    "- A sacrifice has a point. `probe` the other side taking it and see what happens: that is usually the most exciting thing in the line, and it belongs in the video, before the line shows that declining is the best defence.",
+    "- A natural move that \"fails\" is only worth showing when the refutation takes a moment to see. A piece that just hangs to a recapture is not a question anyone asks.",
+    "For each line, before you write it:",
+    "1. What does it end with, and where is it decided: the first position where every option of the losing side loses?",
+    "2. What decides it: the threat, the piece that can't be saved, the pawn that can't be stopped, the sacrifice that can't be taken? Check each with `threat`, `options` and `probe`.",
+    "3. Which question would a viewer ask there (what if they take? can't they just defend? why not the obvious move?), and what answers it on the board? That is your branch.",
+    "4. Then write the beats: the why in plain chess words, with the forced replies flying by under a phrase.",
+    "Say only what the engine's answers show, and probe until you're sure.",
+    "",
+    "## Branches: calculating out loud",
+    "When a position is hard, the best commentators don't show one line: they answer the viewer's questions on the board. \"What if Black just takes the bishop?\" Play it, show the point, wind back. \"Can't Black defend with the rook?\" Play that too, and it still loses. A line can do the same with branches. Each line below lists the branches the engine has already worked out (the sacrifice accepted, a player's own idea, the natural move that fails, the other side's other try), and any move you have probed at a point of the line can be a branch too, with moves of your own after it (`then`) before the engine plays on.",
+    "- When: a line with a sacrifice or a hard move in it (great, brilliant), a defence that looks like it should work, or a player who saw the idea and talked themselves out of it. One branch on a showpiece line is the usual; two when both are questions a viewer would really ask. A branch marked ★ is recommended for its line: play it, or a better one you found by probing.",
+    "- \"before\": the line gets to the branch's point, the branch plays, the board winds back, and the line goes on as the answer. Best for the sacrifice accepted (its point first, then the line shows the best defence: declining) and for the natural move that fails just before a hard move (\"Not the king. The KNIGHT takes.\"). It plays just ahead of the first of the line's beats that moves the board on from its point: a beat at the branch's point with a cue, or any beat past it. So write the line's answer as a beat at the branch's `at` with a cue on its move.",
+    "- \"after\": the line plays out, then the board winds back to where the other side could have tried something else, and you show it loses too (\"But what if Black defends with the rook?\"). Best for the other side's try, or a player's own worry.",
+    "- A branch's first beat is said with the board at the split point: ask the question there, then cue the other move on the words that name it. Keep a branch short (two to four beats): the line is still the story, and the branch serves it. Every move in a branch gets its badge, and the callout up top and the eval bar follow it.",
   ];
   if (!lines.length) out.push("", "This plan has no engine lines, so there's nothing to narrate.");
   for (const x of lines) {
@@ -1648,6 +1926,15 @@ export function narrateBrief(g: Game): string {
       `The line (${full.moves.length} moves; what it shows: ${full.fact}):`,
       ...lineSteps(g, full),
       ...(full.punish ? [`What ${m.san} really allowed instead: ${full.punish.moves.slice(1).map((mv) => mv.san).join(" ")} → ${full.punish.fact}.`] : []),
+      ...(() => {
+        const star = recommendedBranch(g, x, full);
+        return [
+          ...understandLines(g, full),
+          ...questionLines(g, full, 8, star, true),
+          `Where a question names a branch, give its \`at\` and \`move\` to play it (the ★ one is recommended). Any move you probe at a point of the line can be a branch too.`,
+          ...(ln.branches?.length ? [`Branches in the plan now: ${ln.branches.map((b) => `at ${b.at} ${walk(b.at ? full.moves[b.at - 1]?.after ?? full.fen : full.fen, [b.uci], variantOf(g))[0]?.san ?? b.uci} (${b.when})`).join(", ")}.`] : []),
+        ];
+      })(),
       `What happened next in the game: ${g.moves.slice(i + 1, i + 4).map((mv) => `${moveNo(mv.ply)} ${mv.san} (${mv.analysis?.classification ?? "?"})`).join(", ") || "the game ended"}.`,
       ...(() => {
         const near = speechAround(g, plan, i);
@@ -1684,6 +1971,17 @@ export function narrateBrief(g: Game): string {
               { at: "start", text: "…the move named here lands as it's said…", delivery: "building", cues: [{ words: "…the words naming it…", moves: 1 }], draw: [{ words: "the queen on h4", reach: "f5>h4" }] },
               { at: 1, text: "…room for it, then on…" },
             ],
+            branches: [
+              {
+                at: 1,
+                move: "Qh5",
+                when: "after",
+                beats: [
+                  { at: "start", text: "…the question, with the board wound back to where it splits…" },
+                  { at: "start", text: "…the other move lands as it's named, and why it doesn't help…", cues: [{ words: "…the words naming it…", moves: 2 }] },
+                ],
+              },
+            ],
           },
           {
             ply: 81,
@@ -1705,10 +2003,11 @@ export function narrateBrief(g: Game): string {
     "```",
     "- lines: one entry per line you narrate (a line you leave out keeps what it has). `ply` is the moment's ply.",
     "- beats: what the narrator says, in order, up to 8 per line, each at most 60 words. `at`: where the board is when it starts (\"start\", a count of the line's moves on the board, or one of its moves in SAN, said once it has landed; a move that comes twice is given as a count). `delivery` (optional): how it's said, in at most 6 words (\"building\", \"amazed\", \"wincing\").",
-    "- enter (optional, first beat at start, without a punishment opening): exact words of that beat, e.g. \"enter\": \"Rewind\". Until those words the real board, move badge and eval stay visible. On the cue the board takes the engine tint and, for an after-the-move instead line, quickly undoes the player's move. Use it when reacting to the eval swing before looking back; whenever you say rewind, put the cue on that word. Omit it to enter immediately. Leave a short phrase after entry before the first move cue so the rewind can finish.",
-    "- cues (optional): the board follows your words. Each says: by these words of the text, this many of the line's moves (or up to this move) are on the board. The move lands as its words are said, and moves before it come in just ahead, quickly, so forced recaptures can fly by under one phrase. Without cues, a beat is said with the board standing still. After entry, cues only move forward. At the end the video automatically unwinds every variation move quickly to its starting position, then replays the real move if this was an after-the-move instead line. Do not add beats just to perform that return.",
+    "- enter (optional, first beat at start, without a punishment opening): exact words of that beat, e.g. \"enter\": \"Rewind\". Until those words the real board, move badge and eval stay visible. On the cue the board takes the engine tint and, for an after-the-move instead line, quickly undoes the player's move. Use it when reacting to the eval swing before looking back; whenever you say rewind, put the cue on that word. Say \"rewind\" (or anything like it) only where the board really winds back: an `instead` line played after its move. An `after` line plays forward from the position on screen, and a line played before its move starts from the position the player faced, so neither rewinds: lead straight into it (\"Here's why.\", \"Watch.\"). Omit it to enter immediately. Leave a short phrase after entry before the first move cue so the rewind can finish.",
+    "- cues (optional): the board follows your words. Each says: by these words of the text, this many of the line's moves (or up to this move) are on the board. The move lands as its words are said, and moves before it come in just ahead, each held long enough for its badge to show (just under a second apiece), so a run of forced replies plays under a phrase or two: give a long run the words to cover it. Without cues, a beat is said with the board standing still. After entry, cues only move forward. At the end the video automatically unwinds every variation move quickly to its starting position, then replays the real move if this was an after-the-move instead line. Do not add beats just to perform that return.",
     "- draw (optional): a piece's reach (\"from>to\", an attack or a defence) or a circled `square`, on the board as it is when its words are said. `words` is the whole phrase that names what it points at (\"the queen on h4\", not just \"queen\"): all of it lights up in that piece's colour, and the drawing appears as its first word is said.",
     "- end (optional): how many of the line's moves are shown (a count, or the move it ends on). Cut it once the point is made; without it the whole line plays. A line cut down to a plain capture the move's best-move arrow already shows is refused.",
+    `- branches (optional, at most ${MAX_BRANCHES}; required when the line has a ★): each { "at", "move", "when", "end", "beats" }. \`at\` and \`move\`: one of the branches listed for the line (the point as a count of the line's moves, the move in SAN). \`when\`: "before" or "after" (see "Branches"). \`end\` (optional): how many of the branch's moves are shown, its first move included. \`beats\`: up to ${MAX_BRANCH_BEATS}, written like the line's, but \`at\` and cues count the branch's own moves (0: the board at the split point, before the other move).`,
     "- bestArrow (optional, an `instead` line played after its move): when the move lands, its best-move arrow and \"best was…\" would show your answer before you reveal it, so by default they're hidden; true keeps them (for when the reveal isn't the point).",
     "- first (optional, an `instead` line without a punishment): true plays the line before the move (a puzzle), false after it (a reveal; the default). See \"Before or after the move\". Played before, leave room for the player's own words, which come right after your line.",
     "- speech (optional): what the players say around your lines, re-cut so the voices don't repeat each other. Each is { \"ply\": …, \"quote\": \"…\" }: on a moment, it replaces what the mover says there; on any other ply, it's the aside said there. The quote must be that move's own words, quoted exactly from its commentary (a moment's quote at most 60 words, an aside's at most 25); \"\" drops it. Only plies near a line can be changed (from two before it to six after). A re-cut quote keeps the drawings of the words it keeps.",
@@ -1738,9 +2037,15 @@ export function applyNarration(g: Game, raw: unknown): VideoPlan {
     if (l?.first === true && x.line.punish) throw new ActionError(`${where}.first: this line shows what the move allowed first, which needs the move on the board, so it can't play before it.`);
     if (x.line.punish && l?.beats?.some((b: any) => b?.enter !== undefined)) throw new ActionError(`${where}.beats: enter isn't available after a punishment opening.`);
     // The line's caption, refs and punishment stay as the plan has them; only the narration is checked here.
-    const parsed = lineChoice(g, i, { beats: l.beats, end: l.end, first: l.first, bestArrow: l.bestArrow, kind: x.line.kind }, `${where}`);
-    x.line = { ...x.line, ...(parsed?.beats ? { beats: parsed.beats } : {}), end: parsed?.end, first: parsed?.first, showBest: parsed?.showBest };
+    const parsed = lineChoice(g, i, { beats: l.beats, end: l.end, first: l.first, bestArrow: l.bestArrow, branches: l.branches, kind: x.line.kind }, `${where}`);
+    // A line with a branch the brief recommends (★) shows one: the question it answers is what makes the line.
+    const cut = parsed?.end ? { ...sl, moves: sl.moves.slice(0, parsed.end) } : sl;
+    const star = recommendedBranch(g, x, sl);
+    if (star && !parsed?.branches?.length && star.at < cut.moves.length)
+      throw new ActionError(`${where}.branches: this line has a recommended branch (★ at ${star.at}: ${star.moves[0].san}, "${star.question}"). Play it (or another one offered for this line), "before" or "after", with its own beats.`);
+    x.line = { ...x.line, ...(parsed?.beats ? { beats: parsed.beats } : {}), end: parsed?.end, first: parsed?.first, showBest: parsed?.showBest, branches: parsed?.branches };
     if (!x.line.showBest) delete x.line.showBest;
+    if (!x.line.branches) delete x.line.branches;
     if (!parsed?.beats) delete x.line.beats;
     if (!x.line.end) delete x.line.end;
     if (!x.line.first) delete x.line.first;

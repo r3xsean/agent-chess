@@ -1,8 +1,10 @@
 import type { Classification, Color, Game, LineRef } from "./types";
-import { variantOf, type RulesMove } from "./rules";
+import { newRules, variantOf, type RulesMove } from "./rules";
+import { winPercentFor } from "./evalmath";
 import { sideName } from "./naming";
 import { tally, trade, walk, type Tally } from "./why";
 import { boardOf, describe, owners, plainWord, pointsAt, quoteWords, type Piece, type RefColor } from "./thoughtMarks";
+import { attacked } from "./lineFacts";
 
 const PIECE_NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 
@@ -96,7 +98,9 @@ export function lineVerdicts(g: Game, moves: RulesMove[]): (Classification | und
     const played = g.moves.find((m) => m.fenBefore === mv.before && m.uci === mv.uci);
     if (played?.analysis && !played.analysis.unavailable) return played.analysis.classification;
     const a = g.analysis[mv.before];
-    return a && !a.failed && (a.bestUci ?? a.pv?.[0]) === mv.uci ? a.bestVerdict : undefined;
+    if (!a || a.failed) return undefined;
+    // The engine's own move has its verdict; another move played here (a branch, a probe) has its own.
+    return (a.bestUci ?? a.pv?.[0]) === mv.uci ? a.bestVerdict : a.verdicts?.[mv.uci];
   });
 }
 
@@ -310,6 +314,264 @@ export function planLine(g: Game, i: number, ask: { kind: LineKind; deep?: true;
 /** The lines on offer for move i. */
 export function lineOptions(g: Game, i: number): ShownLine[] {
   return LINE_KINDS.map((k) => shownLine(g, i, k)).filter((l): l is ShownLine => !!l);
+}
+
+/*
+ * Branches: the other ways a line could go, the questions a viewer asks of it, each played out by the engine
+ * from the point of the line where it splits off (the way a commentator calculates out loud: "but what if they
+ * take?"). The ones offered up front, by role:
+ * - "accepts": right after the line's side gives something up (a sacrifice, a piece left to be taken), the
+ *   other side takes it: the point of the sacrifice, played out;
+ * - "feared": a move from a player's own calculation on the move (MoveRecord.lines) that leaves the line there,
+ *   played out: what they worried about, or counted on, and what it really comes to;
+ * - "fails": at a hard move of the line (great: the only move; brilliant: the sacrifice) for the side it
+ *   favours, the natural other move there (another capture on the same square, a recapture, the engine's second
+ *   choice) throws the win away, for a reason that takes more than one move to see;
+ * - "holds": the other side's best other try at a point of the line (its second choice, or taking the piece
+ *   that just moved) loses too, and concretely.
+ * Offered only when it shows something concrete, as a line has to: a mate, at least MIN_GAIN pawns of
+ * material, or a BIG_SWING in the winning chances. server/lineDepth.ts analyses the candidates
+ * (branchCandidates) so the options can be read off the game's analysis. Beyond those, a director can play
+ * any move it has probed there (server/probe.ts), and moves of its own after it (`then`).
+ */
+
+export type BranchRole = "accepts" | "tempting" | "feared" | "fails" | "holds";
+
+export interface ShownBranch {
+  role: BranchRole;
+  /** How many of the line's moves are on the board where it splits off. */
+  at: number;
+  /** The position it splits from. */
+  fen: string;
+  uci: string;
+  /** The other move, any moves chosen after it, then the engine's best play, cut to its payoff. */
+  moves: RulesMove[];
+  /** The side that plays the other move. */
+  mover: Color;
+  /** The question it answers, for the brief: "What if Black takes?", "Why not Kxh7?". */
+  question: string;
+  /** What it shows in plain words: "Black wins the knight", "White still mates in 3". */
+  fact: string;
+  /** The line's winning chances (for the side the line favours) after the line's own move there, and after this one. */
+  winLine: number;
+  winBranch: number;
+  /** How much it's worth showing, to rank the options. */
+  score: number;
+  /** It takes back on the square the line's last move took on, in an even trade (not a sacrifice taken). */
+  takesBack?: boolean;
+}
+
+/** How far into a line a branch may split off (plies), and how many candidates are followed per line. */
+export const BRANCH_REACH = 10;
+const MAX_CANDIDATES = 8;
+/** How far a branch is followed (server/lineDepth.ts), and how much of it is shown. */
+export const BRANCH_WALK = 16;
+const BRANCH_CAPS = { plies: 12, mate: 17 };
+/** What a defender's try must leave the line's side, in winning chances, to count as still losing. */
+const STILL_WINNING = 70;
+/** Material worth calling a sacrifice when the other side could take it, in pawns. */
+const OFFERED = 3;
+const VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+/** The position k of a line's moves leave, and the move the line plays there. */
+const pointOf = (sl: ShownLine, k: number) => ({ fen: k ? sl.moves[k - 1].after : sl.fen, best: sl.moves[k] });
+
+/** The players' own calculations that start where the line does, as moves from the line's start. */
+function calcLines(g: Game, sl: ShownLine): { moves: RulesMove[]; by: Color }[] {
+  const variant = variantOf(g);
+  const m = g.moves[sl.i];
+  const out: { moves: RulesMove[]; by: Color }[] = [];
+  const read = (fen: string, san: string[]) => walk(fen, san, variant);
+  if (sl.kind === "instead") for (const c of m.lines ?? []) out.push({ moves: read(m.fenBefore, c.san), by: m.color });
+  else {
+    // The mover's lines start with the move itself; the reply's start from the position it left.
+    for (const c of m.lines ?? []) {
+      const ms = read(m.fenBefore, c.san);
+      if (ms[0]?.uci === m.uci) out.push({ moves: ms.slice(1), by: m.color });
+    }
+    const reply = g.moves[sl.i + 1];
+    for (const c of reply?.lines ?? []) out.push({ moves: read(m.fenAfter, c.san), by: reply.color });
+  }
+  return out.filter((l) => l.moves.length);
+}
+
+/**
+ * The other moves worth trying at the points of a line, for the engine to analyse (server/lineDepth.ts) and
+ * for branchOptions to read back: the sacrifices taken, the players' own calculations where they leave the
+ * line, the natural other moves at its hard moves, and the other side's best other try. Deterministic, from
+ * the game alone.
+ */
+export function branchCandidates(g: Game, sl: ShownLine): { at: number; fen: string; uci: string; role: BranchRole; by?: Color }[] {
+  const variant = variantOf(g);
+  const out: { at: number; fen: string; uci: string; role: BranchRole; by?: Color }[] = [];
+  // The game's own moves from where the line starts: while the line follows them, the game's next move isn't
+  // a branch (the replay shows it already, or the line was offered because the game went that way).
+  const game = g.moves.slice(sl.kind === "instead" ? sl.i : sl.i + 1);
+  const followed = (at: number) => sl.moves.slice(0, at).every((mv, j) => game[j]?.uci === mv.uci);
+  const add = (at: number, fen: string, uci: string | undefined, role: BranchRole, by?: Color) => {
+    if (!uci || uci === sl.moves[at]?.uci || out.some((c) => c.at === at && c.uci === uci)) return;
+    if (followed(at) && game[at]?.uci === uci) return;
+    out.push({ at, fen, uci, role, ...(by && { by }) });
+  };
+  const reach = Math.min(sl.moves.length, BRANCH_REACH);
+  const verdicts = lineVerdicts(g, sl.moves);
+  for (let k = 0; k < reach; k++) {
+    const { fen, best } = pointOf(sl, k);
+    if (best.color === sl.for || !k) continue;
+    // The other side takes what the line's side gives up, where the line doesn't: the piece that just moved, or
+    // one left where nothing takes back. The sacrifice accepted.
+    const prev = sl.moves[k - 1];
+    for (const mv of newRules(fen, variant).moves())
+      if (mv.captured && VALUE[mv.captured] >= OFFERED && !(best.captured && best.to === mv.to) && (mv.to === prev.to || !attacked(boardOf(mv.after), mv.to, sl.for)))
+        add(k, fen, mv.uci, "accepts");
+  }
+  // What the players calculated, where it leaves the line (not on its first move: that's the move played).
+  for (const { moves: calc, by } of calcLines(g, sl)) {
+    const k = calc.findIndex((mv, j) => sl.moves[j]?.uci !== mv.uci);
+    if (k >= 1 && k < reach) add(k, pointOf(sl, k).fen, calc[k].uci, "feared", by);
+  }
+  // The move a quick look picks, where the engine's deeper search wants another: the tempting one.
+  for (let k = 0; k < reach; k++) add(k, pointOf(sl, k).fen, g.analysis[pointOf(sl, k).fen]?.shallowUci, "tempting");
+  for (let k = 0; k < reach; k++) {
+    const { fen, best } = pointOf(sl, k);
+    const legal = newRules(fen, variant).moves();
+    if (legal.length < 2) continue;
+    const a = g.analysis[fen];
+    const prev = k ? sl.moves[k - 1] : sl.kind === "after" ? walk(g.moves[sl.i].fenBefore, [g.moves[sl.i].uci], variant)[0] : undefined;
+    if (best.color === sl.for) {
+      if (verdicts[k] !== "great" && verdicts[k] !== "brilliant") continue;
+      // The natural other move: another piece taking on the same square (Kxh7 for Nxh7), a recapture, the engine's second choice.
+      for (const mv of legal) if (mv.captured && (mv.to === best.to || mv.to === prev?.to) && mv.uci !== best.uci) add(k, fen, mv.uci, "fails");
+      add(k, fen, a?.secondUci, "fails");
+    } else {
+      add(k, fen, a?.secondUci, "holds");
+      // Taking the piece that just moved, when the line doesn't.
+      for (const mv of legal) if (prev && mv.captured && mv.to === prev.to) add(k, fen, mv.uci, "holds");
+    }
+  }
+  const rank: Record<BranchRole, number> = { accepts: 0, feared: 1, tempting: 2, fails: 3, holds: 4 };
+  return out.sort((x, y) => rank[x.role] - rank[y.role] || x.at - y.at).slice(0, MAX_CANDIDATES);
+}
+
+/** The moves played out from the moves chosen (the other move, and any after it): the engine's best play after them, cut to its payoff for `side`. */
+function branchMoves(g: Game, chosen: RulesMove[], side: Color): RulesMove[] {
+  const all = [...chosen, ...enginePath(g, chosen.at(-1)!.after, BRANCH_WALK)];
+  const n = chosen.length;
+  const mateAt = all.findIndex((mv) => mv.san.endsWith("#"));
+  if (mateAt >= 0 && mateAt < BRANCH_CAPS.mate + n) return all.slice(0, mateAt + 1);
+  let k = Math.min(all.length, BRANCH_CAPS.plies + n);
+  while (k < all.length && k < BRANCH_CAPS.plies + n + 4 && all[k].captured) k++;
+  if (k < all.length && all[k].captured) while (k > n && all[k - 1].captured) k--;
+  while (k > n && !all[k - 1].captured && !all[k - 1].promotion) k--;
+  const cut = all.slice(0, Math.max(k, Math.min(n + QUIET_PLIES, all.length)));
+  // The payoff cut never takes back a move that was chosen.
+  const paid = toPayoff(cut, side);
+  return paid.length >= n ? paid : cut;
+}
+
+/**
+ * Another way the line goes from a point of it (`at` of its moves on the board, `uci` played there, then any
+ * moves chosen after it), played out, with what it shows; null when it can't be shown (not analysed, illegal),
+ * and `ok: false` when it shows nothing concrete enough to offer (a plan that asked for it still gets it).
+ */
+export function branchLine(g: Game, sl: ShownLine, at: number, uci: string, role?: BranchRole, by?: Color, then: string[] = []): (ShownBranch & { ok: boolean }) | null {
+  if (at < 0 || at >= sl.moves.length) return null;
+  const variant = variantOf(g);
+  const { fen, best } = pointOf(sl, at);
+  const chosen = walk(fen, [uci, ...then], variant);
+  const alt = chosen[0];
+  if (!alt || chosen.length < 1 + then.length || alt.uci === best.uci) return null;
+  const aAlt = g.analysis[alt.after];
+  const aBest = g.analysis[best.after];
+  const aEnd = g.analysis[chosen.at(-1)!.after];
+  if (!aAlt || aAlt.failed || !aBest || aBest.failed || !aEnd || aEnd.failed) return null;
+  const hero = sl.for;
+  const opp: Color = hero === "w" ? "b" : "w";
+  const name = (c: Color) => sideName(g, c);
+  const winLine = winPercentFor(aBest.score, hero);
+  const winBranch = winPercentFor(aEnd.score, hero);
+  const heroMoved = alt.color === hero;
+  const r: BranchRole = role ?? (heroMoved ? "fails" : alt.captured && VALUE[alt.captured] >= OFFERED ? "accepts" : "holds");
+  // Whose payoff it's cut to: the other side's, when the line's side goes wrong; else the line's side's.
+  const winner = heroMoved && winLine - winBranch >= BIG_SWING ? opp : winBranch < 50 ? opp : hero;
+  const moves = branchMoves(g, chosen, winner);
+  const mated = mates(moves) ? moves.at(-1)!.color : null;
+  // Cut to its payoff already (branchMoves), so the captures it ends on count.
+  const t = tally(moves, winner, true);
+  const mateIn = mated ? moves.filter((mv) => mv.color === mated).length : 0;
+  let fact: string;
+  let ok: boolean;
+  if (winner === opp) {
+    // The line's side goes wrong (or the other side's try turns the tables).
+    fact =
+      mated === opp
+        ? `${name(opp)} mates in ${mateIn}`
+        : t.net >= MIN_GAIN || t.promoted.includes(opp)
+          ? `${name(opp)} ${prize(t, opp, "present")} (+${t.net})`
+          : `${name(hero)} is left with ${standing(winBranch)} (${Math.round(winBranch)}% instead of ${Math.round(winLine)}%)`;
+    // A move that just hangs what it moved, taken straight back, is no question worth asking: the viewer sees it.
+    const hangs = !!moves[1]?.captured && moves[1].to === alt.to && tally(moves.slice(0, 2), opp, true).net >= t.net;
+    ok = heroMoved && moves.length >= 2 && (r === "feared" || !hangs);
+  } else if (heroMoved) {
+    // The line's side's other move that still does the job: worth showing only as a player's own idea.
+    fact = mated === hero ? `${name(hero)} still mates in ${mateIn}` : `${name(hero)} keeps ${standing(winBranch)} (${Math.round(winBranch)}%, against ${Math.round(winLine)}% for the line)`;
+    ok = r === "feared" && moves.length >= 2;
+  } else {
+    // The other side's try, or the sacrifice taken: it still loses, concretely.
+    const concrete = mated === hero || t.net >= MIN_GAIN || t.promoted.includes(hero);
+    fact =
+      mated === hero
+        ? `${name(hero)} ${r === "accepts" ? "mates" : "still mates"} in ${mateIn}`
+        : concrete
+          ? `${name(hero)} ${r === "accepts" ? "" : "still "}${prize(t, hero, "present")} (+${t.net})`
+          : `${name(hero)} keeps ${standing(winBranch)} (${Math.round(winBranch)}%)`;
+    ok = winBranch >= STILL_WINNING && concrete && moves.length >= 2;
+  }
+  const taken = alt.captured ? `${PIECE_NAME[alt.captured]} on ${alt.to}` : "";
+  // Taking back an even trade, not a sacrifice: the piece that took was worth no more than what it took.
+  const before = at > 0 ? sl.moves[at - 1] : undefined;
+  const takesBack = !!before?.captured && before.to === alt.to && VALUE[before.captured] >= VALUE[before.piece];
+  const question =
+    r === "accepts"
+      ? takesBack
+        ? `What if ${name(alt.color)} takes back on ${alt.to}? ${alt.san}`
+        : `What if ${name(alt.color)} takes the ${taken}? ${alt.san}`
+      : r === "tempting"
+        ? heroMoved
+          ? `Why not the natural ${alt.san}?`
+          : `What about ${alt.san}, the natural try?`
+      : r === "feared"
+        ? `What ${name(by ?? g.moves[sl.i].color)}'s own calculation had: ${alt.san}`
+        : heroMoved
+          ? `Why not ${alt.san}?`
+          : `What if ${alt.san} instead of ${best.san}?`;
+  const prev = at ? lineVerdicts(g, [sl.moves[at - 1]])[0] : undefined;
+  const score =
+    (r === "accepts" ? (takesBack ? 30 : 70 + (prev === "brilliant" || prev === "great" ? 10 : 0)) : r === "tempting" ? (heroMoved ? 60 : 35) : r === "feared" ? 50 : r === "fails" ? 40 + Math.min(20, (winLine - winBranch) / 4) : 15 + (alt.captured ? 10 : 0)) -
+    at / 2;
+  return { role: r, at, fen, uci: alt.uci, moves, mover: alt.color, question, fact, winLine, winBranch, score, ok, ...(takesBack && { takesBack }) };
+}
+
+/** The branches on offer for a line, best first: each candidate the engine has analysed that shows something. */
+export function branchOptions(g: Game, sl: ShownLine): ShownBranch[] {
+  const out: ShownBranch[] = [];
+  for (const c of branchCandidates(g, sl)) {
+    const b = branchLine(g, sl, c.at, c.uci, c.role, c.by);
+    if (!b?.ok) continue;
+    // Two tries that come to the same thing (the same moves after the first) are one question.
+    if (out.some((o) => o.at === b.at && o.moves.slice(1).map((m) => m.uci).join() === b.moves.slice(1).map((m) => m.uci).join() && b.moves.length > 1)) continue;
+    const { ok: _, ...shown } = b;
+    out.push(shown);
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/** A branch as a plan asks for it, cut to its `end`; null when it can't be shown any more. */
+export function planBranch(g: Game, sl: ShownLine, b: { at: number; uci: string; then?: string[]; end?: number }): ShownBranch | null {
+  const br = branchLine(g, sl, b.at, b.uci, undefined, undefined, b.then ?? []);
+  if (!br) return null;
+  const { ok: _, ...shown } = br;
+  return b.end && b.end < shown.moves.length ? { ...shown, moves: shown.moves.slice(0, Math.max(1, b.end)) } : shown;
 }
 
 /*

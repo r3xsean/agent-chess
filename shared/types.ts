@@ -50,6 +50,22 @@ export interface PositionAnalysis {
   pv: string[];
   /** Second-best line score (White POV), when one exists. */
   second?: Score;
+  /** The second-best move (UCI), when one exists: an engine line's branch point offers it (see shared/engineLine.ts). */
+  secondUci?: string;
+  /**
+   * The verdict on other moves played here (by UCI), judged as a game move would be: the branches and probes
+   * of engine lines play moves the engine wouldn't, and each still gets its badge (see server/lineDepth.ts).
+   */
+  verdicts?: Record<string, Classification>;
+  /**
+   * What an engine line's questions are answered from (server/lineQuestions.ts), searched for the points of the
+   * lines most worth a video: the side to move's best few moves, each with its line (`options`); what the side
+   * that just moved would play if the other passed (`threat`); and the move a quick, shallow search picks
+   * (`shallowUci`), the one a human reaches for when it isn't the engine's.
+   */
+  options?: { uci: string; score: Score; pv: string[] }[];
+  threat?: { score: Score; pv: string[] } | null;
+  shallowUci?: string;
   /** The engine could not analyze this position (retried on next server start). */
   failed?: boolean;
   /**
@@ -286,6 +302,8 @@ export interface VideoMoment {
      * the position the player faced, the line plays, and then the player's quote and their real move land.
      */
     first?: boolean;
+    /** Other ways the line could go, each played from a point of it and narrated in turn (see LineBranch). */
+    branches?: LineBranch[];
   };
   /** The moves and squares the quote names, drawn on the board as it's said. */
   marks?: ThoughtMark[];
@@ -353,6 +371,24 @@ export interface LineBeat {
   enter?: number;
   /** What the words point at, drawn as they're said: a piece's reach ("f5>h4", from/to) or a circled square. */
   draw?: { word: number; last?: number; from?: string; to?: string; ring?: string }[];
+}
+
+/**
+ * A branch of an engine line (see shared/engineLine.ts, ShownBranch): once `at` of the line's moves are on the
+ * board, another move (`uci`) is played there instead, and the engine's best play after it, cut to `end` moves
+ * (the other move included). `when`: "before", the branch plays as the line reaches `at` and the board winds
+ * back to it before the line goes on (the natural move that fails, shown before the one that works); "after",
+ * once the line has played out the board winds back to `at` for it (what if they try this instead?). `beats`
+ * are the narrator's over it, `at` and cues counting the branch's own moves.
+ */
+export interface LineBranch {
+  at: number;
+  uci: string;
+  /** Moves chosen after `uci` (UCI), played before the engine's best play takes over: a line of the director's own. */
+  then?: string[];
+  when: "before" | "after";
+  end?: number;
+  beats?: LineBeat[];
 }
 
 /** A piece's attack or defence drawn with a caption ("d4>f3"), up while the piece stays on `from`. */

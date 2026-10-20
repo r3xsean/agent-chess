@@ -73,7 +73,17 @@ export async function launchGame(g: Game): Promise<{ direct: SeatRole[]; orchest
 export async function launchDirector(g: Game): Promise<string | undefined> {
   const spec = directorLaunch(g);
   if (!spec.tasks.length) return "note" in spec ? spec.note : undefined;
-  if (await launchDirect(g, "d")) return;
+  // Started in its own thread when a webhook covers its model: it asks for its task with its session key.
+  const { model, effort } = directorWho(g);
+  const url = agentWebhook(model, effort);
+  if (url && "key" in spec && spec.key) {
+    try {
+      await triggerAgent(url, spec.key);
+      return;
+    } catch (e) {
+      console.error(`[launch] ${g.id} director: ${(e as Error).message}`);
+    }
+  }
   // The orchestrator's brief hands the seat out itself.
   if (g.launched) delete g.launched.d;
   saveGameNow(g);

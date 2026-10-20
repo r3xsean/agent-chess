@@ -23,6 +23,8 @@ function findStockfish(): string {
 interface Job {
   fen: string;
   variant: Variant;
+  /** Lines wanted (MultiPV), returned all together (multi); the usual two otherwise. */
+  multipv?: number;
   resolve: (a: PositionAnalysis) => void;
   reject: (e: Error) => void;
   attempts?: number;
@@ -138,9 +140,10 @@ export class Engine {
     this.proc?.stdin.write(cmd + "\n");
   }
 
-  analyze(fen: string, variant: Variant = "standard"): Promise<PositionAnalysis> {
+  /** `multipv`: search that many lines and return them all (`multi`), best first. */
+  analyze(fen: string, variant: Variant = "standard", multipv?: number): Promise<PositionAnalysis & { multi?: { score: Score; pv: string[] }[] }> {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fen, variant, resolve, reject });
+      this.queue.push({ fen, variant, resolve, reject, ...(multipv && { multipv }) });
       this.pump();
     });
   }
@@ -182,13 +185,21 @@ export class Engine {
         this.lineHandler = null;
         this.busy = false;
         this.current = null;
+        if (job.multipv) this.send("setoption name MultiPV value 2");
         const best = lines[1];
-        const result: PositionAnalysis = {
+        const result: PositionAnalysis & { multi?: { score: Score; pv: string[] }[] } = {
           depth: best?.depth ?? 0,
           score: best?.score ?? { cp: 0 },
           bestUci: best?.pv[0] ?? line.split(" ")[1],
           pv: best?.pv.slice(0, 12) ?? [],
           second: lines[2]?.score,
+          ...(lines[2]?.pv[0] && { secondUci: lines[2].pv[0] }),
+          ...(job.multipv && {
+            multi: Object.keys(lines)
+              .map(Number)
+              .sort((a, b) => a - b)
+              .map((k) => ({ score: lines[k].score, pv: lines[k].pv })),
+          }),
         };
         result.bestSan = uciToSan(job.fen, result.bestUci, job.variant);
         job.resolve(result);
@@ -200,6 +211,7 @@ export class Engine {
       this.send(`setoption name UCI_Chess960 value ${want960}`);
       this.chess960 = want960;
     }
+    if (job.multipv) this.send(`setoption name MultiPV value ${job.multipv}`);
     this.send(`position fen ${job.fen}`);
     this.send(`go depth ${this.opts.depth}`);
   }

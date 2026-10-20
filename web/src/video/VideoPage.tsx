@@ -10,7 +10,7 @@ import { beliefs, judge, selfScore, standing, type Belief } from "../../../share
 import { makerOf } from "../../../shared/models";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
-import { fenAt, lineVerdicts, planLine, resolveLineRefs, shownLine, type LineKind, type ShownLine } from "../../../shared/engineLine";
+import { fenAt, lineVerdicts, planBranch, planLine, resolveLineRefs, shownLine, type LineKind, type ShownBranch, type ShownLine } from "../../../shared/engineLine";
 import { boardOf, pointsAt, quoteWords } from "../../../shared/thoughtMarks";
 import { api, type Lobby } from "../api";
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
@@ -19,7 +19,7 @@ import { fullName, isHuman, selfEvalColors, sideName } from "../../../shared/nam
 import { buildTimeline, FRAME, LINE_SLIDE, MARK_FADE, sceneAt, sfxCues, VOICE_AT, type AsideCue, type Format, type Scene, type SceneMark, type SfxCue, type Timeline } from "./timeline";
 import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
-import { lineTransition, rewindFrame } from "./linePlayback";
+import { lineTransition, rewindFrame, trackAt } from "./linePlayback";
 import { useMeta } from "../api";
 import "./video.css";
 
@@ -345,6 +345,24 @@ interface LinePrep {
   note: LineNote;
   compare?: LineCompare;
   punish?: { moves: RulesMove[]; material: MaterialInfo[]; labels: string[]; note: LineNote };
+  /**
+   * The plan's branches of the line, by their index in it (none: it can't be shown any more): each one's path
+   * (the line's first `at` moves, then its own) with the material, check and variation labels after each of its
+   * plies, its own moves' badges, and what it's called up top.
+   */
+  branches?: (LineBranchPrep | undefined)[];
+}
+interface LineBranchPrep {
+  br: ShownBranch;
+  path: RulesMove[];
+  material: MaterialInfo[];
+  check: (string | undefined)[];
+  labels: string[];
+  verdicts: (Classification | undefined)[];
+  label: string;
+  sub: string;
+  /** The side the line favours plays it, and it throws the win away. */
+  fails: boolean;
 }
 const lineCache = new WeakMap<Prep, Map<string, LinePrep | null>>();
 
@@ -422,6 +440,32 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
         note: lineNote(ask.punish.caption, ask.punish, m.fenBefore, pm, ask.punish.at, sl.for),
       };
     }
+    if (ask?.kind === kind && ask.branches?.length)
+      out.branches = ask.branches.map((b): LineBranchPrep | undefined => {
+        const br = planBranch(g, sl, b);
+        if (!br) return undefined;
+        const path = [...sl.moves.slice(0, br.at), ...br.moves];
+        const own = lineVerdicts(g, br.moves);
+        const pathSans = path.map((mv) => mv.san);
+        const marks = path.map((mv, j) => {
+          const v = j < br.at ? verdicts[j] : own[j - br.at];
+          return v === "great" || v === "brilliant" ? `${mv.san}${ANNOTATION[v]}` : mv.san;
+        });
+        const ks = [...Array(path.length + 1).keys()];
+        const fails = br.mover === sl.for && br.winLine - br.winBranch >= 25;
+        const altLabel = moveLabel(first + br.at, br.moves[0].san);
+        return {
+          br,
+          path,
+          material: ks.map((k) => materialInfo(start, [...played, ...pathSans.slice(0, k)], variant)),
+          check: ks.map((k) => checkSquare(k ? path[k - 1].after : sl.fen)),
+          labels: variation(marks, first),
+          verdicts: own,
+          label: fails ? `Why not ${altLabel}?` : `What if ${altLabel}?`,
+          sub: fails ? `${sideName(g, sl.for)}'s natural move, and what goes wrong` : `${sideName(g, br.mover)}'s other try`,
+          fails,
+        };
+      });
   }
   cache.set(key, out);
   return out;
@@ -804,8 +848,9 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
         }
         return { arrows, rings, lit };
       };
+      // A branch's beats after the caption (an "after" branch) take over from it.
       const comment = (from: number, lit: Lit[] = []) =>
-        s.caption && local >= s.captionAt ? caption(L.note, s.captionAt, 1) : beatNow ? { text: beatNow.text, lit, o: r3(fade(beatNow.at, 0.25)) } : from >= 0 ? caption(L.note, from, 1) : undefined;
+        s.caption && local >= s.captionAt && !(beatNow && beatNow.at > s.captionAt) ? caption(L.note, s.captionAt, 1) : beatNow ? { text: beatNow.text, lit, o: r3(fade(beatNow.at, 0.25)) } : from >= 0 ? caption(L.note, from, 1) : undefined;
       // Opening over FOLD at the start, closing over FOLD at the end, and for a punishment, closing as the
       // board winds back and the line's variation opening in its place. The line under the verdict stays
       // folded away in between.
@@ -867,31 +912,41 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           caption: caption(P.note, sp.captionAt, alpha),
         };
       } else {
-        const k = s.moveAt.filter((t) => t <= local).length;
-        const mv = sl.moves[k - 1];
-        let anim = slide(sl.moves, s.moveAt, k);
+        // With branches, the board follows the scene's steps (the line, a branch, back to where they part);
+        // without, the line's moves as they land.
+        const T = s.steps && L.branches ? trackAt(s.steps, [sl.moves, ...L.branches.map((b) => b?.path ?? [])], local) : undefined;
+        const B = T && T.seg >= 0 ? L.branches?.[T.seg] : undefined;
+        const k = T ? T.count : s.moveAt.filter((t) => t <= local).length;
+        const path = B ? B.path : sl.moves;
+        const mv = path[k - 1];
+        let anim = T ? T.moving && moveAnim(T.moving.move.before, T.moving.move, variant, T.moving.progress) : slide(sl.moves, s.moveAt, k);
         const prev = g.moves[real];
-        const score = scoreAt(g, sl.fen);
+        // In a branch, once its move is on the board, the eval is where that move leads: the bar shows what it costs.
+        const score = B && k > B.br.at ? scoreAt(g, B.path[B.br.at].after) : scoreAt(g, sl.fen);
         const evalText = formatScore(score);
         const fen = mv ? mv.after : sl.fen;
         const said = beatDrawn(fen);
-        const noteMarks = noted(L.note, fen, s.captionAt, 1);
+        const noteMarks = B ? { arrows: [], rings: [] } : noted(L.note, fen, s.captionAt, 1);
         const extra = { arrows: [...noteMarks.arrows, ...said.arrows], rings: [...noteMarks.rings, ...said.rings] };
+        const verdict = B ? (k > B.br.at ? B.verdicts[k - B.br.at - 1] : s.verdicts[k - 1]) : s.verdicts[k - 1];
+        const landedAt = T ? T.landed : s.moveAt[k - 1] + LINE_SLIDE;
         v.board = {
           i: real,
           fen,
           anim,
           lastMove: mv ? [mv.from, mv.to] : prev && [prev.from, prev.to],
-          check: L.check[k],
+          check: (B ? B.check : L.check)[k],
           engine: true,
-          ...(!anim && k > 0 && { badge: badgeOf(mv, s.verdicts[k - 1], s.moveAt[k - 1] + LINE_SLIDE) }),
+          ...(!anim && k > 0 && landedAt >= 0 && { badge: badgeOf(mv, verdict, landedAt) }),
           marks: drawn(extra.arrows, extra.rings),
           evalW: r3(score ? winPercentWhite(score) : prep.graph[real + 1]),
           evalText,
         };
-        v.material = L.material[k];
+        v.material = (B ? B.material : L.material)[k];
         v.clocks = prep.clocks[real + 1];
-        v.callout = whatIf(evalText, false, k > 0);
+        v.callout = B
+          ? { label: k > B.br.at ? B.label : "What if…?", sub: B.sub, evalText, whatIf: B.fails ? "punish" : "line" }
+          : whatIf(evalText, false, k > 0);
         const compareAt = s.captionAt + 0.3;
         v.engine = {
           open: unfold(sp && P ? sp.back[1] : 0, s.restoreEnd),
@@ -899,12 +954,14 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           // Played first, the move isn't in the list yet: the variation hangs from the move before it.
           ply: s.first ? s.i : s.i + 1,
           current: false,
-          moves: track(L.labels, k),
+          moves: track(B ? B.labels : L.labels, k),
           caption: comment(s.captionAt, said.lit),
-          ...(L.compare && !s.first && local >= compareAt && { compare: { ...L.compare, o: r3(fade(compareAt) * unfold(0, s.dur)) } }),
+          ...(!B && L.compare && !s.first && local >= compareAt && { compare: { ...L.compare, o: r3(fade(compareAt) * unfold(0, s.dur)) } }),
         };
       }
-      const transition = lineTransition(s, m, sl, local);
+      // The final wind-back takes off what's on the board then: the line, or the branch left on it.
+      const offBoard = s.backFrom && L.branches ? ((s.backFrom.seg >= 0 ? L.branches[s.backFrom.seg]?.path : sl.moves) ?? sl.moves).slice(0, s.backFrom.count) : sl.moves;
+      const transition = lineTransition(s, m, sl, local, offBoard);
       if (transition) {
         const { phase, fen, count } = transition;
         const engine = phase === "enter" || phase === "rewind";
@@ -915,7 +972,8 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
         const score = scoreAt(g, fen, actual ? m.analysis?.evalAfter : undefined);
         const prev = g.moves[s.i - 1];
         const landed = phase === "hold" || phase === "done";
-        const last = phase === "rewind" ? sl.moves[count - 1] : actual ? m : prev;
+        const last = phase === "rewind" ? offBoard[count - 1] : actual ? m : prev;
+        const backB = s.backFrom && s.backFrom.seg >= 0 ? L.branches?.[s.backFrom.seg] : undefined;
         const marks = phase === "hold" ? beatDrawn(fen) : undefined;
         v.board = {
           i: actual ? s.i : real,
@@ -930,10 +988,14 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           evalW: r3(score ? winPercentWhite(score) : prep.graph[(actual ? s.i : real) + 1]),
           evalText: formatScore(score),
         };
-        v.material = phase === "rewind" ? L.material[count] : prep.material[(actual ? s.i : real) + 1];
+        v.material = phase === "rewind" ? (backB ?? L).material[count] : prep.material[(actual ? s.i : real) + 1];
         v.clocks = prep.clocks[(s.first ? s.i - 1 : s.i) + 1];
         v.focus = actual ? { i: s.i, label: telling(prep.belief[s.i]) } : undefined;
-        v.callout = engine ? whatIf(v.board.evalText, false, phase === "rewind") : actual
+        // While a branch left on the board winds back, it keeps its own callout until only the line's moves are left.
+        const branchUp = phase === "rewind" && backB && count > backB.br.at;
+        v.callout = branchUp
+          ? { label: backB!.label, sub: backB!.sub, evalText: v.board.evalText, whatIf: backB!.fails ? "punish" : "line" }
+          : engine ? whatIf(v.board.evalText, false, phase === "rewind") : actual
           ? { label, cls: a?.classification, evalText: v.board.evalText, bestWas: bad ? a!.bestSan : undefined, took: took(m.thinkMs) }
           : { label: `${sideName(g, m.color)} to move`, status: true, evalText: v.board.evalText };
         v.line = actual ? verdictLine(g, prep, s.i, bad, telling(prep.belief[s.i])) : undefined;
@@ -942,7 +1004,7 @@ function derive(g: Game, tl: Timeline, prep: Prep, t: number): View {
           under: phase === "hold" || !engine ? 1 : under,
           ply: s.first ? s.i : s.i + 1,
           current: !engine,
-          moves: phase === "rewind" ? track(L.labels, count) : [],
+          moves: phase === "rewind" ? track((backB ?? L).labels, count) : [],
           caption: comment(s.captionAt, marks?.lit),
         };
       }

@@ -3,14 +3,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { resumeThinkingClock } from "../shared/thinkingClock";
 import { migratePause, pauseGame } from "./pauses";
 import { startUsageLimitWatcher } from "./usageLimits";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis, PublishPlatform, SeatRole, Tournament, VideoPlan } from "../shared/types";
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
-import { adminToken, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
+import { adminToken, agentDir, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
   acceptDraw,
@@ -41,10 +41,10 @@ import { humanSide, isHuman } from "../shared/naming";
 import { broadcasterEvents, postgameBrief, pregameBrief, turnBrief } from "./briefing";
 import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
 import { launchGame, startTournament, watch } from "./launcher";
-import { applyNarration, directorBrief, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
-import { deepenLines, linesProgress, linesReady } from "./lineDepth";
+import { applyNarration, directorBrief, investigationNotes, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
+import { deepenLines, linesPrepared, linesProgress, linesReady } from "./lineDepth";
 import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
-import { directorThreadBusy, directorThreadCommand, directorThreadState, isDirectorThreadKey, openDirectorThread } from "./directorThread";
+import { autoDirectorDone, directorThreadBusy, directorThreadCommand, directorThreadState, isDirectorThreadKey, openDirectorThread } from "./directorThread";
 import { videoApproved, videoRevision } from "./videoApproval";
 import { rivalry } from "./rivalry";
 import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
@@ -52,6 +52,7 @@ import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
 import { summonAvailable } from "./summon";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
+import { PROBE_COMMANDS, probeCommand } from "./probe";
 import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, setPackagingOptions } from "./publish";
 import { gameToPgn } from "./pgn";
 import { analyticsRows, modelAnalytics } from "./analytics";
@@ -558,6 +559,16 @@ app.get(
     if (g.phase !== "finished") throw new ActionError("The game isn't finished yet; its broadcaster plans the video at the end.");
     // ?redo=1 throws the current plan away so a new director can make another.
     if (req.query.redo && g.video) {
+      // The last director's and narrator's working files move aside (kept, under previous/), so the new ones
+      // start from their briefs, not from the old plan and narration.
+      for (const seat of ["d", "n"]) {
+        const dir = agentDir(g.id, seat);
+        const old = readdirSync(dir).filter((f) => f !== "previous");
+        if (!old.length) continue;
+        const to = path.join(dir, "previous", new Date().toISOString().replace(/[:.]/g, "-"));
+        mkdirSync(to, { recursive: true });
+        for (const f of old) renameSync(path.join(dir, f), path.join(to, f));
+      }
       delete g.video;
       if (g.launched) delete g.launched.d;
       g.videoRedos = (g.videoRedos ?? 0) + 1;
@@ -585,7 +596,8 @@ app.get(
         black: seatInfo("b"),
         broadcaster: g.broadcaster?.enabled ? { secondsSinceSeen: ago("x"), done: g.phase === "finished" } : null,
         // The video director comes after the game: done once the plan is saved (or there's nothing to plan).
-        director: g.phase === "finished" && (g.broadcaster?.enabled || g.launched?.d) ? { secondsSinceSeen: ago("d"), done: !needsDirection(g) } : null,
+        // The video director comes after the game: done once the plan is saved and its narrator has seen the narration through.
+        director: g.phase === "finished" && (g.broadcaster?.enabled || g.launched?.d) ? { secondsSinceSeen: ago("d"), done: !needsDirection(g) && autoDirectorDone(g) } : null,
       },
     };
   }),
@@ -988,7 +1000,8 @@ const SEAT_COMMANDS: Record<SeatRole, string> = {
   narrate-brief        once the plan is saved: the brief for the narration over its engine lines
   narrate <file>       submit the narration; it's saved and read back to you
   packaging-brief      once the plan is saved: the brief for new titles, captions and thumbnails
-  packaging <file>     submit them; they're saved for the user to pick from`,
+  packaging <file>     submit them; they're saved for the user to pick from
+${PROBE_COMMANDS}`,
 };
 
 /** Video plans that passed the checks, read back to their director and waiting for `confirm`. */
@@ -1024,6 +1037,9 @@ app.post(
     }
     const unknown = () => new ActionError(`Unknown command: ${cmd}. Yours are:\n${SEAT_COMMANDS[role]}`);
     if (role === "d") {
+      // The engine questions: any time, as often as the director likes.
+      const probed = await probeCommand(g, cmd, req.body?.args);
+      if (probed !== null) return text(probed);
       if (["direct", "confirm", "narrate", "packaging"].includes(cmd) && (videoEditBlocked(g) || directorThreadBusy(g))) throw new ActionError("A video edit or render is already in progress. Wait for it to finish.");
       if (cmd === "brief") {
         if (g.video && !planDrafts.has(g.id)) return text("DONE — this game's video plan is saved. Your task is complete; you can stop now.");
@@ -1053,7 +1069,7 @@ app.post(
         const plan = validatePlan(g, req.body?.plan);
         planDrafts.set(g.id, plan);
         return text(
-          `The plan passes the checks (${plan.moments.length} moments). Before it's saved, check what the video will draw and light up:\n\n${planReadback(g, plan)}\n` +
+          `The plan passes the checks (${plan.moments.length} moments).\n${investigationNotes(g, plan).join("\n")}\n\nBefore it's saved, check what the video will draw and light up:\n\n${planReadback(g, plan)}\n` +
             `Colours: green is the speaking player's pieces and moves, red the opponent's, amber an empty square. Go through every line: is each lit word lit for the piece or square the player meant, at the right moment in the idea, in the right colour? Does every drawing show what the words say (never an arrow for something they say can't happen)? Is anything they point at left undrawn?\n` +
             `If all of it is right, run \`confirm\`. If anything is off, fix the plan and submit it again with \`direct\`.`,
         );
@@ -1070,7 +1086,7 @@ app.post(
         const lined = plan.moments.filter((x) => x.line).length;
         if (lined)
           return text(
-            `OK — video plan saved (${plan.moments.length} moments). One step left: the narration over its ${lined} engine line${lined === 1 ? "" : "s"}. Run \`narrate-brief\`, write it, and submit it with \`narrate <narration.json>\`.`,
+            `OK — video plan saved (${plan.moments.length} moments). One step left: the narration over its ${lined} engine line${lined === 1 ? "" : "s"}. Run \`narrate-brief\`, investigate each line (its questions, then \`board\`/\`probe\`/\`options\`/\`threat\` as much as you need) until you can say why it is what it is, then write it and submit it with \`narrate <narration.json>\`.`,
           );
         return text(`OK — video plan saved (${plan.moments.length} moments).\n\nDONE — your task is complete; you can stop now.`);
       }
@@ -1078,6 +1094,8 @@ app.post(
       // checked, saved and read back with how it will play.
       if (cmd === "narrate-brief") {
         if (!g.video) throw new ActionError("This game's video plan isn't saved yet: the narration comes after it (run `brief`).");
+        // The questions each line raises are worked out first (the engine pass covers only the game's top lines).
+        if (!(await linesPrepared(g))) return text("WAITING — the engine is still working out the questions your lines raise. Run `narrate-brief` again.");
         return text(narrateBrief(g));
       }
       if (cmd === "narrate") {
@@ -1108,6 +1126,8 @@ app.post(
       }
       throw unknown();
     }
+    // The narrator: the narration over a saved plan's engine lines, after the director. A focused brief, the
+    // engine questions, then each submission checked, saved and read back with how it will play.
     if (role === "x") {
       /** Wait for the broadcaster's next events (`say` goes straight on to this too), after `done` if given. */
       const bcNext = async (done = "") => {

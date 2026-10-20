@@ -64,6 +64,10 @@ export function videoLines(g: Game): VideoLine[] {
     const c = colorOf(m.ply);
     if (c && m.thought) out.push({ id: `moment:${m.ply}`, color: c, text: m.thought, delivery: m.delivery });
     if (c) (m.line?.beats ?? []).forEach((b, n) => out.push({ id: beatId(m.ply, n), color: c, text: b.text, delivery: b.delivery, narrator: true }));
+    if (c)
+      (m.line?.branches ?? []).forEach((br, j) =>
+        (br.beats ?? []).forEach((b, n) => out.push({ id: branchBeatId(m.ply, j, n), color: c, text: b.text, delivery: b.delivery, narrator: true })),
+      );
   }
   for (const a of plan.asides ?? []) {
     const c = colorOf(a.ply);
@@ -83,6 +87,8 @@ export function videoLines(g: Game): VideoLine[] {
 
 /** The id of the narrator's nth beat over the line of the moment at ply. */
 export const beatId = (ply: number, n: number) => `beat:${ply}:${n}`;
+/** The id of the narrator's nth beat over branch j of that line. */
+export const branchBeatId = (ply: number, j: number, n: number) => `beat:${ply}:b${j}:${n}`;
 
 /** The voice a side speaks in, or null (a human, or a model without one). */
 export function voiceOf(g: Game, c: Color): string | null {

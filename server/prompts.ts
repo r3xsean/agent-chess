@@ -4,6 +4,7 @@ import { CLI } from "./paths";
 import { agentDir } from "./store";
 import { claimSeats, directorKey, seatKeysFor, startFenOf } from "./game";
 import { needsDirection } from "./director";
+import { autoDirectorSession, sessionPrompt } from "./directorThread";
 import { castlingNote, variantOf } from "../shared/rules";
 import { describePlayer } from "./briefing";
 import { fullName, humanSide, isHuman, sideName } from "../shared/naming";
@@ -190,20 +191,10 @@ export function directorPrompt(g: Game): string {
 
 Run every command as:  ${cli} <command> --key ${key}
 1. Run \`brief\`. It prints the VIDEO DIRECTOR brief: the whole game with engine verdicts, the players' commentary and the interviews, and how to write the plan.
+   Then investigate before you plan: for each engine line you're considering, read the questions the brief lists for it, and ask the engine your own with \`board\`, \`probe\`, \`options\` and \`threat\` (see "Asking the engine" in the brief) until you can say WHY the line is what it is: what a sacrifice is for, what a quiet move threatens, from where the losing side can't get out. As many as you need.
 2. Write your plan as JSON in ${agentDir(g.id, "d")} and submit it with \`direct <plan.json>\`. If it's rejected, read why, fix it and resubmit. Once it passes, it's read back to you: what every quote will draw and light up, and in which colour. Check every line, then run \`confirm\` to save it, or fix the plan and \`direct\` it again.
-3. \`confirm\` saves the plan. If it has engine lines, it then asks for their narration: run \`narrate-brief\`, write what the narrator says over each line, and submit it with \`narrate <narration.json>\`. Each submission is saved and read back to you; fix and resubmit until it's right.
+3. \`confirm\` saves the plan. If it has engine lines, it then asks for their narration: run \`narrate-brief\`, investigate each line the same way (its questions, then your own probes) so the narration says why, not just what, then write what the narrator says over each line, and submit it with \`narrate <narration.json>\`. Each submission is saved and read back to you; fix and resubmit until it's right.
 4. DONE is printed once the plan (and its narration, if it has lines) is saved: your task is complete.`;
-}
-
-/** A narrator only: rewrite what's said over a saved plan's engine lines, leaving the rest of the plan as it is. */
-export function narratorPrompt(g: Game): string {
-  const key = directorKey(g.id);
-  const cli = `node "${CLI}"`;
-  return `You are the video director for Agent Chess Arena, where AI agents play chess against each other. The replay video of game ${g.id} (White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}) is planned. Your job now is only the narration over its engine lines.
-
-Run every command as:  ${cli} <command> --key ${key}
-1. Run \`narrate-brief\`. It prints the lines, everything about them, and how to write the narration.
-2. Write it as JSON in ${agentDir(g.id, "d")} and submit it with \`narrate <narration.json>\`. It's saved and read back to you with how it will play; fix and resubmit until it's right. DONE is printed with each saved narration: stop once you're happy with it.`;
 }
 
 /** A director for new titles, captions and thumbnails only, on a game whose plan is saved. */
@@ -250,10 +241,15 @@ export function directorLaunch(g: Game, effort?: string) {
   if (!needsDirection(g)) return none(g.video ? "The video plan is already made." : "There's nothing to plan: the game has no moves or no engine review yet.");
   const since = g.launched?.d ? Date.now() - g.launched.d : Infinity;
   if (since < DIRECTOR_STALE_MS) return none(`Another run launched this game's director ${Math.round(since / 60_000)} min ago; leave it to that run.`);
+  // The director works as a session, like the user's conversation from the video tab: it makes the plan, then
+  // launches its own narrator and works with it.
+  const s = autoDirectorSession(g);
+  if (!s) return none("A director is already at work on this game's video (the user's conversation, or another run).");
   const who = directorWho(g, effort);
   claimSeats(g, ["d"]);
   return {
     gameId: g.id,
+    key: s.key,
     tasks: [
       {
         role: "director",
@@ -262,7 +258,7 @@ export function directorLaunch(g: Game, effort?: string) {
         // A redo's director is a new task, not the earlier one again.
         clientRequestId: g.videoRedos ? `${g.id}-director-redo${g.videoRedos}` : `${g.id}-director`,
         target: { providerInstanceId: who.provider, model: who.model, options: effortOption(who.provider, who.effort) },
-        prompt: directorPrompt(g),
+        prompt: sessionPrompt(g, s),
       },
     ],
   };
