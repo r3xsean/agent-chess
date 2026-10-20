@@ -11,7 +11,7 @@ import type { Color, Game, MoveRecord, PlayerRef, PlayerStats, PositionAnalysis,
 import { MODELS, DEFAULT_BROADCASTER, modelLabel } from "../shared/models";
 import { PERSONALITIES, personalityById, riskRule } from "../shared/personalities";
 import { DATA, PORT, PUBLIC_MODE, ROOT } from "./paths";
-import { adminToken, agentDir, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
+import { adminToken, agentDir, flushAll, games, loadAll, players, readJournal, readLessons, writeLessons, saveGame, saveGameNow, saveTournamentNow, seatKeys, tournaments } from "./store";
 import {
   ActionError,
   acceptDraw,
@@ -1184,7 +1184,9 @@ app.post(
       const out = await waitUntil(g, () => playerTodo(g, c), res);
       if (out) {
         // Seen as of the hand-off: the website's "Agent idle" counts from here, not from when the call began.
+        // Saved (soon, not at once) so it outlives a restart.
         g.seen[c] = Date.now();
+        saveGame(g);
         if (out.startsWith("=== YOUR MOVE")) briefed(c);
       }
       return text((done ? `${done}\n\n` : "") + (out ?? `WAITING — ${waitingReason(g, c)}. Run \`wait\`.`));

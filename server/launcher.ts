@@ -5,6 +5,7 @@ import { directorLaunch, directorWho, launchSpec } from "./prompts";
 import { needsDirection } from "./director";
 import { tournamentNext } from "./orchestrator";
 import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, triggerOrchestrator } from "./summon";
+import { bootAt } from "./heartbeat";
 
 /*
  * Launching agents. A seat whose model and effort have an agent webhook is started by the server itself,
@@ -148,7 +149,9 @@ export function watch() {
       for (const [seat, l] of Object.entries(g.directLaunch) as [SeatRole, { at: number; relaunches: number }][]) {
         if (!needsAgent(g, seat)) continue;
         const seen = g.seen[seat] ?? 0;
-        if (seen >= l.at ? now - seen < QUIET_MS[seat] : now - l.at < NO_SHOW_MS) continue;
+        // After a restart every agent gets its full time again, counted from the boot: the time the server was
+        // down isn't the agent's silence (its CLI was retrying), and its last calls before it may not have been saved.
+        if (seen >= l.at ? now - Math.max(seen, bootAt) < QUIET_MS[seat] : now - Math.max(l.at, bootAt) < NO_SHOW_MS) continue;
         if (l.relaunches >= MAX_RELAUNCHES) {
           if (!gaveUp.has(`${g.id}-${seat}`)) console.error(`[launch] ${g.id} ${seat}: quiet again after ${MAX_RELAUNCHES} relaunches, giving up`);
           gaveUp.add(`${g.id}-${seat}`);
