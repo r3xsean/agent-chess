@@ -217,6 +217,8 @@ export interface Game {
   directLaunch?: Partial<Record<SeatRole, { at: number; relaunches: number }>>;
   /** When the server summoned this broadcast game's video director, once the game was over. */
   directorSummonedAt?: number;
+  /** How many times that director was summoned again because it never turned up. */
+  directorResummons?: number;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
   lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
   /** A replayed illegal submission is not evidence that the agent recovered. */

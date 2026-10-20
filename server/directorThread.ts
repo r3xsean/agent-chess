@@ -102,6 +102,12 @@ export const sessionPrompt = (g: Game, s: { key: string }) => {
   return directorSessionPrompt(g, have);
 };
 
+/** Whether a game's director session (the auto director's or the user's conversation) has had its agent turn up. */
+export function directorTurnedUp(g: Game): boolean {
+  const s = sessions.get(g.id);
+  return !!s && s.seenAt - s.createdAt >= 1000;
+}
+
 /** Whether a game's auto director is done: its plan saved, and its narration seen through (or there was none to do). */
 export function autoDirectorDone(g: Game): boolean {
   const s = sessions.get(g.id);

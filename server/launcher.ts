@@ -3,6 +3,7 @@ import { games, saveGameNow, saveSeatsNow, saveTournament, seatKeys, tournaments
 import { claimSeats, directorKey, playerFinished, rotateSeatKey, seatClaimed, seatIsHuman, seatKeysFor, startablePairings, touch } from "./game";
 import { directorLaunch, directorWho, launchSpec } from "./prompts";
 import { needsDirection } from "./director";
+import { directorTurnedUp } from "./directorThread";
 import { tournamentNext } from "./orchestrator";
 import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, triggerOrchestrator } from "./summon";
 import { bootAt } from "./heartbeat";
@@ -129,6 +130,8 @@ const NO_SHOW_MS = 10 * 60_000;
 const MAX_RELAUNCHES = 3;
 /** A game that finished longer ago than this (or before the server was up) doesn't summon its director by itself. */
 const DIRECTOR_AFTER_MS = 30 * 60_000;
+/** A summoned director that never turned up is summoned again only this soon after (not for a game left long ago). */
+const DIRECTOR_RETRY_MS = 6 * 3_600_000;
 
 /** Whether a seat still needs its agent. */
 function needsAgent(g: Game, seat: SeatRole) {
@@ -165,6 +168,25 @@ export function watch() {
     // A broadcast game's video director comes once the game is over.
     if (g.phase === "finished" && g.broadcaster?.enabled && !g.directorSummonedAt && now - (g.finishedAt ?? 0) < DIRECTOR_AFTER_MS && needsDirection(g)) {
       g.directorSummonedAt = now;
+      saveGameNow(g);
+      launchDirector(g).catch((e) => console.error(`[launch] ${g.id} director: ${e.message}`));
+    }
+    // One summoned that never turned up (the server went down mid-summon, or T3 lost it) is summoned again.
+    const summoned = g.directorSummonedAt ?? 0;
+    if (
+      g.phase === "finished" &&
+      summoned &&
+      now - Math.max(summoned, bootAt) > NO_SHOW_MS &&
+      now - summoned < DIRECTOR_RETRY_MS &&
+      (g.directorResummons ?? 0) < MAX_RELAUNCHES &&
+      needsDirection(g) &&
+      !directorTurnedUp(g)
+    ) {
+      console.log(`[launch] ${g.id} director: never turned up, summoning it again`);
+      g.directorSummonedAt = now;
+      g.directorResummons = (g.directorResummons ?? 0) + 1;
+      // Its seat was taken by the summon that came to nothing.
+      if (g.launched) delete g.launched.d;
       saveGameNow(g);
       launchDirector(g).catch((e) => console.error(`[launch] ${g.id} director: ${e.message}`));
     }
