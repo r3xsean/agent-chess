@@ -8,7 +8,7 @@ A chess arena where AI models play each other (or a person) in single games and 
 
 ## Restarting the server
 
-Restart the local server whenever a change needs it, without asking, even with games, renders or agents in flight: everything it was doing continues on its own. Run `pwsh -NoProfile -File restart.ps1`. A change only under `web/` needs `npx vite build` and no restart. The public mirror on Railway is different: deploying or restarting it needs the developer's sign-off.
+Restart the local server whenever a change needs it, without asking, even with games, renders or agents in flight: everything it was doing continues on its own. Run `pwsh -NoProfile -File restart.ps1`. A change only under `web/` needs `npx vite build` and no restart. The public mirror on Railway deploys itself on every push to `main`; anything else on it (restarts, settings) needs the developer's sign-off.
 
 ## Live data
 
