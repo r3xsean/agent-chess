@@ -154,11 +154,15 @@ export function voiceManifest(gameId: string): VoiceManifest {
   }
 }
 
+/** A file written whole or not at all: under another name first, then renamed into place. */
+function writeWhole(file: string, data: string | Buffer) {
+  writeFileSync(`${file}.tmp`, data);
+  renameSync(`${file}.tmp`, file);
+}
+
 /** Written whole or not at all, so a reader never sees half a manifest; open previews hear of it (`voice:<id>`). */
 function writeManifest(gameId: string, m: VoiceManifest) {
-  const f = manifestFile(gameId);
-  writeFileSync(`${f}.tmp`, JSON.stringify(m, null, 2));
-  renameSync(`${f}.tmp`, f);
+  writeWhole(manifestFile(gameId), JSON.stringify(m, null, 2));
   bus.emit(`voice:${gameId}`);
 }
 
@@ -248,9 +252,10 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
       }
       result.chars += clip.spoken.length;
       const { audio, words } = await synthesize(clip.voiceId, clip.spoken);
-      // The timings first: an mp3 on disk is taken as finished, timings and all.
-      if (words) writeFileSync(wordsFile(clip.file), JSON.stringify(words));
-      writeFileSync(clip.file, audio);
+      // The timings first: an mp3 on disk is taken as finished, timings and all. Each is written whole under
+      // another name and then renamed, so a server killed mid-write never leaves a cut-off clip that looks finished.
+      if (words) writeWhole(wordsFile(clip.file), JSON.stringify(words));
+      writeWhole(clip.file, audio);
       try {
         clip.dur = audioSeconds(clip.file);
         clip.words = words;

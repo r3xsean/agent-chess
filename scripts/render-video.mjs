@@ -181,7 +181,10 @@ async function mux(video, out, duration, sfx, music) {
   else if (music) filter = `${bed}[a]`;
   else if (sfx) filter = `[1:a]anull[a]`;
   const audio = filter ? ["-filter_complex", filter, "-map", "[a]", "-c:a", "aac", "-b:a", "192k"] : [];
-  await run("ffmpeg", ["-y", "-v", "error", ...inputs, "-map", "0:v", ...audio, "-c:v", "copy", "-t", duration.toFixed(3), "-movflags", "+faststart", out]);
+  // Under another name until it's whole: a render cut off here must not leave a short video that looks finished.
+  const part = `${out}.muxing.mp4`;
+  await run("ffmpeg", ["-y", "-v", "error", ...inputs, "-map", "0:v", ...audio, "-c:v", "copy", "-t", duration.toFixed(3), "-movflags", "+faststart", part]);
+  renameSync(part, out);
 }
 
 /* ------------------------------ packaging ------------------------------ */
