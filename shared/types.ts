@@ -552,6 +552,8 @@ export interface Tournament {
   boards?: number;
   /** Hours between batches of games, starting when all active boards finish. Default: 0. */
   breakHours?: number;
+  /** When a break was last skipped from the website: a break that started before this is over. */
+  breakSkippedAt?: number;
   /** Last time the server asked T3 to start more pairings (so it doesn't ask twice in a row). */
   lastKickAt?: number;
 }

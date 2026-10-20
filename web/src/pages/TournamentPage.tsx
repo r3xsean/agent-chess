@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
-import type { Tournament } from "../../../shared/types";
+import type { PlayerRef, Tournament } from "../../../shared/types";
 import { GamesTable, PlayerCell } from "./Lobby";
 import { SummonInfo } from "../components/NewGame";
 
@@ -42,6 +42,14 @@ export function TournamentPage({ id }: { id: string }) {
         <div className="card" style={{ padding: 14 }}>
           <SummonInfo tournamentId={t.id} />
         </div>
+      )}
+      {!!data.next?.length && (
+        <NextUp
+          tournamentId={t.id}
+          matchups={data.next.map((i) => t.pairings[i]).map((p) => [byId.get(p.white)!, byId.get(p.black)!] as const)}
+          breakUntil={data.breakUntil}
+          canSkip={!!meta && !meta.publicMode}
+        />
       )}
       <h2>Standings</h2>
       <div className="card">
@@ -87,7 +95,9 @@ export function TournamentPage({ id }: { id: string }) {
                   <td>
                     <PlayerCell p={byId.get(p.black)!} />
                   </td>
-                  <td className="res">{g ? g.result ?? <span style={{ color: "var(--green)" }}>{g.phase}</span> : <span style={{ color: "var(--muted)" }}>upcoming</span>}</td>
+                  <td className="res">
+                    {g ? g.result ?? <span style={{ color: "var(--green)" }}>{g.phase}</span> : data.next?.includes(i) ? <span style={{ color: "#f7c631" }}>next</span> : <span style={{ color: "var(--muted)" }}>upcoming</span>}
+                  </td>
                 </tr>
               );
             })}
@@ -96,6 +106,55 @@ export function TournamentPage({ id }: { id: string }) {
       </div>
       <h2>Games</h2>
       <GamesTable games={games.filter((g): g is NonNullable<typeof g> => !!g)} ratings={ratings} />
+    </div>
+  );
+}
+
+/** The game(s) that start next, and during a break, when it ends and a button to end it now. */
+function NextUp({ tournamentId, matchups, breakUntil, canSkip }: { tournamentId: string; matchups: (readonly [PlayerRef, PlayerRef])[]; breakUntil?: number; canSkip: boolean }) {
+  const [state, setState] = useState<"idle" | "sending" | "error">("idle");
+  const [err, setErr] = useState("");
+  const left = breakUntil ? Math.max(0, breakUntil - Date.now()) : 0;
+  const h = Math.floor(left / 3_600_000);
+  const m = Math.ceil((left % 3_600_000) / 60_000);
+  return (
+    <div className="card" style={{ padding: 14 }}>
+      <h2 style={{ margin: "0 0 8px" }}>Next {matchups.length > 1 ? `${matchups.length} games` : "game"}</h2>
+      <table className="table">
+        <tbody>
+          {matchups.map(([w, b], i) => (
+            <tr key={i}>
+              <td><PlayerCell p={w} /></td>
+              <td style={{ color: "var(--muted)" }}>vs</td>
+              <td><PlayerCell p={b} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {breakUntil && (
+        <p style={{ margin: "10px 0 0" }}>
+          On a break until {new Date(breakUntil).toLocaleString()} ({h ? `${h}h ` : ""}{m}m left).{" "}
+          {canSkip && (
+            <button
+              className="btn"
+              disabled={state === "sending"}
+              onClick={async () => {
+                setState("sending");
+                try {
+                  await api(`/api/tournaments/${tournamentId}/skip-break`, {});
+                  setState("idle");
+                } catch (e) {
+                  setErr(String(e));
+                  setState("error");
+                }
+              }}
+            >
+              {state === "sending" ? "Starting…" : `⏭ Skip break and start ${matchups.length > 1 ? "them" : "it"} now`}
+            </button>
+          )}
+          {state === "error" && <span style={{ color: "var(--red, #e55)" }}> {err}</span>}
+        </p>
+      )}
     </div>
   );
 }

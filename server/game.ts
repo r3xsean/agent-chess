@@ -282,12 +282,14 @@ export function tournamentBreakUntil(t: Tournament): number {
     const g = p.gameId ? games.get(p.gameId) : undefined;
     if (g?.phase === "finished") last = Math.max(last, g.finishedAt ?? g.endedAt ?? g.createdAt);
   }
-  return last ? last + t.breakHours * 3_600_000 : 0;
+  if (!last || (t.breakSkippedAt ?? 0) >= last) return 0;
+  return last + t.breakHours * 3_600_000;
 }
 
-export function startablePairings(t: Tournament, now = Date.now()) {
+/** `ignoreBreak`: what would start if the break were over (the tournament page's "next up"). */
+export function startablePairings(t: Tournament, now = Date.now(), ignoreBreak = false) {
   const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished").length;
-  if ((t.breakHours ?? 0) > 0 && (live > 0 || now < tournamentBreakUntil(t))) return [];
+  if ((t.breakHours ?? 0) > 0 && (live > 0 || (!ignoreBreak && now < tournamentBreakUntil(t)))) return [];
   const boards = boardsOf(t);
   if (boards === 1) return live ? [] : t.pairings.filter((p) => !p.gameId).slice(0, 1);
   const byId = new Map(t.players.map((p) => [p.id, p]));

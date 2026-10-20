@@ -33,6 +33,7 @@ import {
   seatClaimed,
   claimSeats,
   startablePairings,
+  tournamentBreakUntil,
   boardsOf,
   isRated,
   submitTurn,
@@ -819,7 +820,38 @@ app.get(
   handle((req) => {
     const t = tournaments.get(String(req.params.id));
     if (!t) throw new ActionError("No such tournament");
-    return { tournament: t, games: t.pairings.map((p) => (p.gameId ? gameSummary(games.get(p.gameId)!) : null)) };
+    // The pairings that start next (the whole batch when the break ends or is skipped), by schedule index.
+    const now = Date.now();
+    let next = startablePairings(t, now, true);
+    if (!next.length) next = t.pairings.filter((p) => !p.gameId).slice(0, 1);
+    const live = t.pairings.some((p) => p.gameId && games.get(p.gameId)?.phase !== "finished");
+    const until = t.status === "running" && !live ? tournamentBreakUntil(t) : 0;
+    return {
+      tournament: t,
+      games: t.pairings.map((p) => (p.gameId ? gameSummary(games.get(p.gameId)!) : null)),
+      next: t.status === "running" ? next.map((p) => t.pairings.indexOf(p)) : [],
+      ...(until > now ? { breakUntil: until } : {}),
+    };
+  }),
+);
+// "Skip break" on the tournament page: end the break now and start the next games.
+app.post(
+  "/api/tournaments/:id/skip-break",
+  localOnly,
+  handle(async (req) => {
+    const t = tournaments.get(String(req.params.id));
+    if (!t) throw new ActionError("No such tournament");
+    if (t.status === "finished") throw new ActionError("This tournament is already finished.");
+    if (tournamentBreakUntil(t) <= Date.now()) throw new ActionError("This tournament isn't on a break.");
+    t.breakSkippedAt = Date.now();
+    t.autoRun = true;
+    saveTournamentNow(t);
+    bus.emit("lobby");
+    if (!startablePairings(t).length) return { ok: true, waiting: true };
+    await startTournament(t).catch((e) => {
+      throw new ActionError(e.message);
+    });
+    return { ok: true };
   }),
 );
 app.post(

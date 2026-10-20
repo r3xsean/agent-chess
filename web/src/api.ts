@@ -94,4 +94,4 @@ export function useFetch<T>(url: string | null, deps: unknown[] = []): T | null 
 export type MemoryModel = { model: string; label: string; lessons: Lessons; players: { player: PlayerStats; journal: JournalEntry[] }[] };
 
 export type PlayerPage ={ player: PlayerStats; journal: JournalEntry[]; games: GameSummary[] };
-export type TournamentPage = { tournament: Tournament; games: (GameSummary | null)[] };
+export type TournamentPage = { tournament: Tournament; games: (GameSummary | null)[]; next?: number[]; breakUntil?: number };
