@@ -1,7 +1,7 @@
 // How models look: each label finds its maker and family glyph, a family's older releases count back from
 // the newest in the catalog (a retired one too), Black takes the away colour only when one maker made both
-// sides, and every glyph has a well-formed sprite for each era.
-import { AGES, SPRITE_SIZES, ageOf, lookOf, sideLooks } from "../shared/looks";
+// sides, effort reads as bars on one ladder, and every glyph has a well-formed sprite for each era.
+import { AGES, SPRITE_SIZES, ageOf, effortBars, lookOf, sideLooks } from "../shared/looks";
 import { selfEvalColors } from "../shared/naming";
 import { GLYPHS } from "../web/src/glyphs";
 import { SPRITES } from "../web/src/glyphSprites";
@@ -67,6 +67,10 @@ eq("Claude vs Claude: White's line", lines.w, "#d97757");
 const grok = sideLooks({ white: ref("grok", "Grok 4.7"), black: ref("grok", "Grok 4.7 Fast") });
 eq("Grok vs Grok: White's tone", grok.w.tone, "dark");
 eq("Grok vs Grok: Black's tone", grok.b.tone, "light");
+
+// Effort: one ladder for every provider, matched by name, out of five.
+for (const [effort, bars] of [["none", 0], ["minimal", 0], ["low", 1], ["medium", 2], ["high", 3], ["xhigh", 4], ["max", 5], ["ultra", null], ["human", null], [undefined, null], ["constructor", null]] as const)
+  eq(`${effort} effort bars`, effortBars(effort), bars);
 
 // Sprites: every glyph, every era's size, square, only "#" and ".", and not blank.
 for (const id of Object.keys(GLYPHS) as (keyof typeof GLYPHS)[])

@@ -1965,7 +1965,6 @@ input[type="number"] {
   font-weight: 900;
   letter-spacing: -0.3px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
 }
 .player-avatar .glyph {
   position: relative;
@@ -1973,7 +1972,14 @@ input[type="number"] {
   height: 64%;
   display: block;
 }
-/* an older release's wear: vignette, grain, scanlines, scratches, a peeling corner */
+/* an older release's wear: vignette, grain, scanlines, scratches, a peeling corner, kept to the tile */
+.player-avatar .wear-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
 .player-avatar .wear {
   position: absolute;
   inset: 0;
@@ -1988,6 +1994,11 @@ input[type="number"] {
 .player-avatar.light {
   color: #3a352d;
   text-shadow: none;
+}
+/* the effort's signal bars, hanging off the tile's corner */
+.player-avatar .effort-bars {
+  position: absolute;
+  pointer-events: none;
 }
 .model-tag .glyph {
   width: 1.05em;

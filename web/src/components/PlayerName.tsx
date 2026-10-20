@@ -1,11 +1,11 @@
 import { useId } from "react";
 import type { PlayerRef } from "../../../shared/types";
-import { ageOf, agedColors, lookOf, type Age, type ModelLook } from "../../../shared/looks";
+import { ageOf, agedColors, effortBars, lookOf, type Age, type ModelLook } from "../../../shared/looks";
 import { isHuman } from "../../../shared/naming";
 import { GLYPHS } from "../glyphs";
 import { SPRITES } from "../glyphSprites";
 
-type Who = Pick<PlayerRef, "provider" | "modelLabel">;
+type Who = Pick<PlayerRef, "provider" | "modelLabel"> & Partial<Pick<PlayerRef, "effort">>;
 
 /** The word that tells models apart at a glance: "Opus", "Haiku", "Sol", "Luna"… */
 export function modelMark(p: Who): string {
@@ -15,16 +15,21 @@ export function modelMark(p: Who): string {
 
 /**
  * A player's face: their model's glyph on its tile, an older release drawn from an older era (see AGES in
- * shared/looks.ts). In a game, pass the side's `look` (sideLooks) so Black shows the away colour when both
- * players share a maker.
+ * shared/looks.ts), and its effort as signal bars on the corner. In a game, pass the side's `look`
+ * (sideLooks) so Black shows the away colour when both players share a maker.
  */
 export function PlayerAvatar({ player, size = 40, look = lookOf(player) }: { player: Who; size?: number; look?: ModelLook }) {
   const age = ageOf(look.gen);
   const { tile, ink } = agedColors(look);
   const behind = look.gen ? ` · ${look.gen} ${look.gen === 1 ? "release" : "releases"} behind the newest` : "";
+  const bars = isHuman(player) ? null : effortBars(player.effort);
   const mark = modelMark(player);
   return (
-    <div className={`player-avatar ${look.tone ?? ""}`} style={{ width: size, height: size, background: tile }} title={isHuman(player) ? `${player.modelLabel} (human)` : `${player.modelLabel}${behind}`}>
+    <div
+      className={`player-avatar ${look.tone ?? ""}`}
+      style={{ width: size, height: size, background: tile }}
+      title={isHuman(player) ? `${player.modelLabel} (human)` : `${player.modelLabel}${bars === null ? "" : ` · ${player.effort} effort`}${behind}`}
+    >
       {!look.glyph ? (
         <span style={{ fontSize: size * (mark.length > 5 ? 0.22 : 0.27) }}>{mark}</span>
       ) : age.grid ? (
@@ -32,8 +37,27 @@ export function PlayerAvatar({ player, size = 40, look = lookOf(player) }: { pla
       ) : (
         <svg className="glyph" viewBox="0 0 24 24" dangerouslySetInnerHTML={{ __html: GLYPHS[look.glyph](ink, tile) }} />
       )}
-      {look.gen > 0 && <Wear age={age} size={size} />}
+      {look.gen > 0 && (
+        <div className="wear-clip">
+          <Wear age={age} size={size} />
+        </div>
+      )}
+      {bars !== null && <EffortBars bars={bars} size={size} />}
     </div>
+  );
+}
+
+const BAR_HEIGHTS = [4, 6, 8, 10, 12];
+/** Effort as signal bars on a dark badge hanging off the tile's corner, lit white up to its rung. */
+function EffortBars({ bars, size }: { bars: number; size: number }) {
+  const k = Math.min(Math.max(size / 44, 0.62), 2.6);
+  return (
+    <svg className="effort-bars" viewBox="0 0 27 18" width={27 * k} height={18 * k} style={{ right: -5 * k, bottom: -5 * k }}>
+      <rect x=".5" y=".5" width="26" height="17" rx="4" fill="#1e1d1a" stroke="#6b6862" />
+      {BAR_HEIGHTS.map((h, i) => (
+        <rect key={i} x={4 + i * 4} y={15 - h} width="3" height={h} rx=".6" fill={i < bars ? "#fff" : "#55534f"} />
+      ))}
+    </svg>
   );
 }
 

@@ -221,6 +221,14 @@ export function sideLooks(g: Pick<Game, "white" | "black">): Record<Color, Model
   return { w, b: lookOf(g.black, same) };
 }
 
+/**
+ * Effort as bars out of five, on one ladder for every provider, matched by name: "high" is three bars
+ * whoever runs it, and a provider just never reaches the rungs it doesn't offer. Null for an effort off the
+ * ladder (and for people).
+ */
+const EFFORT_BARS: Record<string, number> = { none: 0, minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+export const effortBars = (effort: string | undefined): number | null => (effort !== undefined && Object.hasOwn(EFFORT_BARS, effort) ? EFFORT_BARS[effort] : null);
+
 /** A tile and glyph colour after ageing. */
 export function agedColors(look: Pick<ModelLook, "tile" | "tone" | "gen">): { tile: string; ink: string } {
   const a = ageOf(look.gen);
