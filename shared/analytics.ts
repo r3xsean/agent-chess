@@ -88,6 +88,12 @@ export interface PhaseStats {
   accuracy: number | null;
   blundersPer100: number | null;
   think: TimeStats;
+  /**
+   * The Chess.com rapid rating its moves in this phase look like, against how people of each rating play the
+   * phase, with an 80% range: moves only, no arena rating. Only the middlegame's held up on real players
+   * (server/chessCom.ts PHASE_SCALES): null for the others, and until the middlegame holds enough moves.
+   */
+  chessCom: { rating: number; low: number; high: number } | null;
 }
 
 export interface FormGame {

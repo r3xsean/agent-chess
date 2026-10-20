@@ -23,7 +23,7 @@ import { looseChess, VARIANTS, variantOf, type Variant } from "../shared/rules";
 import { games, players, players960, ratingPool } from "./store";
 import { GLICKO_START, glickoUpdate, type Glicko } from "./glicko";
 import { isRated, lineTokens } from "./game";
-import { chessComEstimates, moveReading, type MoveSample } from "./chessCom";
+import { chessComEstimates, moveReading, phaseEstimate, type MoveSample } from "./chessCom";
 
 /*
  * Everything the Agents tab shows, from the finished games: one pass over them per scope, kept until a
@@ -261,9 +261,11 @@ function illegalTurns(s: Side): { fen: string; ply: number; tries: string[]; pla
  * winning chances, so a move in a decided position barely counts), losses taken from the raw evals (no zero for
  * matching the engine's choice, which a Lichess PGN can't show). Chess960 has no book to leave out.
  */
-function moveSample(s: Side): MoveSample | null {
+function moveSample(s: Side): { all: MoveSample; phases: Record<GamePhase, MoveSample> } | null {
   if (s.g.variant === "chess960" || s.accuracy === null) return null;
-  const out: MoveSample = { weight: 0, cpl: 0, blunders: 0, errors: 0 };
+  const empty = (): MoveSample => ({ weight: 0, cpl: 0, blunders: 0, errors: 0 });
+  const all = empty();
+  const phases = { opening: empty(), middlegame: empty(), endgame: empty() };
   const cp = (sc: Score) => Math.max(-1000, Math.min(1000, scoreToCp(sc))) * (s.color === "w" ? 1 : -1);
   for (const m of s.own) {
     const before = s.g.analysis[m.fenBefore];
@@ -271,13 +273,20 @@ function moveSample(s: Side): MoveSample | null {
     const p = winPercentFor(before.score, s.color) / 100;
     const q = 4 * p * (1 - p);
     const drop = 100 * p - winPercentFor(m.analysis!.evalAfter, s.color);
-    out.weight += q;
-    out.cpl += q * Math.max(0, cp(before.score) - cp(m.analysis!.evalAfter));
-    if (drop > 20) out.blunders += q;
-    if (drop > 10) out.errors += q;
+    const loss = q * Math.max(0, cp(before.score) - cp(m.analysis!.evalAfter));
+    for (const out of [all, phases[phaseOf(m)]]) {
+      out.weight += q;
+      out.cpl += loss;
+      if (drop > 20) out.blunders += q;
+      if (drop > 10) out.errors += q;
+    }
   }
-  return out;
+  return { all, phases };
 }
+
+/** The move samples of a model's sides, one per reviewed standard game side, in a stable order (by game, then colour). */
+const movesOf = (sides: Side[]) =>
+  [...sides].sort((x, y) => (x.g.id < y.g.id ? -1 : x.g.id > y.g.id ? 1 : x.color === "w" ? -1 : 1)).flatMap((s) => moveSample(s) ?? []);
 
 const scoreOf = (sides: Side[]) => (sides.length ? round1((sides.reduce((a, s) => a + s.points, 0) / sides.length) * 100) : null);
 const accOf = (sides: Side[]) => round1(mean(sides.map((s) => s.accuracy).filter((x): x is number => x !== null)));
@@ -395,6 +404,7 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
   const counts: Partial<Record<Classification, number>> = {};
   for (const m of own) if (m.analysis && !m.analysis.unavailable) bump(counts, m.analysis.classification);
   const phases = {} as Record<GamePhase, PhaseStats>;
+  const moveSamples = movesOf(sides);
   for (const ph of ["opening", "middlegame", "endgame"] as const) {
     const mine = own.filter((m) => phaseOf(m) === ph);
     const g = mine.filter(graded);
@@ -403,6 +413,7 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
       accuracy: round1(mean(g.map((m) => m.analysis!.accuracy))),
       blundersPer100: per100(g.filter((m) => m.analysis!.classification === "blunder").length, g.length),
       think: timeStats(mine.map(thinkOf).filter((x): x is number => x !== null)),
+      chessCom: phaseEstimate(moveSamples.map((x) => x.phases[ph]), model, ph),
     };
   }
   const byColor = {} as ModelAnalytics["quality"]["byColor"];
@@ -759,10 +770,7 @@ function compute(scope: AnalyticsScope): Computed {
   for (const [model, sides] of byModel) models.set(model, { ...analyse(model, sides, field, history), scope });
   const all = [...models.values()];
   const estimates = chessComEstimates(
-    all.map((a) => {
-      const sides = [...byModel.get(a.row.model)!].sort((x, y) => (x.g.id < y.g.id ? -1 : x.g.id > y.g.id ? 1 : x.color === "w" ? -1 : 1));
-      return { move: moveReading(sides.flatMap((s) => moveSample(s) ?? []), a.row.model), rating: a.row.rating, rd: a.row.rd };
-    }),
+    all.map((a) => ({ move: moveReading(movesOf(byModel.get(a.row.model)!).map((x) => x.all), a.row.model), rating: a.row.rating, rd: a.row.rd })),
   );
   all.forEach((a, i) => (a.row.chessCom = estimates[i]));
   const rows =[...models.values()].map((a) => a.row).sort((a, b) => (b.rating ?? -Infinity) - (a.rating ?? -Infinity) || b.games - a.games);

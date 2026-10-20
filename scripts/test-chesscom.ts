@@ -1,8 +1,8 @@
 // The Chess.com estimate (server/chessCom.ts): reading the human curve backwards, the move reading's range,
 // anchoring the arena scale on the other models, and the Lichess-to-Chess.com step. Pure functions, no server.
 import assert from "node:assert/strict";
-import { HUMAN_RAPID } from "../server/humanCurve";
-import { MIN_GAMES, chessComEstimates, lichessToChessCom, moveReading, ratingFor, type MoveSample } from "../server/chessCom";
+import { HUMAN_RAPID, HUMAN_RAPID_BY_PHASE } from "../server/humanCurve";
+import { MIN_GAMES, PHASE_SCALES, chessComEstimates, lichessToChessCom, moveReading, phaseEstimate, ratingFor, type MoveSample } from "../server/chessCom";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -123,6 +123,31 @@ check("unread models stay null, and an unrated one stands on its moves", () => {
   const est = chessComEstimates([{ move: null, rating: 1500, rd: 100 }, model(1600, null), model(1500, 1500)]);
   assert.equal(est[0], null);
   near(est[1]!.rating, lichessToChessCom(1600), 25, "moves only");
+});
+
+check("each phase's curve only ever improves with rating, and reads its own bands back", () => {
+  for (const ph of ["opening", "middlegame", "endgame"] as const) {
+    const curve = HUMAN_RAPID_BY_PHASE[ph];
+    assert.ok(curve.length >= 10, `${ph} has ${curve.length} bands`);
+    for (let i = 1; i < curve.length; i++) assert.ok(curve[i].acpl <= curve[i - 1].acpl && curve[i].errors <= curve[i - 1].errors, `${ph} band ${curve[i].elo}`);
+    for (const b of curve) near(ratingFor("acpl", b.acpl, curve), b.elo, 1, `${ph} acpl at ${b.elo}`);
+  }
+});
+
+check("the middlegame reads against how people play the middlegame, with its own evidence floor", () => {
+  const band = HUMAN_RAPID_BY_PHASE.middlegame.find((b) => b.elo === 1550)!;
+  const est = phaseEstimate(games(band, 10), "m", "middlegame")!;
+  near(est.rating, lichessToChessCom(1550), 75, "middlegame at 1550");
+  assert.ok(est.low < est.rating && est.rating < est.high);
+  const floor = PHASE_SCALES.middlegame.minWeight;
+  assert.equal(phaseEstimate(games(band, MIN_GAMES, (floor - 1) / MIN_GAMES), "m", "middlegame"), null);
+});
+
+check("the opening and endgame, which didn't hold up on real players, are never shown", () => {
+  for (const ph of ["opening", "endgame"] as const) {
+    const band = HUMAN_RAPID_BY_PHASE[ph].find((b) => b.elo === 1550)!;
+    assert.equal(phaseEstimate(games(band, 40), "m", ph), null, ph);
+  }
 });
 
 if (failures) {

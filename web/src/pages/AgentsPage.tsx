@@ -328,6 +328,28 @@ function OverviewTab({ a }: { a: ModelAnalytics }) {
         <p className="panel-foot">Average move accuracy in each phase.</p>
       </Panel>
 
+      <Panel
+        title="Middlegame rating"
+        hint="How its middlegame moves compare with how people of each rating play the middlegame, from moves alone (no results). Provisional: for a person it's typically about 260 points off."
+      >
+        <Bars
+          max={2500}
+          rows={[
+            { label: "Overall", est: a.row.chessCom },
+            { label: "Middlegame", est: q.phases.middlegame.chessCom },
+          ].map(({ label, est }) => ({
+            label,
+            value: est?.rating ?? null,
+            display: est ? `≈${est.rating}` : "–",
+            sub: est ? `80% range ${est.low}–${est.high}` : "not enough moves yet",
+            faded: !est,
+          }))}
+        />
+        <p className="panel-foot">
+          Chess.com rapid. The opening and endgame aren't rated: tested on real players, opening moves haven't yet shown a reliable range, and endgame moves guessed a person's rating worse than picking the average.
+        </p>
+      </Panel>
+
       <Panel title="Upsets" hint="Rated games against an opponent 100+ points apart.">
         <div className="stat-row">
           <Stat label="Beat a stronger player" value={a.upsets.wins} />

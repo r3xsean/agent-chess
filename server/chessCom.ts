@@ -1,4 +1,5 @@
-import { HUMAN_RAPID, type HumanBand } from "./humanCurve";
+import type { GamePhase } from "../shared/analytics";
+import { HUMAN_RAPID, HUMAN_RAPID_BY_PHASE, type HumanBand } from "./humanCurve";
 
 /*
  * The Chess.com rapid rating a model would plausibly hold, from two readings of its games:
@@ -8,7 +9,8 @@ import { HUMAN_RAPID, type HumanBand } from "./humanCurve";
  *  - how it scores: its arena rating, shifted onto the human scale by where the other models' arena ratings sit
  *    against their own move readings (the arena rating says who beats whom, not what that's worth outside).
  *
- * The two are blended by how sure each is, then carried from Lichess rapid to Chess.com rapid.
+ * The two are blended by how sure each is, then carried from Lichess rapid to Chess.com rapid. The middlegame also
+ * gets a reading of its own, from its moves alone against how people play it (phaseEstimate, PHASE_SCALES).
  *
  * Every constant here was settled by validating against held-out Lichess players (people the curve never saw,
  * each with ten or more games): the move reading is off by about 280 Lichess points for a typical person, and its
@@ -36,8 +38,32 @@ export interface ChessComEstimate {
 /** A model needs this much move weight in all, from at least MIN_GAMES games, before its moves are read. */
 export const MIN_WEIGHT = 100;
 export const MIN_GAMES = 5;
-/** How far a player's moves can sit from their rating, beyond what their game count explains (Lichess points). */
-const TAU = 275;
+
+/** What a move reading is measured against and how far to trust it. */
+export interface ReadingScale {
+  curve: HumanBand[];
+  /** How far a player's moves can sit from their rating, beyond what their game count explains (Lichess points). */
+  tau: number;
+  minWeight: number;
+  minGames: number;
+  /** Whether its readings held up on held-out players well enough to show. */
+  shown: boolean;
+}
+const WHOLE_GAME: ReadingScale = { curve: HUMAN_RAPID, tau: 275, minWeight: MIN_WEIGHT, minGames: MIN_GAMES, shown: true };
+
+/**
+ * Each phase read against how people play that phase alone, fitted and checked on held-out Lichess players the
+ * same way as the whole-game reading. Only the middlegame earned a place: typically 264 points off, its 80% range
+ * held 73% of people (60–83%). The opening tracks rating (0.85 correlation) but its range only came good on a
+ * setting picked after a first one failed, so it waits for fresh players to confirm it. Endgame moves told a
+ * person's rating worse than guessing the middle of the field (414 points off against 305).
+ */
+export const PHASE_SCALES: Record<GamePhase, ReadingScale> = {
+  opening: { curve: HUMAN_RAPID_BY_PHASE.opening, tau: 250, minWeight: 100, minGames: MIN_GAMES, shown: false },
+  middlegame: { curve: HUMAN_RAPID_BY_PHASE.middlegame, tau: 175, minWeight: 100, minGames: MIN_GAMES, shown: true },
+  endgame: { curve: HUMAN_RAPID_BY_PHASE.endgame, tau: 325, minWeight: 75, minGames: MIN_GAMES, shown: false },
+};
+
 /** The least the arena's gaps may be taken to differ from human gaps: seven models can't rule out more. */
 const MIN_ARENA_SPREAD = 150;
 const Z80 = 1.2816;
@@ -75,7 +101,7 @@ export function ratingFor(key: Key, value: number, curve: HumanBand[] = HUMAN_RA
 function pooled(xs: MoveSample[]): MoveSample {
   return xs.reduce((a, x) => ({ weight: a.weight + x.weight, cpl: a.cpl + x.cpl, blunders: a.blunders + x.blunders, errors: a.errors + x.errors }), { weight: 0, cpl: 0, blunders: 0, errors: 0 });
 }
-const reading = (s: MoveSample) => READINGS.reduce((a, r) => a + r.weight * ratingFor(r.key, r.of(s)), 0);
+const reading = (s: MoveSample, curve: HumanBand[]) => READINGS.reduce((a, r) => a + r.weight * ratingFor(r.key, r.of(s), curve), 0);
 
 /** FNV-1a, to seed each model's bootstrap from its name: the same games always give the same range. */
 function fnv1a(text: string) {
@@ -97,19 +123,29 @@ function mulberry32(seed: number) {
  * even one whose moves all came in decided positions) plus the spread between people that games don't explain.
  * Samples come one per game side, in a stable order (by game, then colour).
  */
-export function moveReading(samples: MoveSample[], seed: string): { elo: number; v: number } | null {
+export function moveReading(samples: MoveSample[], seed: string, scale: ReadingScale = WHOLE_GAME): { elo: number; v: number } | null {
   const all = pooled(samples);
-  if (all.weight < MIN_WEIGHT || samples.filter((s) => s.weight > 0).length < MIN_GAMES) return null;
-  const elo = reading(all);
+  if (all.weight < scale.minWeight || samples.filter((s) => s.weight > 0).length < scale.minGames) return null;
+  const elo = reading(all, scale.curve);
   const rand = mulberry32(fnv1a(seed + "round3"));
   const boots: number[] = [];
   while (boots.length < 400) {
     const s = pooled(samples.map(() => samples[Math.floor(rand() * samples.length)]));
-    if (s.weight > 0) boots.push(reading(s));
+    if (s.weight > 0) boots.push(reading(s, scale.curve));
   }
   const mean = boots.reduce((a, b) => a + b, 0) / boots.length;
   const se = Math.max(25, Math.sqrt(boots.reduce((a, b) => a + (b - mean) ** 2, 0) / (boots.length - 1)));
-  return { elo, v: se ** 2 + TAU ** 2 };
+  return { elo, v: se ** 2 + scale.tau ** 2 };
+}
+
+/**
+ * A phase's estimate from its moves alone (no arena rating speaks to one phase), or null for a phase that isn't
+ * shown or doesn't hold enough moves yet. Samples as for moveReading.
+ */
+export function phaseEstimate(samples: MoveSample[], seed: string, phase: GamePhase): ChessComEstimate | null {
+  if (!PHASE_SCALES[phase].shown) return null;
+  const m = moveReading(samples, `${seed}:${phase}`, PHASE_SCALES[phase]);
+  return m && toChessCom(m.elo, m.v);
 }
 
 /**
@@ -127,6 +163,13 @@ export function lichessToChessCom(lichess: number): number {
   const i = above === -1 ? CHESSGOALS.length - 1 : Math.max(1, above);
   const [a, b] = [CHESSGOALS[i - 1], CHESSGOALS[i]];
   return Math.max(100, a[1] + ((lichess - a[0]) * (b[1] - a[1])) / (b[0] - a[0]));
+}
+
+/** A Lichess reading and its variance as a Chess.com rating with its 80% range, each end converted and rounded to 25. */
+function toChessCom(elo: number, v: number): ChessComEstimate {
+  const round = (x: number) => Math.round(lichessToChessCom(x) / 25) * 25;
+  const sd = Math.sqrt(v);
+  return { rating: round(elo), low: round(elo - Z80 * sd), high: round(elo + Z80 * sd) };
 }
 
 export interface ModelReadings {
@@ -151,7 +194,6 @@ export function chessComEstimates(models: ModelReadings[]): (ChessComEstimate | 
     spread2 = Math.max(spread2, (Q - (anchors.length - 1)) / C);
   }
 
-  const round = (x: number) => Math.round(lichessToChessCom(x) / 25) * 25;
   return models.map((m, i) => {
     if (!m.move) return null;
     let elo = m.move.elo;
@@ -166,7 +208,6 @@ export function chessComEstimates(models: ModelReadings[]): (ChessComEstimate | 
       v = 1 / (1 / m.move.v + 1 / arena.v);
       elo = v * (m.move.elo / m.move.v + arena.elo / arena.v);
     }
-    const sd = Math.sqrt(v);
-    return { rating: round(elo), low: round(elo - Z80 * sd), high: round(elo + Z80 * sd) };
+    return toChessCom(elo, v);
   });
 }
