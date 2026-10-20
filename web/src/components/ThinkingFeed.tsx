@@ -1,6 +1,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef } from "react";
 import type { CalcLine, Color, Game, IllegalTry, MoveRecord } from "../../../shared/types";
 import { selfEvalColors, sideName } from "../../../shared/naming";
+import { sideLooks } from "../../../shared/looks";
 import { beliefs, engineAfter, selfScore, standing, type Belief } from "../../../shared/belief";
 import { PlayerAvatar } from "./PlayerName";
 import { formatScore } from "../../../shared/evalmath";
@@ -70,7 +71,7 @@ const Thought = memo(function Thought({
   const self = m.selfEval;
   return (
     <div className={`thought ${on ? "on" : ""}`} onClick={() => onSelect(m.ply)} data-ply={m.ply}>
-      <PlayerAvatar player={player} size={36} />
+      <PlayerAvatar player={player} look={sideLooks(game)[m.color]} size={36} />
       <div className="thought-body">
         <div className="thought-head">
           <span>
@@ -183,7 +184,7 @@ const TryCard = memo(function TryCard({
   const reason = useMemo(() => explainIllegal(fen, move), [fen, move]);
   return (
     <div className={`thought try ${on ? "on" : ""}`} onClick={() => onSelect?.(ply, index)} data-try={`${ply}:${index}`}>
-      <PlayerAvatar player={player} size={36} />
+      <PlayerAvatar player={player} look={sideLooks(game)[color]} size={36} />
       <div className="thought-body">
         <div className="thought-head">
           <span className="try-move">

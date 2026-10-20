@@ -1,18 +1,19 @@
 import type { PlayerRef, PlayerStats } from "../../../shared/types";
 import { PROVISIONAL_RD } from "../../../shared/rating";
+import { sideLooks, type ModelLook } from "../../../shared/looks";
 import { useEffect, useState } from "react";
 import { useMeta, useStream, type GameSummary, type Lobby as LobbyData } from "../api";
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName } from "../components/PlayerName";
 import { PauseNotice } from "../components/PauseNotice";
 
-export function PlayerCell({ p, rating }: { p: PlayerRef; rating?: number }) {
+export function PlayerCell({ p, rating, look }: { p: PlayerRef; rating?: number; look?: ModelLook }) {
   return (
     <a className="pcell" href={`#/player/${encodeURIComponent(p.id)}`} onClick={(e) => e.stopPropagation()}>
-      <PlayerAvatar player={p} size={36} />
+      <PlayerAvatar player={p} look={look} size={36} />
       <div>
         <div className="nm">
-          <PlayerName player={p} />
+          <PlayerName player={p} look={look} />
           {rating !== undefined && <span style={{ color: "var(--muted)", fontWeight: 500 }}> ({rating})</span>}
         </div>
       </div>
@@ -57,7 +58,7 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
                 <PlayerCell p={g.white} rating={ratings?.[g.white.id]} />
               </td>
               <td className="g-b">
-                <PlayerCell p={g.black} rating={ratings?.[g.black.id]} />
+                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings?.[g.black.id]} />
               </td>
               <td className="res g-res">
                 {g.clockPause ? <span className="pause-label">{phaseLabel(g)}</span> : g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
@@ -275,7 +276,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
               <a key={g.id} className={`live-card${g.clockPause ? " is-paused" : ""}`} href={`#/game/${g.id}`}>
                 <PlayerCell p={g.white} rating={ratings[g.white.id]} />
                 <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs</div>
-                <PlayerCell p={g.black} rating={ratings[g.black.id]} />
+                <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings[g.black.id]} />
                 <div style={{ fontSize: 13, color: g.clockPause ? "var(--pause-color)" : "var(--green)", fontWeight: 700 }}>
                   {phaseLabel(g)}
                   {!g.rated && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · unrated</span>}

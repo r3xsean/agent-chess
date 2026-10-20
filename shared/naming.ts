@@ -1,5 +1,5 @@
 import type { Color, Game, PlayerRef } from "./types";
-import { makerOf } from "./models";
+import { sideLooks } from "./looks";
 
 /*
  * The model is the player, and running text calls it by its model.
@@ -17,12 +17,12 @@ export function humanSide(g: Pick<Game, "white" | "black">): Color | null {
 export const fullName = (p: PlayerRef) => p.modelLabel;
 
 /**
- * Colours that tell the two sides' self-eval lines apart: the maker's colour (Claude vs OpenAI vs human),
- * or when both share it, a fixed contrasting pair.
+ * Colours that tell the two sides' self-eval lines apart: each side's colour (the maker's, or Black's away
+ * colour when one maker made both), or a fixed contrasting pair when even those match (two unknown makers).
  */
 export function selfEvalColors(g: Pick<Game, "white" | "black">): Record<Color, string> {
-  const maker = { w: makerOf(g.white.provider).color, b: makerOf(g.black.provider).color };
-  return maker.w !== maker.b ? maker : { w: "#5fb6ff", b: "#ff9f43" };
+  const looks = sideLooks(g);
+  return looks.w.color !== looks.b.color ? { w: looks.w.color, b: looks.b.color } : { w: "#5fb6ff", b: "#ff9f43" };
 }
 
 /** What to call one side in running text: its model; when both sides are the same model, the model and its effort. */

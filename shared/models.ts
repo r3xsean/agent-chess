@@ -25,11 +25,3 @@ export const DEFAULT_BROADCASTER = { provider: "claudeAgent", model: "claude-opu
 export const DEFAULT_DIRECTOR = DEFAULT_BROADCASTER;
 
 export const modelLabel = (model: string) => MODELS.find((m) => m.model === model)?.label ?? model;
-
-/** Who makes each provider's models, with their brand colour (for the model tags). */
-const MAKERS: Record<string, { name: string; color: string }> = {
-  claudeAgent: { name: "Claude", color: "#d97757" },
-  codex: { name: "OpenAI", color: "#10a37f" },
-  human: { name: "Human", color: "#5d9bd5" },
-};
-export const makerOf = (provider: string) => MAKERS[provider] ?? { name: provider, color: "#8b8987" };

@@ -1,5 +1,6 @@
 import type { Color, PlayerRef } from "../../../shared/types";
 import type { MaterialInfo } from "../../../shared/material";
+import type { ModelLook } from "../../../shared/looks";
 import { PlayerAvatar, PlayerName } from "./PlayerName";
 
 const NAME: Record<string, string> = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen" };
@@ -36,6 +37,8 @@ const fmt = (ms: number) => {
 
 export function PlayerBar(props: {
   player: PlayerRef;
+  /** The side's look in this game (sideLooks). */
+  look: ModelLook;
   color: Color;
   material: MaterialInfo;
   rating?: number;
@@ -49,12 +52,12 @@ export function PlayerBar(props: {
   return (
     <div className="player-bar">
       <a href={`#/player/${encodeURIComponent(props.player.id)}`}>
-        <PlayerAvatar player={props.player} />
+        <PlayerAvatar player={props.player} look={props.look} />
       </a>
       <div className="player-meta">
         <div className="player-name">
           <a href={`#/player/${encodeURIComponent(props.player.id)}`}>
-            <PlayerName player={props.player} />
+            <PlayerName player={props.player} look={props.look} />
           </a>
           {props.rating !== undefined && <span className="rating">({props.rating})</span>}
           {props.status && <span className={`status-pill ${props.status.kind}`}>{props.status.text}</span>}

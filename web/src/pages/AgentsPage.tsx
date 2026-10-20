@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import type { AgentRow, AnalyticsScope, ModelAnalytics, Outcome, RatingSeries, TimeStats } from "../../../shared/analytics";
 import { useFetch } from "../api";
-import { makerOf } from "../../../shared/models";
+import { lookOf } from "../../../shared/looks";
+import { PlayerAvatar } from "../components/PlayerName";
 import { Bars, CalibrationChart, ModelScatter, RatingChart, VerdictMix, fmtMs, fmtNum } from "../components/Charts";
 
 /*
@@ -89,12 +90,10 @@ function Pill({ r }: { r: Outcome }) {
 const timeSub = (t: TimeStats) => (t.n ? `median ${fmtMs(t.medianMs)}` : undefined);
 
 function ModelBadge({ label, provider, size = 40 }: { label: string; provider: string; size?: number }) {
-  return (
-    <div className="avatar" style={{ background: makerOf(provider).color, width: size, height: size, fontSize: size * 0.45 }}>
-      {label[0]}
-    </div>
-  );
+  return <PlayerAvatar player={{ provider, modelLabel: label }} size={size} />;
 }
+
+const rowLook = (r: { provider: string; label: string }) => lookOf({ provider: r.provider, modelLabel: r.label });
 
 /* ------------------------------ the comparison table ------------------------------ */
 
@@ -208,7 +207,7 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
                       <a className="nm" href={hrefTo(r.model, { scope })} onClick={(e) => e.stopPropagation()}>
                         {r.label}
                       </a>
-                      <div className="md">{makerOf(r.provider).name}</div>
+                      <div className="md">{rowLook(r).makerName}</div>
                     </div>
                   </div>
                 </td>
@@ -235,7 +234,7 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
           <ModelScatter
             points={rows
               .filter((r) => r.rating !== null && r.accuracy !== null)
-              .map((r) => ({ id: r.model, label: r.label, x: r.accuracy!, y: r.rating!, color: makerOf(r.provider).color, faded: r.games < FEW_GAMES }))}
+              .map((r) => ({ id: r.model, label: r.label, x: r.accuracy!, y: r.rating!, color: rowLook(r).color, faded: r.games < FEW_GAMES }))}
           />
         </Panel>
       </div>
@@ -738,7 +737,7 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1>{r.label}</h1>
           <div className="muted">
-            {makerOf(r.provider).name} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated
+            {rowLook(r).makerName} · {plural(r.games, "game")} · {r.record.wins}W / {r.record.draws}D / {r.record.losses}L rated
           </div>
         </div>
         {rows && rows.length > 1 && (

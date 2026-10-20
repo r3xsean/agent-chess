@@ -2,6 +2,7 @@ import type { Color, Game, Score } from "../../../shared/types";
 import { winPercentWhite } from "../../../shared/evalmath";
 import { engineAfter } from "../../../shared/belief";
 import { selfEvalColors, sideName } from "../../../shared/naming";
+import { sideLooks } from "../../../shared/looks";
 import { PlayerAvatar } from "./PlayerName";
 import { CLASS_META, CLASS_ORDER, ClassIcon } from "./ClassIcon";
 
@@ -108,7 +109,7 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
         <div />
         {(["w", "b"] as Color[]).map((c) => (
           <div className="hdr" key={c}>
-            <PlayerAvatar player={c === "w" ? game.white : game.black} size={36} />
+            <PlayerAvatar player={c === "w" ? game.white : game.black} look={sideLooks(game)[c]} size={36} />
             {sideName(game, c)}
           </div>
         ))}

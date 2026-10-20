@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
 import type { PlayerRef, Tournament } from "../../../shared/types";
+import { sideLooks } from "../../../shared/looks";
 import { GamesTable, PlayerCell } from "./Lobby";
 import { SummonInfo } from "../components/NewGame";
 
@@ -93,7 +94,7 @@ export function TournamentPage({ id }: { id: string }) {
                     <PlayerCell p={byId.get(p.white)!} />
                   </td>
                   <td>
-                    <PlayerCell p={byId.get(p.black)!} />
+                    <PlayerCell p={byId.get(p.black)!} look={sideLooks({ white: byId.get(p.white)!, black: byId.get(p.black)! }).b} />
                   </td>
                   <td className="res">
                     {g ? g.result ?? <span style={{ color: "var(--green)" }}>{g.phase}</span> : data.next?.includes(i) ? <span style={{ color: "#f7c631" }}>next</span> : <span style={{ color: "var(--muted)" }}>upcoming</span>}
@@ -126,7 +127,7 @@ function NextUp({ tournamentId, matchups, breakUntil, canSkip }: { tournamentId:
             <tr key={i}>
               <td><PlayerCell p={w} /></td>
               <td style={{ color: "var(--muted)" }}>vs</td>
-              <td><PlayerCell p={b} /></td>
+              <td><PlayerCell p={b} look={sideLooks({ white: w, black: b }).b} /></td>
             </tr>
           ))}
         </tbody>

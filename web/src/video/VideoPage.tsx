@@ -6,7 +6,7 @@ import { seriesLine } from "../../../shared/series";
 import type { VoiceManifest } from "../../../shared/voices";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
-import { makerOf } from "../../../shared/models";
+import { sideLooks } from "../../../shared/looks";
 import { materialInfo, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
 import { fenAt, lineVerdicts, planBranch, planLine, resolveLineRefs, shownLine, type LineKind, type ShownBranch, type ShownLine } from "../../../shared/engineLine";
@@ -1276,9 +1276,11 @@ function EvalBar({ w, text, length, thickness, marks = [] }: { w: number; text: 
   );
 }
 
-function Avatar({ player, size }: { player: PlayerRef; size: number }) {
-  return <PlayerAvatar player={player} size={size} />;
+/** A side's face, in its colour for this game (Black's away colour when one maker made both). */
+function Avatar({ g, color, size }: { g: Game; color: Color; size: number }) {
+  return <PlayerAvatar player={color === "w" ? g.white : g.black} look={sideLooks(g)[color]} size={size} />;
 }
+const sideColor = (g: Game, c: Color) => sideLooks(g)[c].color;
 
 /** Thinking time as a chess clock: m:ss, or h:mm:ss. */
 const clock = (ms: number) => {
@@ -1316,10 +1318,10 @@ function PlayerCard({ g, color, material, rating, toMove, clockMs }: { g: Game; 
   const ref = color === "w" ? g.white : g.black;
   return (
     <div className={`v-player ${toMove ? "to-move" : ""}`}>
-      <Avatar player={ref} size={52} />
+      <Avatar g={g} color={color} size={52} />
       <div className="v-player-meta">
         <div className="v-player-name">
-          <PlayerName player={ref} />
+          <PlayerName player={ref} look={sideLooks(g)[color]} />
           {rating !== undefined && <span className="v-rating">({rating})</span>}
         </div>
         <Captured info={material} color={color} />
@@ -1396,9 +1398,8 @@ function IllegalBanner({ g, b }: { g: Game; b: BoardView }) {
 const fitFont = (size: number, len: number) => (len > 450 ? size * 0.68 : len > 300 ? size * 0.78 : len > 200 ? size * 0.88 : size);
 
 function ThoughtLabel({ g, t }: { g: Game; t: Said }) {
-  const ref = t.color === "w" ? g.white : g.black;
   return (
-    <div className="v-thought-label" style={{ color: makerOf(ref.provider).color }}>
+    <div className="v-thought-label" style={{ color: sideColor(g, t.color) }}>
       💭 {sideName(g, t.color)} thinks{t.selfEval && <span className="v-selfeval">self-eval {t.selfEval}</span>}
     </div>
   );
@@ -1409,11 +1410,10 @@ function ThoughtLabel({ g, t }: { g: Game; t: Said }) {
  * a border in their colour say who it is.
  */
 function ThoughtBubble({ g, t, size, style }: { g: Game; t: Said; size: number; style?: CSSProperties }) {
-  const ref = t.color === "w" ? g.white : g.black;
   return (
-    <div className="v-bubble off" style={{ ...style, borderColor: makerOf(ref.provider).color }}>
+    <div className="v-bubble off" style={{ ...style, borderColor: sideColor(g, t.color) }}>
       <div className="v-bubble-who">
-        <Avatar player={ref} size={Math.round(size * 1.5)} />
+        <Avatar g={g} color={t.color} size={Math.round(size * 1.5)} />
         <ThoughtLabel g={g} t={t} />
       </div>
       <div className="v-bubble-text" style={{ fontSize: fitFont(size, t.text.length) }}>
@@ -1439,7 +1439,7 @@ function SpeechBox({ g, sp }: { g: Game; sp: NonNullable<View["speech"]> }) {
     const hp = prev.current?.offsetHeight ?? hn;
     box.current.style.height = `${(hp + (hn - hp) * sp.mix) * sp.open}px`;
   });
-  const border = (s: Said) => makerOf((s.color === "w" ? g.white : g.black).provider).color;
+  const border = (s: Said) => sideColor(g, s.color);
   // One bubble stays up through a handover, its border turning to the new speaker's colour; the words go
   // first, then the new ones come, so the two never show over each other.
   const color = sp.prev ? `color-mix(in srgb, ${border(sp.now)} ${Math.round(sp.mix * 100)}%, ${border(sp.prev)})` : border(sp.now);
@@ -1471,12 +1471,11 @@ function AsideComment({ g, a, compact = false }: { g: Game; a: NonNullable<View[
     if (compact || !fold.current || !body.current) return;
     fold.current.style.height = `${body.current.offsetHeight * a.open}px`;
   });
-  const ref = a.color === "w" ? g.white : g.black;
   return (
     <div ref={fold} className={compact ? "v-aside-box" : "v-aside-fold"} style={{ opacity: a.open }}>
       <div ref={body} className="v-aside-body">
-        <div className={`v-aside ${compact ? "compact" : ""}`} style={{ borderColor: makerOf(ref.provider).color }}>
-          <Avatar player={ref} size={compact ? 52 : 40} />
+        <div className={`v-aside ${compact ? "compact" : ""}`} style={{ borderColor: sideColor(g, a.color) }}>
+          <Avatar g={g} color={a.color} size={compact ? 52 : 40} />
           <div className="v-aside-text">{a.text}</div>
         </div>
       </div>
@@ -1897,8 +1896,8 @@ function PlayerHero({ g, color, rating }: { g: Game; color: Color; rating?: numb
   const ref = color === "w" ? g.white : g.black;
   return (
     <div className="v-hero">
-      <Avatar player={ref} size={170} />
-      <div className="v-hero-name" style={{ color: makerOf(ref.provider).color }}>
+      <Avatar g={g} color={color} size={170} />
+      <div className="v-hero-name" style={{ color: sideColor(g, color) }}>
         {ref.modelLabel}
       </div>
       <div className="v-hero-as">{whoLine(ref)}</div>
@@ -1945,10 +1944,10 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
   return (
     <div className={`v-interview ${wide ? "landscape" : "portrait"}`}>
       <div className="v-interview-head">
-        <Avatar player={ref} size={wide ? 120 : 140} />
+        <Avatar g={g} color={s.color} size={wide ? 120 : 140} />
         <div>
           <div className="v-interview-kind">{s.when === "pre" ? "Pre-game interview" : "Post-game interview"}</div>
-          <div className="v-interview-name" style={{ color: makerOf(ref.provider).color }}>
+          <div className="v-interview-name" style={{ color: sideColor(g, s.color) }}>
             {ref.modelLabel}
           </div>
           <div className="v-interview-sub">
@@ -1957,7 +1956,7 @@ function InterviewScene({ g, s, v, wide }: { g: Game; s: Extract<Scene, { kind: 
           </div>
         </div>
       </div>
-      <div className="v-quote" style={{ fontSize: font, borderColor: makerOf(ref.provider).color }}>
+      <div className="v-quote" style={{ fontSize: font, borderColor: sideColor(g, s.color) }}>
         {ws.map((w, i) => (
           <span key={i} style={{ opacity: i < (v.reveal ?? 0) ? 1 : 0 }}>
             {w}{" "}
@@ -1979,8 +1978,8 @@ function ResultScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: b
     const delta = g.ratingChange?.[c];
     return (
       <div className={`v-result-side ${winner === c ? "won" : ""}`}>
-        <Avatar player={ref} size={110} />
-        <div className="v-hero-name small" style={{ color: makerOf(ref.provider).color }}>
+        <Avatar g={g} color={c} size={110} />
+        <div className="v-hero-name small" style={{ color: sideColor(g, c) }}>
           {ref.modelLabel}
         </div>
         <div className="v-hero-as small">
@@ -2108,8 +2107,8 @@ function Thumbnail({ g, prep, opt }: { g: Game; prep: Prep; opt?: number }) {
     const ref = c === "w" ? g.white : g.black;
     return (
       <div className="v-thumb-player">
-        <Avatar player={ref} size={64} />
-        <span style={{ color: makerOf(ref.provider).color }}>{ref.modelLabel}</span>
+        <Avatar g={g} color={c} size={64} />
+        <span style={{ color: sideColor(g, c) }}>{ref.modelLabel}</span>
       </div>
     );
   };

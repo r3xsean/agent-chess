@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from "react";
 import type { Color, Game } from "../../../shared/types";
 import { fullName } from "../../../shared/naming";
+import { sideLooks } from "../../../shared/looks";
 import { PlayerAvatar } from "./PlayerName";
 import { scrollIntoPanel } from "../scroll";
 
@@ -45,7 +46,7 @@ export const Studio = memo(function Studio({ game, hideBroadcast }: { game: Game
           </div>
         ) : (
           <div key={`iv${it.when}${it.color}`} className="studio-item interview">
-            <PlayerAvatar player={it.color === "w" ? game.white : game.black} size={36} />
+            <PlayerAvatar player={it.color === "w" ? game.white : game.black} look={sideLooks(game)[it.color]} size={36} />
             <div style={{ flex: 1 }}>
               <div className="who">
                 {it.when === "pre" ? "Pre-game interview" : "Post-game interview"} · {fullName(it.color === "w" ? game.white : game.black)}

@@ -5,6 +5,7 @@ import type { Classification, Color, Game, MoveAnalysis, PositionAnalysis } from
 import { ClassIcon, CLASS_META } from "../components/ClassIcon";
 import { formatScore, scoreToCp, winPercentFor, winPercentWhite } from "../../../shared/evalmath";
 import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
+import { sideLooks } from "../../../shared/looks";
 import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
 import { materialTimeline } from "../../../shared/material";
@@ -591,6 +592,7 @@ export function GamePage({ id }: { id: string }) {
   const bar = (c: Color) => (
     <PlayerBar
       player={c === "w" ? game.white : game.black}
+      look={sideLooks(game)[c]}
       color={c}
       material={material}
       rating={rating(c)}
