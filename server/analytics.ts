@@ -1,4 +1,4 @@
-import type { Classification, Color, Game, Lessons, MoveRecord, PlayerRef } from "../shared/types";
+import type { Classification, Color, Game, Lessons, MoveRecord, PlayerRef, Score } from "../shared/types";
 import type {
   AgentRow,
   AnalyticsScope,
@@ -18,12 +18,13 @@ import type {
 } from "../shared/analytics";
 import { MODELS } from "../shared/models";
 import { isHuman } from "../shared/naming";
-import { winPercentFor } from "../shared/evalmath";
+import { scoreToCp, winPercentFor } from "../shared/evalmath";
 import { beliefs, engineAfter } from "../shared/belief";
 import { looseChess } from "../shared/rules";
 import { games, lessonsRevision, players, readLessons } from "./store";
 import { GLICKO_START, glickoUpdate, type Glicko } from "./glicko";
 import { isRated, lineTokens } from "./game";
+import { chessComEstimates, moveReading, type MoveSample } from "./chessCom";
 
 /*
  * Everything the Agents tab shows, from the finished games: one pass over them per scope, kept until a
@@ -255,6 +256,30 @@ function illegalTurns(s: Side): { fen: string; ply: number; tries: string[]; pla
   return out;
 }
 
+/**
+ * What a reviewed standard game says about how it moves, for the Chess.com estimate, measured exactly as
+ * scripts/human-curve.mjs measures people: each move weighted by how open the position was (4·p·(1−p) on its
+ * winning chances, so a move in a decided position barely counts), losses taken from the raw evals (no zero for
+ * matching the engine's choice, which a Lichess PGN can't show). Chess960 has no book to leave out.
+ */
+function moveSample(s: Side): MoveSample | null {
+  if (s.g.variant === "chess960" || s.accuracy === null) return null;
+  const out: MoveSample = { weight: 0, cpl: 0, blunders: 0, errors: 0 };
+  const cp = (sc: Score) => Math.max(-1000, Math.min(1000, scoreToCp(sc))) * (s.color === "w" ? 1 : -1);
+  for (const m of s.own) {
+    const before = s.g.analysis[m.fenBefore];
+    if (!graded(m) || !before || before.failed) continue;
+    const p = winPercentFor(before.score, s.color) / 100;
+    const q = 4 * p * (1 - p);
+    const drop = 100 * p - winPercentFor(m.analysis!.evalAfter, s.color);
+    out.weight += q;
+    out.cpl += q * Math.max(0, cp(before.score) - cp(m.analysis!.evalAfter));
+    if (drop > 20) out.blunders += q;
+    if (drop > 10) out.errors += q;
+  }
+  return out;
+}
+
 const scoreOf = (sides: Side[]) => (sides.length ? round1((sides.reduce((a, s) => a + s.points, 0) / sides.length) * 100) : null);
 const accOf = (sides: Side[]) => round1(mean(sides.map((s) => s.accuracy).filter((x): x is number => x !== null)));
 const wdlOf = (sides: Side[]): WDL => ({
@@ -308,6 +333,8 @@ function rowOf(model: string, sides: Side[]): AgentRow {
     moves: own.length,
     accuracy: accOf(sides),
     estElo: estElo === null ? null : Math.round(estElo / 25) * 25,
+    // Needs every model's readings at once (compute fills it in).
+    chessCom: null,
     score: scoreOf(sides),
     blundersPer100: per100(g.filter((m) => m.analysis!.classification === "blunder").length, g.length),
     illegalPer100: per100(
@@ -757,7 +784,15 @@ function compute(scope: AnalyticsScope): Computed {
   const history = ratingHistories();
   const models = new Map<string, ModelAnalytics>();
   for (const [model, sides] of byModel) models.set(model, { ...analyse(model, sides, field, history), scope });
-  const rows = [...models.values()].map((a) => a.row).sort((a, b) => (b.rating ?? -Infinity) - (a.rating ?? -Infinity) || b.games - a.games);
+  const all = [...models.values()];
+  const estimates = chessComEstimates(
+    all.map((a) => {
+      const sides = [...byModel.get(a.row.model)!].sort((x, y) => (x.g.id < y.g.id ? -1 : x.g.id > y.g.id ? 1 : x.color === "w" ? -1 : 1));
+      return { move: moveReading(sides.flatMap((s) => moveSample(s) ?? []), a.row.model), rating: a.row.rating, rd: a.row.rd };
+    }),
+  );
+  all.forEach((a, i) => (a.row.chessCom = estimates[i]));
+  const rows =[...models.values()].map((a) => a.row).sort((a, b) => (b.rating ?? -Infinity) - (a.rating ?? -Infinity) || b.games - a.games);
   const out = { sig, rows, models };
   cache.set(scope, out);
   return out;

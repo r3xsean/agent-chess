@@ -102,6 +102,9 @@ function ModelBadge({ label, provider, size = 40 }: { label: string; provider: s
 
 /* ------------------------------ the comparison table ------------------------------ */
 
+const CHESSCOM_HINT =
+  "The Chess.com rapid rating it would plausibly hold (80% range): how it moves in standard games while the position is still open, set against how people play at each rating, blended with its arena rating. A rough guide: for a person, the move reading is typically about 300 points off. Needs about 5 standard games.";
+
 type Col = { key: string; label: string; hint: string; get: (r: AgentRow) => number | null; show: (r: AgentRow) => ReactNode; lowerBetter?: boolean };
 
 const COLS: Col[] = [
@@ -123,7 +126,24 @@ const COLS: Col[] = [
   },
   { key: "score", label: "Score", hint: "Points per game: a win is 1, a draw ½", get: (r) => r.score, show: (r) => fmtNum(r.score, 0, "%") },
   { key: "accuracy", label: "Accuracy", hint: "Average game accuracy, as Lichess computes it", get: (r) => r.accuracy, show: (r) => fmtNum(r.accuracy, 1, "%") },
-  { key: "estElo", label: "Plays like", hint: "The Elo its average centipawn loss corresponds to", get: (r) => r.estElo, show: (r) => (r.estElo === null ? "–" : r.estElo) },
+  {
+    key: "chessCom",
+    label: "Chess.com",
+    hint: CHESSCOM_HINT,
+    get: (r) => r.chessCom?.rating ?? null,
+    show: (r) =>
+      r.chessCom === null ? (
+        "–"
+      ) : (
+        <>
+          ≈{r.chessCom.rating}
+          <small className="muted">
+            {" "}
+            {r.chessCom.low}–{r.chessCom.high}
+          </small>
+        </>
+      ),
+  },
   {
     key: "blunders",
     label: "Blunders",
@@ -856,8 +876,14 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
           sub={r.rd !== null ? `± ${r.rd}` : "unrated"}
           hint="Its most-played player's Glicko-2 rating"
         />
+        <Stat
+          label="Chess.com"
+          value={r.chessCom === null ? "–" : `≈${r.chessCom.rating}`}
+          sub={r.chessCom === null ? "needs ~5 standard games" : `rapid, ${r.chessCom.low}–${r.chessCom.high}`}
+          hint={CHESSCOM_HINT}
+        />
         <Stat label="Score" value={fmtNum(r.score, 0, "%")} sub={plural(r.games, "game")} few={few} />
-        <Stat label="Accuracy" value={fmtNum(r.accuracy, 1, "%")} sub={r.estElo !== null ? `plays like ${r.estElo}` : undefined} few={few} />
+        <Stat label="Accuracy" value={fmtNum(r.accuracy, 1, "%")} few={few} />
         <Stat label="Blunders" value={fmtNum(r.blundersPer100)} sub="per 100 moves" few={few} />
         <Stat label="Illegal tries" value={fmtNum(r.illegalPer100)} sub="per 100 moves" few={few} />
         <Stat label="Self-eval gap" value={fmtNum(r.calibration, 1)} sub="win-% points" few={few} hint="How far its own winning chances are from the engine's, on average" />

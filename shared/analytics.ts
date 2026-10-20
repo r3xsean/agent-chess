@@ -41,6 +41,12 @@ export interface AgentRow {
   /** Mean game accuracy (Lichess-style), and the Elo it plays like (from its centipawn loss). */
   accuracy: number | null;
   estElo: number | null;
+  /**
+   * The Chess.com rapid rating it would plausibly hold, with an 80% range: its standard games' moves set
+   * against how people play at each rating, blended with its arena rating (server/chessCom.ts). Null until
+   * its standard games hold enough moves in open positions (about five games' worth).
+   */
+  chessCom: { rating: number; low: number; high: number } | null;
   /** Points per game in scope (win 1, draw ½), as a percentage. */
   score: number | null;
   blundersPer100: number | null;
