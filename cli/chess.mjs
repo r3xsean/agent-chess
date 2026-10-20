@@ -99,14 +99,20 @@ const repeatable = ["start", "wait", "bc-wait", "status", "brief", "chat-brief",
 const resume = String(key).startsWith("dt-") ? "chat-brief" : cmd.startsWith("bc-") || cmd === "say" ? "bc-wait" : ["direct", "confirm"].includes(cmd) ? "brief" : cmd === "packaging" ? "packaging-brief" : cmd === "narrate" ? "narrate-brief" : "wait";
 const lost = `what you sent already went through. Run \`${resume}\`; don't send it again.`;
 
+/** Agents give each command a 6-minute shell timeout: the CLI answers inside it, whatever happens. */
+const BUDGET_MS = 350_000;
+/** How long a restarting server (a UI build, then its boot) has to come back once it stops answering. */
+const RESTART_MS = 120_000;
+
 async function main() {
   let res;
-  // Ride out short server restarts: keep retrying an unreachable server for up to 45 s.
-  const giveUpAt = Date.now() + 45_000;
+  const startedAt = Date.now();
+  // Ride out server restarts: the window opens at the first failure, so a long wait cut off late still gets it.
+  let giveUpAt = 0;
   for (;;) {
     try {
       // The server blocks for up to 5 minutes before it answers WAITING.
-      res = await post(cmd, body, 330_000);
+      res = await post(cmd, body, Math.min(330_000, Math.max(5_000, startedAt + BUDGET_MS - Date.now())));
       break;
     } catch (e) {
       if (e.code === "TIMEOUT") {
@@ -115,7 +121,13 @@ async function main() {
       }
       // Refused: the server never got the request, so sending it again is safe. Anything else may have
       // dropped after the server acted on it (e.g. a restart mid-wait).
+      giveUpAt ||= Date.now() + RESTART_MS;
       if (Date.now() < giveUpAt && (repeatable || e.code === "ECONNREFUSED")) {
+        if (Date.now() + 2000 + 5_000 > startedAt + BUDGET_MS) {
+          // Out of time for this call, not for the restart: the agent just runs it again.
+          console.log(`WAITING — the server is restarting${repeatable ? "" : " and didn't get this"}. Run the command again.`);
+          return;
+        }
         await new Promise((r) => setTimeout(r, 2000));
         continue;
       }
@@ -123,7 +135,7 @@ async function main() {
         console.log(`WAITING — the connection dropped (${e.message}), but ${lost}`);
         return;
       }
-      console.error(`Cannot reach the Agent Chess server at ${SERVER} (${e.message}). Wait ~20 seconds and retry.`);
+      console.error(`Cannot reach the Agent Chess server at ${SERVER} (${e.message}). Wait a minute and retry.`);
       process.exit(3);
     }
   }
