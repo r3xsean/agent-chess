@@ -49,12 +49,24 @@ function directThread(db: DatabaseSync, g: Game, color: Color) {
   return thread;
 }
 
+/**
+ * Whether a player's usage limit should pause the game: not once it has done its part of the pregame or
+ * postgame, when it has nothing left to do that would lift the pause.
+ */
+export function usageLimitPauses(g: Game, color: Color) {
+  if ((color === "w" ? g.white : g.black).provider === "human") return false;
+  if (g.phase === "pregame" && g.interviews.pre[color]) return false;
+  if (g.phase === "postgame" && g.interviews.post[color] && g.journalDone[color] && (!g.options?.learning || g.lessonsDone?.[color])) return false;
+  return true;
+}
+
+/** A player's last real action (a move, an interview or anything else that acts, never a status check or a wait). */
+export const lastActionAt = (g: Game, color: Color) =>
+  Math.max(g.lastAgentActionAt?.[color] ?? 0, g.moves.filter((m) => m.color === color).at(-1)?.ts ?? 0, g.interviews.pre[color]?.ts ?? 0, g.interviews.post[color]?.ts ?? 0);
+
 /** T3's SQLite schema is internal. Keep its read-only adapter isolated and fail without pausing. */
 function readFailure(db: DatabaseSync, g: Game, color: Color): UsageFailure | null {
-  const player = color === "w" ? g.white : g.black;
-  if (player.provider === "human") return null;
-  if (g.phase === "pregame" && g.interviews.pre[color]) return null;
-  if (g.phase === "postgame" && g.interviews.post[color] && g.journalDone[color] && (!g.options?.learning || g.lessonsDone?.[color])) return null;
+  if (!usageLimitPauses(g, color)) return null;
   const thread = directThread(db, g, color) ?? delegatedThread(db, g, color);
   if (!thread) return null;
   const row = db.prepare(`SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
@@ -79,28 +91,31 @@ export function checkUsageLimits(games: Iterable<Game>, database: string, change
     db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 100");
     // Read everything before applying changes: an incompatible schema cannot partially pause games.
     const failures = active.flatMap((g) => (["w", "b"] as Color[]).map((color) => ({ g, color, failure: readFailure(db, g, color) })));
-    for (const { g, color, failure } of failures) {
-      if (!failure || g.usageLimitSeen?.[color] === failure.id) continue;
-      g.usageLimitSeen = { ...g.usageLimitSeen, [color]: failure.id };
-      const lastAction = Math.max(g.lastAgentActionAt?.[color] ?? 0,
-        g.moves.filter((m) => m.color === color).at(-1)?.ts ?? 0,
-        g.interviews.pre[color]?.ts ?? 0, g.interviews.post[color]?.ts ?? 0);
-      if (failure.at > lastAction) {
-        const provider = (color === "w" ? g.white : g.black).provider === "claudeAgent" ? "Claude" : (color === "w" ? g.white : g.black).provider === "codex" ? "Codex" : "Model";
-        pauseGame(g, { at: failure.at, code: "usage_limit", reason: `${provider} usage limit reached`, seats: [color], resetAt: failure.resetAt });
-        if (g.clockPause?.code === "usage_limit") {
-          g.clockPause.at = Math.min(g.clockPause.at, failure.at);
-          g.clockPause.seats = [...new Set([...(g.clockPause.seats ?? []), color])];
-          g.clockPause.resetAt = Math.max(g.clockPause.resetAt ?? 0, failure.resetAt ?? 0) || undefined;
-          const providers = new Set(g.clockPause.seats.map((c) => (c === "w" ? g.white : g.black).provider));
-          if (providers.size > 1) g.clockPause.reason = "Model usage limits reached";
-        }
-      }
-      changed(g);
-    }
+    for (const { g, color, failure } of failures) if (failure && applyUsageLimit(g, color, failure)) changed(g);
   } finally {
     db.close();
   }
+}
+
+/**
+ * Pause a game's thinking clock for a player's usage limit (from its T3 thread, or the log of an agent the
+ * server runs itself), unless it was seen already or the player has acted since. Whether anything changed.
+ */
+export function applyUsageLimit(g: Game, color: Color, failure: UsageFailure) {
+  if (g.usageLimitSeen?.[color] === failure.id) return false;
+  g.usageLimitSeen = { ...g.usageLimitSeen, [color]: failure.id };
+  if (failure.at > lastActionAt(g, color)) {
+    const provider = (color === "w" ? g.white : g.black).provider === "claudeAgent" ? "Claude" : (color === "w" ? g.white : g.black).provider === "codex" ? "Codex" : "Model";
+    pauseGame(g, { at: failure.at, code: "usage_limit", reason: `${provider} usage limit reached`, seats: [color], resetAt: failure.resetAt });
+    if (g.clockPause?.code === "usage_limit") {
+      g.clockPause.at = Math.min(g.clockPause.at, failure.at);
+      g.clockPause.seats = [...new Set([...(g.clockPause.seats ?? []), color])];
+      g.clockPause.resetAt = Math.max(g.clockPause.resetAt ?? 0, failure.resetAt ?? 0) || undefined;
+      const providers = new Set(g.clockPause.seats.map((c) => (c === "w" ? g.white : g.black).provider));
+      if (providers.size > 1) g.clockPause.reason = "Model usage limits reached";
+    }
+  }
+  return true;
 }
 
 export function startUsageLimitWatcher(games: () => Iterable<Game>, changed: (g: Game) => void) {

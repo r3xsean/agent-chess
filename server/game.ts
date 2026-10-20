@@ -150,11 +150,15 @@ export function rotateSeatKey(gameId: string, role: SeatRole) {
 const CLAIM_MS = 10 * 60_000;
 
 /**
- * Whether a seat is taken: handed to an orchestrator run (in its brief, or recorded as launched) and its
- * agent has turned up since, or handed out only just now. Handing out and checking happen in one step on
- * the server, so two runs asking at once never get the same seat.
+ * Whether a seat is taken: its agent is one the server runs itself (running, or stopped and waiting to
+ * carry on, maybe for a usage limit to reset, before it ever called in), or it was handed to an
+ * orchestrator run (in its brief, or recorded as launched) and its agent has turned up since, or handed out
+ * only just now. Handing out and checking happen in one step on the server, so two runs asking at once
+ * never get the same seat.
  */
 export function seatClaimed(g: Game, seat: SeatRole, now = Date.now()) {
+  const key = seatKeysFor(g.id)[seat];
+  if (key && seatKeys[key]?.agent) return true;
   const t = g.launched?.[seat];
   return !!t && ((g.seen[seat] ?? 0) >= t || now - t < CLAIM_MS);
 }

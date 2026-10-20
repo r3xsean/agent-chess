@@ -53,6 +53,7 @@ import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoF
 import { VOICE_DIR, voiceManifest } from "./voice";
 import { roundRobin } from "./schedule";
 import { summonAvailable } from "./summon";
+import { anyAgentCli } from "./agents";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { PROBE_COMMANDS, probeCommand } from "./probe";
 import { editUploadText, pickPackaging, publishLaunch, publishState, recordPublished, requestPublish, resumePublishes, setPackagingOptions } from "./publish";
@@ -350,7 +351,7 @@ app.get(
     models: MODELS,
     personalities: PERSONALITIES,
     defaultBroadcaster: DEFAULT_BROADCASTER,
-    summonAvailable: !PUBLIC_MODE && summonAvailable(),
+    summonAvailable: !PUBLIC_MODE && (summonAvailable() || anyAgentCli()),
     publicMode: PUBLIC_MODE,
     // Where viewers' predictions live: the public mirror when there is one, so local and public viewers share them.
     crowdBase: PUBLIC_MODE ? "" : (mirrorConfig()?.url ?? ""),
@@ -465,7 +466,7 @@ app.post(
 
 const SUMMON_COOLDOWN_MS = 10 * 60_000;
 
-// The website's "Summon agents" button: starts the game's agents through the T3 webhooks.
+// The website's "Summon agents" button: starts the game's agents (see launcher.ts).
 app.post(
   "/api/games/:id/summon",
   localOnly,

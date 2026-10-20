@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Game, SeatRole, Tournament } from "../shared/types";
 import { games, saveGameNow, saveSeatsNow, saveTournament, seatKeys, tournaments } from "./store";
 import { claimSeats, directorKey, playerFinished, rotateSeatKey, seatClaimed, seatIsHuman, seatKeysFor, startablePairings, touch } from "./game";
@@ -7,40 +8,63 @@ import { directorTurnedUp } from "./directorThread";
 import { tournamentNext } from "./orchestrator";
 import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, triggerOrchestrator } from "./summon";
 import { bootAt } from "./heartbeat";
+import { agentAlive, agentOutcome, agentPrompt, anyAgentCli, canRunAgent, limitWhileRunning, resumePrompt, startAgent, stopAgent, type AgentOutcome, type AgentProc } from "./agents";
+import { applyUsageLimit, lastActionAt, usageLimitPauses } from "./usageLimits";
 
 /*
- * Launching agents. A seat whose model and effort have an agent webhook is started by the server itself,
- * in its own T3 thread: the run gets only its seat key, and `start` gives it its task. The server watches
- * those seats and starts a new agent for one that goes quiet. Any other seat goes to an orchestrator run,
- * which delegates it and looks after it. The server also starts the next games of an auto-run tournament
- * and a broadcast game's video director once it's over.
+ * Launching agents. The server starts a player's or broadcaster's agent itself, in the background through
+ * its provider's CLI (see agents.ts), and carries its session on whenever it stops before its seat is done.
+ * A seat it can't run that way, and the video director (the user talks with it in T3), is started in its own
+ * T3 thread when an agent webhook covers its model and effort. Either way the agent gets only its seat key,
+ * and `start` gives it its task, and the server starts a new agent for one that goes quiet. Any other seat
+ * goes to an orchestrator run, which delegates it and looks after it. The server also starts the next games
+ * of an auto-run tournament and a broadcast game's video director once it's over.
  */
 
-type Who = { model: string; effort: string };
+type Who = { provider: string; model: string; effort: string };
 
-/** The model and effort a seat's agent runs on. */
+/** The provider, model and effort a seat's agent runs on. */
 function whoFor(g: Game, seat: SeatRole): Who {
   if (seat === "w" || seat === "b") return seat === "w" ? g.white : g.black;
   if (seat === "x") return g.broadcaster!;
   return directorWho(g);
 }
 
+/** Whether the server runs this seat's agent itself, through its CLI. */
+const runsItself = (seat: SeatRole, who: Who) => seat !== "d" && canRunAgent(who.provider);
+
+/** Whether the server can start an agent on this provider, model and effort without an orchestrator run. */
+const startableDirect = (p: Who) => canRunAgent(p.provider) || !!agentWebhook(p.model, p.effort);
+
 /**
- * Start a seat's agent in its own thread. False when no agent webhook covers its model and effort, or T3
- * refused (then the seat is free again). The seat is taken before anything is sent, so two launches at
- * once never start it twice. A seat started before gets a new key, so its earlier agent can't act for it.
+ * Start a seat's agent: in the background through its CLI, or in its own T3 thread. False when neither
+ * covers it, or the start failed (then the seat is free again). The seat is taken before anything starts,
+ * so two launches at once never start it twice. A seat started before gets a new key, so its earlier agent
+ * can't act for it, and an earlier agent the server runs itself is stopped.
  */
 async function launchDirect(g: Game, seat: SeatRole): Promise<boolean> {
-  const { model, effort } = whoFor(g, seat);
-  const url = agentWebhook(model, effort);
-  if (!url) return false;
+  const who = whoFor(g, seat);
+  const local = runsItself(seat, who);
+  const url = local ? undefined : agentWebhook(who.model, who.effort);
+  if (!local && !url) return false;
   const prev = g.directLaunch?.[seat];
+  const before = seatKeysFor(g.id)[seat];
+  const earlier = before ? seatKeys[before]?.agent : undefined;
   const key = prev ? rotateSeatKey(g.id, seat) : seat === "d" ? directorKey(g.id) : seatKeysFor(g.id)[seat];
+  if (earlier && agentAlive(earlier)) stopAgent(earlier);
   claimSeats(g, [seat]);
-  g.directLaunch = { ...g.directLaunch, [seat]: { at: Date.now(), relaunches: prev ? prev.relaunches + 1 : 0 } };
+  const relaunches = prev ? prev.relaunches + 1 : 0;
+  g.directLaunch = { ...g.directLaunch, [seat]: { at: Date.now(), relaunches } };
   saveGameNow(g);
   try {
-    const delivery = await triggerAgent(url, key);
+    if (local) {
+      const agent = startAgent({ ...who, prompt: agentPrompt(key), logName: `${g.id}-${seat}-${relaunches}` });
+      seatKeys[key].agent = agent;
+      saveSeatsNow();
+      console.log(`[launch] ${g.id} ${seat}: ${who.model} started in the background (pid ${agent.pid})`);
+      return true;
+    }
+    const delivery = await triggerAgent(url!, key);
     // Kept with the key (local only, never mirrored): usage-limit detection finds the agent's thread by it.
     if (delivery && seatKeys[key]) {
       seatKeys[key].delivery = delivery;
@@ -99,7 +123,7 @@ const RETRY_MS = 5 * 60_000;
 /** Start whatever an auto-run tournament can start now (never making games nothing could launch). */
 async function launchTournament(t: Tournament) {
   const seats = [...t.players, ...(t.broadcaster?.enabled ? [t.broadcaster] : [])].filter((p) => !("provider" in p && p.provider === "human"));
-  if (!orchestratorAvailable() && seats.some((p) => !agentWebhook(p.model, p.effort))) throw new Error("No orchestrator webhook, and not every player has an agent webhook.");
+  if (!orchestratorAvailable() && seats.some((p) => !startableDirect(p))) throw new Error("No orchestrator webhook, and not every player can be started without one.");
   const res = tournamentNext(t);
   if ("finished" in res) return;
   for (const g of res.games) {
@@ -142,15 +166,173 @@ function needsAgent(g: Game, seat: SeatRole) {
 
 const gaveUp = new Set<string>();
 
-/** Every few seconds: revive quiet agents, summon directors, start the next tournament games. */
+/** A stopped agent's session isn't carried on sooner than this after its run started, so a CLI that dies at once isn't restarted in a tight loop. */
+const RESUME_GAP_MS = 30_000;
+/** Runs in a row that may carry a session on without the agent acting, before a new agent takes the seat. */
+const MAX_RESUMES = 3;
+/** A usage limit that didn't say when it resets is tried again after this long. */
+const LIMIT_RETRY_MS = 30 * 60_000;
+/** Each stopped run's log is read once. */
+const outcomes = new Map<string, AgentOutcome>();
+
+/** A hand-over to T3 is tried this often until it goes through. */
+const HANDOVER_RETRY_MS = 60_000;
+const handOverTried = new Map<string, number>();
+
+/**
+ * An agent the server ran itself stopped, and its CLI is turned off since: its seat goes to T3, in its own
+ * thread (same key: the agent it replaces has stopped) or else through an orchestrator run. The seat stays
+ * the server's, and is tried again, until T3 has taken it.
+ */
+function handOver(g: Game, seat: SeatRole, l: { at: number; relaunches: number }, key: string, agent: AgentProc, now: number) {
+  const id = `${g.id}-${seat}`;
+  if (now - (handOverTried.get(id) ?? 0) < HANDOVER_RETRY_MS) return;
+  handOverTried.set(id, now);
+  const who = whoFor(g, seat);
+  const url = agentWebhook(who.model, who.effort);
+  if (!url && !orchestratorAvailable()) {
+    console.error(`[launch] ${id}: its agent stopped, its CLI is turned off, and there's no T3 webhook to hand the seat to`);
+    return;
+  }
+  console.log(`[launch] ${id}: its agent stopped and its CLI is turned off, handing the seat to T3`);
+  const done = () => {
+    if (seatKeys[key]?.agent === agent) delete seatKeys[key].agent;
+    saveSeatsNow();
+  };
+  if (url) {
+    triggerAgent(url, key)
+      .then((delivery) => {
+        done();
+        if (delivery && seatKeys[key]) seatKeys[key].delivery = delivery;
+        saveSeatsNow();
+        // Its claim and its no-show time start now, so nothing else takes the seat before it turns up.
+        claimSeats(g, [seat]);
+        l.at = Date.now();
+        saveGameNow(g);
+      })
+      .catch((e) => console.error(`[launch] ${id}: ${e.message} (trying again in a minute)`));
+    return;
+  }
+  // The orchestrator's brief hands out only free seats: freed first, and taken back if T3 can't be reached.
+  done();
+  const launched = g.launched?.[seat];
+  if (g.launched) delete g.launched[seat];
+  delete g.directLaunch![seat];
+  saveGameNow(g);
+  triggerOrchestrator({ action: "start-game", gameId: g.id }).catch((e) => {
+    console.error(`[launch] ${id}: ${e.message} (trying again in a minute)`);
+    if (seatKeys[key]) seatKeys[key].agent = agent;
+    saveSeatsNow();
+    if (launched) g.launched = { ...g.launched, [seat]: launched };
+    g.directLaunch = { ...g.directLaunch, [seat]: l };
+    saveGameNow(g);
+  });
+}
+
+/** Whether a seat's agent did something real since a time: a player's action, a broadcaster's line (not a status check, a wait or `help`). */
+function actedSince(g: Game, seat: SeatRole, since: number) {
+  if (seat === "w" || seat === "b") return lastActionAt(g, seat) > since;
+  return seat === "x" && (g.broadcast.at(-1)?.ts ?? 0) > since;
+}
+
+/**
+ * An agent the server runs itself stopped before its seat was done. A usage limit pauses a player's clock
+ * (if it still has something to do that would lift the pause) and waits until it resets. Then the session
+ * carries on with the same key, or, with no session to carry on or after a few runs that never acted, a new
+ * agent takes the seat. With its CLI turned off since, the seat goes to T3.
+ */
+function agentStopped(g: Game, seat: SeatRole, l: { at: number; relaunches: number }, key: string, agent: AgentProc, now: number) {
+  if (now - agent.startedAt < RESUME_GAP_MS) return;
+  if (!canRunAgent(agent.provider)) {
+    handOver(g, seat, l, key, agent, now);
+    return;
+  }
+  const id = `${agent.pid}@${agent.startedAt}`;
+  const out = outcomes.get(id) ?? agentOutcome(agent);
+  outcomes.set(id, out);
+  if (out.usageLimit) {
+    if ((seat === "w" || seat === "b") && usageLimitPauses(g, seat) && applyUsageLimit(g, seat, out.usageLimit)) {
+      console.log(`[launch] ${g.id} ${seat}: usage limit${out.usageLimit.resetAt ? ` until ${new Date(out.usageLimit.resetAt).toISOString()}` : ""}`);
+      saveGameNow(g);
+      touch(g);
+    }
+    if (now < (out.usageLimit.resetAt ? out.usageLimit.resetAt + 60_000 : out.usageLimit.at + LIMIT_RETRY_MS)) return;
+  }
+  // A run that acted (or that only stopped for its limit) starts the count again.
+  const resumes = actedSince(g, seat, agent.startedAt) || out.usageLimit ? 0 : agent.resumes;
+  if (out.session && resumes < MAX_RESUMES) {
+    console.log(`[launch] ${g.id} ${seat}: its agent stopped${out.usageLimit ? " (usage limit)" : ""}, carrying its session on`);
+    outcomes.delete(id);
+    try {
+      const who = whoFor(g, seat);
+      seatKeys[key].agent = startAgent({ ...who, provider: agent.provider, prompt: resumePrompt(key), logName: path.basename(agent.log, ".jsonl"), session: out.session, resumes: resumes + 1 });
+      saveSeatsNow();
+      // It has its no-show time again to turn up, however long ago it was last heard from.
+      l.at = now;
+      saveGameNow(g);
+    } catch (e) {
+      console.error(`[launch] ${g.id} ${seat}: ${(e as Error).message}`);
+    }
+    return;
+  }
+  if (l.relaunches >= MAX_RELAUNCHES) {
+    if (!gaveUp.has(`${g.id}-${seat}`)) console.error(`[launch] ${g.id} ${seat}: stopped again after ${MAX_RELAUNCHES} relaunches, giving up`);
+    gaveUp.add(`${g.id}-${seat}`);
+    return;
+  }
+  console.log(`[launch] ${g.id} ${seat}: its agent stopped ${out.session ? "again without acting" : "with no session to carry on"}, starting a new agent`);
+  outcomes.delete(id);
+  l.at = now;
+  launchDirect(g, seat).catch(() => {});
+}
+
+/** An agent the server runs itself whose seat is done may take this long to finish up and stop by itself. */
+const LINGER_MS = 10 * 60_000;
+const doneSince = new Map<string, number>();
+
+/** A seat that's done with its agent (its part over, or the game ended): a run that's over is forgotten, one still going after a while is stopped. */
+function seatDone(g: Game, seat: SeatRole, key: string, agent: AgentProc, now: number) {
+  const id = `${g.id}-${seat}`;
+  if (agentAlive(agent)) {
+    const since = doneSince.get(id) ?? now;
+    doneSince.set(id, since);
+    if (now - since < LINGER_MS) return;
+    console.log(`[launch] ${id}: its seat is done and its agent is still running, stopping it`);
+    stopAgent(agent);
+  }
+  doneSince.delete(id);
+  delete seatKeys[key].agent;
+  saveSeatsNow();
+}
+
+/** Every few seconds: carry stopped agents on, revive quiet ones, summon directors, start the next tournament games. */
 export function watch() {
-  if (!summonAvailable()) return;
+  // Agents already running are looked after whatever can be started now; starting anything needs a webhook or a CLI.
+  const launching = summonAvailable() || anyAgentCli();
   const now = Date.now();
   for (const g of games.values()) {
-    // A paused game's agents are waiting on purpose (a usage limit resumes by itself).
-    if (g.directLaunch && !g.clockPause)
+    if (g.directLaunch)
       for (const [seat, l] of Object.entries(g.directLaunch) as [SeatRole, { at: number; relaunches: number }][]) {
-        if (!needsAgent(g, seat)) continue;
+        const key = seatKeysFor(g.id)[seat];
+        const agent = key ? seatKeys[key]?.agent : undefined;
+        if (!needsAgent(g, seat)) {
+          if (agent) seatDone(g, seat, key, agent, now);
+          continue;
+        }
+        if (agent && !agentAlive(agent)) {
+          agentStopped(g, seat, l, key, agent, now);
+          continue;
+        }
+        // A CLI that reported a usage limit but stays up is stopped, so the limit is waited out like any other.
+        if (agent && limitWhileRunning(agent)) {
+          console.log(`[launch] ${g.id} ${seat}: its agent hit a usage limit and its CLI is still running, stopping it`);
+          stopAgent(agent);
+          continue;
+        }
+        if (!launching) continue;
+        // A paused game's agents are waiting on purpose (a usage limit resumes by itself). One the server runs
+        // itself that's still running isn't waiting out a limit (its CLI stops at one): only a deliberate pause holds it.
+        if (g.clockPause && !(agent && g.clockPause.code === "usage_limit")) continue;
         const seen = g.seen[seat] ?? 0;
         // After a restart every agent gets its full time again, counted from the boot: the time the server was
         // down isn't the agent's silence (its CLI was retrying), and its last calls before it may not have been saved.
@@ -165,6 +347,7 @@ export function watch() {
         l.at = now;
         launchDirect(g, seat).catch(() => {});
       }
+    if (!launching) continue;
     // A broadcast game's video director comes once the game is over.
     if (g.phase === "finished" && g.broadcaster?.enabled && !g.directorSummonedAt && now - (g.finishedAt ?? 0) < DIRECTOR_AFTER_MS && needsDirection(g)) {
       g.directorSummonedAt = now;
@@ -207,6 +390,7 @@ export function watch() {
       }
     }
   }
+  if (!launching) return;
   // Retry after breaks, or when busy models become available.
   for (const t of tournaments.values()) {
     if (!t.autoRun || t.status !== "running") continue;

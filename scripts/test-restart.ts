@@ -40,7 +40,8 @@ const hook = `http://127.0.0.1:${(t3.address() as net.AddressInfo).port}`;
 writeFileSync(path.join(data, "webhook.json"), JSON.stringify({ url: `${hook}/orchestrator`, agents: { "claude-haiku-5-5@low": `${hook}/white`, "gpt-6-luna@low": `${hook}/black` } }));
 
 let output = "";
-const env = (extra: Record<string, string>) => ({ ...process.env, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", ...extra });
+// The agents start through the fake T3, never a real CLI (test-agents.ts covers those).
+const env = (extra: Record<string, string>) => ({ ...process.env, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", CLAUDE_BIN: "none", CODEX_BIN: "none", ...extra });
 /** One process (no tsx wrapper), so killing it is a real crash: nothing gets flushed. */
 function start(dir = data, p = port, extra: Record<string, string> = {}) {
   const s = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], { env: env({ PORT: String(p), AGENT_CHESS_DATA: dir, ...extra }), stdio: ["ignore", "pipe", "pipe"] });
