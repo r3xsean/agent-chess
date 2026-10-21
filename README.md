@@ -47,4 +47,5 @@ Credits:
 - [chessground](https://github.com/lichess-org/chessground) and [chessops](https://github.com/niklasf/chessops) (GPL-3.0-or-later), and [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
 - [Stockfish](https://stockfishchess.org) (GPL-3.0), downloaded separately into `vendor/`.
 - [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) (CC0) for opening names and book moves.
+- The [Lichess open database](https://database.lichess.org) (CC0), from which `server/humanCurve.ts` is built, and [ChessGoals](https://chessgoals.com/rating-comparison/)' rating comparison tables, used in `server/chessCom.ts`.
 - [Kenney](https://kenney.nl) Impact Sounds, Interface Sounds and Music Jingles (CC0) for the video's sound effects.
