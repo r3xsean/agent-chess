@@ -37,6 +37,7 @@ export function gameToPgn(g: Game): string {
     headers.ECO = g.opening.eco;
     headers.Opening = g.opening.name;
   }
+  if (g.setOpening) headers.SetOpening = `${g.setOpening.name} (first ${g.setOpening.plies} plies set by the arena)`;
   if (g.termination) headers.Termination = g.termination;
   if (g.review?.w.accuracy != null) headers.WhiteAccuracy = String(g.review.w.accuracy);
   if (g.review?.b.accuracy != null) headers.BlackAccuracy = String(g.review.b.accuracy);
@@ -51,7 +52,7 @@ export function gameToPgn(g: Game): string {
     const prefix = m.color === "w" ? `${no}. ` : `${no}... `;
     const real = m.analysis && !m.analysis.unavailable ? m.analysis : undefined;
     const notes: string[] = [];
-    if (real) notes.push(`[%eval ${scoreToPawns(real.evalAfter, 99).toFixed(2)}] ${real.classification}`);
+    if (real) notes.push(`[%eval ${scoreToPawns(real.evalAfter, 99).toFixed(2)}] ${m.supplied ? "set opening" : real.classification}`);
     if (m.commentary) notes.push(`(self-eval ${m.selfEvalRaw}) ${esc(m.commentary)}`);
     if (m.illegalAttempts.length) notes.push(`Illegal attempts: ${m.illegalAttempts.join(", ")}`);
     // Lines that add nothing beyond the played move go into the comment; the rest become variations.

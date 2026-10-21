@@ -32,7 +32,11 @@ export function MoveList({
 
   const cell = (m?: MoveRecord) =>
     m ? (
-      <div className={`move-cell ${m.ply === ply && tryAt === null ? "on" : ""}`} onClick={() => onSelect(m.ply)}>
+      <div
+        className={`move-cell ${m.ply === ply && tryAt === null ? "on" : ""} ${m.supplied ? "supplied" : ""}`}
+        title={m.supplied ? "Set by the arena: neither player chose it" : undefined}
+        onClick={() => onSelect(m.ply)}
+      >
         {/* Illegal attempts come first: tried from the position before this move. */}
         {!hideVerdicts &&
           m.illegalAttempts.map((t, i) => (
@@ -48,7 +52,7 @@ export function MoveList({
               ✕{t}
             </span>
           ))}
-        {!hideVerdicts && m.analysis && SHOW_ICON.has(m.analysis.classification) && <ClassIcon c={m.analysis.classification} />}
+        {!hideVerdicts && !m.supplied && m.analysis && SHOW_ICON.has(m.analysis.classification) && <ClassIcon c={m.analysis.classification} />}
         {m.san}
       </div>
     ) : (
@@ -66,6 +70,11 @@ export function MoveList({
             </>
           )}
           {game.options?.rated === false && <span className="chip" title="This game doesn't change anyone's rating">Unrated</span>}
+        </div>
+      )}
+      {game.setOpening && (
+        <div className="set-opening-note">
+          Set opening: <b>{game.setOpening.name}</b>. The arena played the first {game.setOpening.plies} moves (faded); the players took over from there.
         </div>
       )}
       {rows.length === 0 && <div className="empty">No moves yet.</div>}

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { AgentRow, AnalyticsScope, ModelAnalytics, Outcome, RatingSeries, TimeStats } from "../../../shared/analytics";
+import { HANDOVER_MOVES, strongerChance, type AgentRow, type AnalyticsScope, type AnalyticsStart, type HandoverStats, type ModelAnalytics, type OpeningGrid, type Outcome, type RatingSeries, type TimeStats } from "../../../shared/analytics";
 import { useFetch } from "../api";
 import { lookOf } from "../../../shared/looks";
 import { PlayerAvatar, Var960 } from "../components/PlayerName";
@@ -23,19 +23,22 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "setup", label: "Setup" },
 ];
 
-const hrefTo = (model: string, q: { tab?: Tab; scope?: AnalyticsScope }) => {
+const hrefTo = (model: string, q: { tab?: Tab; scope?: AnalyticsScope; start?: AnalyticsStart }) => {
   const params = new URLSearchParams();
   if (q.tab && q.tab !== "overview") params.set("tab", q.tab);
   if (q.scope === "rated") params.set("scope", "rated");
+  if (q.start && q.start !== "all") params.set("start", q.start);
   const s = params.toString();
   return `#/agents${model ? `/${encodeURIComponent(model)}` : ""}${s ? `?${s}` : ""}`;
 };
-const go = (model: string, q: { tab?: Tab; scope?: AnalyticsScope }) => (location.hash = hrefTo(model, q));
+const go = (model: string, q: { tab?: Tab; scope?: AnalyticsScope; start?: AnalyticsStart }) => (location.hash = hrefTo(model, q));
 
 const ratio = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "–");
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const outcomeWord: Record<Outcome, string> = { W: "Won", D: "Drew", L: "Lost" };
+/** Points as a chess score: 1.5 → "1½", 0.5 → "½". */
+const pts = (x: number) => (x % 1 ? `${Math.floor(x) || ""}½` : String(x));
 
 /* ------------------------------ building blocks ------------------------------ */
 
@@ -78,6 +81,23 @@ function ScopeToggle({ scope, onChange }: { scope: AnalyticsScope; onChange: (s:
       </button>
       <button className={scope === "rated" ? "on" : ""} onClick={() => onChange("rated")}>
         Rated only
+      </button>
+    </div>
+  );
+}
+
+/** Which games by how they started: the players' own openings, the arena's set openings, or both. */
+function StartToggle({ start, onChange }: { start: AnalyticsStart; onChange: (s: AnalyticsStart) => void }) {
+  return (
+    <div className="seg" role="group" aria-label="Openings counted">
+      <button className={start === "all" ? "on" : ""} onClick={() => onChange("all")} title="Every game, however it opened">
+        Any opening
+      </button>
+      <button className={start === "free" ? "on" : ""} onClick={() => onChange("free")} title="Games the players opened themselves">
+        Free
+      </button>
+      <button className={start === "set" ? "on" : ""} onClick={() => onChange("set")} title="Games that started from a set opening">
+        Set
       </button>
     </div>
   );
@@ -173,10 +193,147 @@ const COLS: Col[] = [
     lowerBetter: true,
   },
   { key: "think", label: "Avg think", hint: "Average time per move, every delay included", get: (r) => r.think.avgMs, show: (r) => fmtMs(r.think.avgMs), lowerBetter: true },
+  {
+    key: "pairs",
+    label: "Pairs",
+    hint: "Colour-swapped pairs (the same opponent and start, once with each colour), scored together: pairs won – split – lost",
+    get: (r) => (r.pairs.played ? (r.pairs.won + r.pairs.split / 2) / r.pairs.played : null),
+    show: (r) =>
+      r.pairs.played ? (
+        <span className={r.pairs.played < FEW_GAMES ? "faded" : ""} title={r.pairs.played < FEW_GAMES ? "Too few pairs to read much into yet" : undefined}>
+          {r.pairs.won}–{r.pairs.split}–{r.pairs.lost}
+        </span>
+      ) : (
+        "–"
+      ),
+  },
 ];
 
-function Overview({ scope }: { scope: AnalyticsScope }) {
-  const rows = useFetch<AgentRow[]>(`/api/analytics?scope=${scope}`, [scope]);
+/** "74%" as a chance, with how sure it is in words. */
+const chanceWord = (p: number) => (p >= 95 ? "almost surely" : p >= 80 ? "likely" : p >= 60 ? "leaning" : p > 40 ? "too close to call" : p > 20 ? "leaning the other way" : p > 5 ? "unlikely" : "almost surely not");
+
+/** Every model against every set opening: score and accuracy from each, faded where it has few games. */
+function OpeningGridPanel({ scope, start }: { scope: AnalyticsScope; start: AnalyticsStart }) {
+  const grid = useFetch<OpeningGrid>(`/api/analytics/openings?scope=${scope}&start=${start}`, [scope, start]);
+  if (!grid) return null;
+  return (
+    <Panel
+      title="Set openings"
+      hint="Each model's score from each set opening (and accuracy below it), whether the arena set it or the players reached it themselves. Which kinds of position each model handles well, without its own repertoire choosing them. Cells under five games are faded."
+      wide
+    >
+      {grid.rows.length ? (
+        <div className="table-scroll">
+          <table className="table tight opening-grid">
+            <thead>
+              <tr>
+                <th>Model</th>
+                {grid.openings.map((o) => (
+                  <th key={o.id} className="num" title={o.name}>
+                    {o.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {grid.rows.map((r) => (
+                <tr key={r.model} className="click" onClick={() => go(r.model, { tab: "results", scope, start })}>
+                  <td>
+                    <div className="pcell">
+                      <ModelBadge label={r.label} provider={r.provider} size={22} />
+                      {r.label}
+                    </div>
+                  </td>
+                  {grid.openings.map((o) => {
+                    const c = r.cells[o.id];
+                    return (
+                      <td key={o.id} className={`num ${c && c.games < FEW_GAMES ? "faded" : ""}`} title={c ? `${o.name}: ${plural(c.games, "game")}` : undefined}>
+                        {c ? (
+                          <>
+                            <span style={{ color: c.score >= 60 ? "var(--green)" : c.score <= 40 ? "var(--c-blunder)" : undefined }}>{c.score.toFixed(0)}%</span>
+                            <small className="muted"> {fmtNum(c.accuracy, 0, "%")}</small>
+                          </>
+                        ) : (
+                          <span className="muted">·</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="muted small">No games from a set opening yet. Turn on "Set opening" when you start a game.</div>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * The chance each model is stronger than each other one, from their ratings and how settled those still are: a
+ * 30-point gap between two models with a handful of games each is mostly noise.
+ */
+function StrongerPanel({ rows }: { rows: AgentRow[] }) {
+  const rated = rows.filter((r) => r.rating !== null && r.rd !== null).sort((a, b) => b.rating! - a.rating!);
+  if (rated.length < 2) return null;
+  return (
+    <Panel
+      title="Is it really stronger?"
+      hint="The chance the model on the left is stronger than the one on top, from both standard ratings and how uncertain they still are (the ± on each rating). Near 50% means the gap between them is still within the noise."
+      wide
+    >
+      <div className="table-scroll">
+        <table className="table tight stronger-grid">
+          <thead>
+            <tr>
+              <th />
+              {rated.map((c) => (
+                <th key={c.model} className="num">
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rated.map((r) => (
+              <tr key={r.model}>
+                <td>
+                  <div className="pcell">
+                    <ModelBadge label={r.label} provider={r.provider} size={22} />
+                    {r.label}
+                    <small className="muted">
+                      {r.rating}±{r.rd}
+                    </small>
+                  </div>
+                </td>
+                {rated.map((c) => {
+                  if (c.model === r.model) return <td key={c.model} className="num muted">–</td>;
+                  const p = strongerChance(r.rating!, r.rd!, c.rating!, c.rd!) * 100;
+                  const tint = Math.min(1, Math.abs(p - 50) / 50);
+                  return (
+                    <td
+                      key={c.model}
+                      className="num"
+                      title={`${r.label} stronger than ${c.label}: ${p.toFixed(0)}%, ${chanceWord(p)}`}
+                      style={{ background: p >= 50 ? `rgba(129, 182, 76, ${0.45 * tint})` : `rgba(224, 82, 70, ${0.4 * tint})` }}
+                    >
+                      {p.toFixed(0)}%
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+function Overview({ scope, start }: { scope: AnalyticsScope; start: AnalyticsStart }) {
+  const rows = useFetch<AgentRow[]>(`/api/analytics?scope=${scope}&start=${start}`, [scope, start]);
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "rating", dir: -1 });
   if (!rows) return <div className="empty">Loading…</div>;
   if (!rows.length) return <div className="card empty">No agent has played yet.</div>;
@@ -215,12 +372,12 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
           </thead>
           <tbody>
             {sorted.map((r) => (
-              <tr key={r.model} className={`click ${r.games < FEW_GAMES ? "faded" : ""}`} onClick={() => go(r.model, { scope })}>
+              <tr key={r.model} className={`click ${r.games < FEW_GAMES ? "faded" : ""}`} onClick={() => go(r.model, { scope, start })}>
                 <td>
                   <div className="pcell">
                     <ModelBadge label={r.label} provider={r.provider} size={28} />
                     <div>
-                      <a className="nm" href={hrefTo(r.model, { scope })} onClick={(e) => e.stopPropagation()}>
+                      <a className="nm" href={hrefTo(r.model, { scope, start })} onClick={(e) => e.stopPropagation()}>
                         {r.label}
                       </a>
                       <div className="md">{rowLook(r).makerName}</div>
@@ -253,6 +410,8 @@ function Overview({ scope }: { scope: AnalyticsScope }) {
               .map((r) => ({ id: r.model, label: r.label, x: r.accuracy!, y: r.rating!, color: rowLook(r).color, faded: r.games < FEW_GAMES }))}
           />
         </Panel>
+        <StrongerPanel rows={rows} />
+        <OpeningGridPanel scope={scope} start={start} />
       </div>
     </>
   );
@@ -358,7 +517,42 @@ function OverviewTab({ a }: { a: ModelAnalytics }) {
         </div>
         <GameLinks games={[...a.upsets.winsOver.map((g) => ({ ...g, tag: "upset win" })), ...a.upsets.lossesTo.map((g) => ({ ...g, tag: "upset loss" }))].slice(0, 6)} />
       </Panel>
+
+      <HandoverPanel h={a.handover} />
     </div>
+  );
+}
+
+/**
+ * Its first moves of a game in a position it was handed against one it chose: a model that plays well only in its
+ * own openings is leaning on remembered theory more than on reading the board.
+ */
+function HandoverPanel({ h }: { h: { set: HandoverStats; free: HandoverStats } }) {
+  const side = (label: string, s: HandoverStats) => (
+    <Stat
+      label={label}
+      value={fmtNum(s.accuracy, 1, "%")}
+      sub={s.moves ? `${plural(s.moves, "move")} from ${plural(s.games, "game")} · ${fmtNum(s.book, 0, "%")} still theory · ${fmtNum(s.blundersPer100)} blunders /100` : "no games yet"}
+      few={s.moves < FEW_MOVES}
+    />
+  );
+  const gap = h.set.accuracy !== null && h.free.accuracy !== null && h.set.moves >= FEW_MOVES && h.free.moves >= FEW_MOVES ? h.set.accuracy - h.free.accuracy : null;
+  return (
+    <Panel
+      title="Right after the handover"
+      hint={`Its first ${HANDOVER_MOVES} moves of each standard game: after the arena's set opening, against those of openings it chose itself. Much worse after a set opening suggests it leans on remembered theory more than on reading the position.`}
+      few={Math.min(h.set.moves, h.free.moves) > 0 && Math.min(h.set.moves, h.free.moves) < FEW_MOVES ? <Few n={Math.min(h.set.moves, h.free.moves)} unit="move" /> : undefined}
+    >
+      <div className="stat-row">
+        {side("After a set opening", h.set)}
+        {side("In its own openings", h.free)}
+      </div>
+      {gap !== null && (
+        <p className="panel-foot">
+          {Math.abs(gap) < 2 ? "About as accurate either way." : gap < 0 ? `${Math.abs(gap).toFixed(1)} points less accurate in a position it was handed.` : `${gap.toFixed(1)} points more accurate in a position it was handed.`}
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -620,7 +814,7 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
         </div>
       </Panel>
 
-      <Panel title="Openings" hint="Standard games, by opening family. Chess960 games have no opening name." wide>
+      <Panel title="Openings" hint="Its repertoire: standard games it opened itself, by opening family (set openings are below)." wide>
         <div className="split even">
           {(["w", "b"] as const).map((c) => (
             <div key={c}>
@@ -638,7 +832,7 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
                     </thead>
                     <tbody>
                       {a.openings[c].map((o) => (
-                        <tr key={o.name}>
+                        <tr key={o.name} className={o.games < FEW_GAMES ? "faded" : ""}>
                           <td>{o.name}</td>
                           <td className="num">{o.games}</td>
                           <td className="num">{o.score.toFixed(0)}%</td>
@@ -656,7 +850,67 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
         </div>
       </Panel>
 
-      <Panel title="Head to head" hint="Against every other model, whatever effort either played at." wide>
+      <Panel title="From the set openings" hint="Standard games from each set opening, whether the arena set it or it got there itself." wide>
+        {a.setOpenings.length ? (
+          <div className="table-scroll">
+            <table className="table tight">
+              <thead>
+                <tr>
+                  <th>Opening</th>
+                  <th className="num">Games</th>
+                  <th className="num">Score</th>
+                  <th className="num">Accuracy</th>
+                  <th className="num">As White</th>
+                  <th className="num">As Black</th>
+                </tr>
+              </thead>
+              <tbody>
+                {a.setOpenings.map((o) => (
+                  <tr key={o.id} className={o.games < FEW_GAMES ? "faded" : ""}>
+                    <td>{o.name}</td>
+                    <td className="num">{o.games}</td>
+                    <td className="num">{o.score.toFixed(0)}%</td>
+                    <td className="num">{fmtNum(o.accuracy, 1, "%")}</td>
+                    <td className="num">{o.white.games ? `${fmtNum(o.white.score, 0, "%")} of ${o.white.games}` : "–"}</td>
+                    <td className="num">{o.black.games ? `${fmtNum(o.black.score, 0, "%")} of ${o.black.games}` : "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="muted small">No games from a set opening yet.</div>
+        )}
+      </Panel>
+
+      <Panel
+        title="Colour-swapped pairs"
+        hint="The same opponent and start (a set opening or a Chess960 position), once with each colour, scored together, so neither the colours nor the opening favour either side: 2 is both won, 1 a split."
+        few={a.pairs.length && a.pairs.length < FEW_GAMES ? <Few n={a.pairs.length} unit="pair" /> : undefined}
+        wide
+      >
+        {a.pairs.length ? (
+          <>
+            <div className="stat-row">
+              <Stat label="Pairs won" value={a.row.pairs.won} sub={`of ${a.row.pairs.played}`} />
+              <Stat label="Split" value={a.row.pairs.split} />
+              <Stat label="Lost" value={a.row.pairs.lost} />
+            </div>
+            <ul className="game-links">
+              {a.pairs.slice(0, 8).map((p) => (
+                <li key={p.gameIds.join()}>
+                  <Pill r={p.score > 1 ? "W" : p.score < 1 ? "L" : "D"} /> {pts(p.score)}–{pts(2 - p.score)} vs {p.opponent} · {p.start} ·{" "}
+                  <a href={`#/game/${p.gameIds[0]}`}>game 1</a>, <a href={`#/game/${p.gameIds[1]}`}>game 2</a>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <div className="muted small">No colour-swapped pairs yet: replay a set-opening or Chess960 game with "Rematch, colours swapped", or run a double round-robin with set openings.</div>
+        )}
+      </Panel>
+
+      <Panel title="Head to head" hint="Against every other model, whatever effort either played at. Stronger: the chance it's the stronger of the two, from both ratings and how settled they are." wide>
         {a.h2h.length ? (
           <div className="table-scroll">
             <table className="table tight">
@@ -668,18 +922,19 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
                   <th className="num">Score</th>
                   <th className="num">Its accuracy</th>
                   <th className="num">Theirs</th>
+                  <th className="num">Stronger?</th>
                 </tr>
               </thead>
               <tbody>
                 {a.h2h.map((h) => (
-                  <tr key={h.model} className={h.model !== "human" ? "click" : ""} onClick={() => h.model !== "human" && go(h.model, {})}>
+                  <tr key={h.model} className={`${h.model !== "human" ? "click" : ""} ${h.games < FEW_GAMES ? "faded" : ""}`} onClick={() => h.model !== "human" && go(h.model, { scope: a.scope, start: a.start })}>
                     <td>
                       <div className="pcell">
                         <ModelBadge label={h.label} provider={h.provider} size={22} />
                         {h.model === "human" ? (
                           h.label
                         ) : (
-                          <a href={hrefTo(h.model, {})} onClick={(e) => e.stopPropagation()}>
+                          <a href={hrefTo(h.model, { scope: a.scope, start: a.start })} onClick={(e) => e.stopPropagation()}>
                             {h.label}
                           </a>
                         )}
@@ -692,6 +947,9 @@ function ResultsTab({ a }: { a: ModelAnalytics }) {
                     <td className="num">{(((h.wins + h.draws / 2) / h.games) * 100).toFixed(0)}%</td>
                     <td className="num">{fmtNum(h.myAccuracy, 1, "%")}</td>
                     <td className="num">{fmtNum(h.theirAccuracy, 1, "%")}</td>
+                    <td className="num" title={h.stronger !== null ? `${a.row.label} is the stronger: ${h.stronger.toFixed(0)}%, ${chanceWord(h.stronger)}` : "One of them has no standard rating"}>
+                      {h.stronger !== null ? `${h.stronger.toFixed(0)}%` : "–"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -780,15 +1038,15 @@ function SetupTab({ a }: { a: ModelAnalytics }) {
   );
 }
 
-function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: AnalyticsScope }) {
-  const a = useFetch<ModelAnalytics>(`/api/analytics/${encodeURIComponent(model)}?scope=${scope}`, [model, scope]);
-  const rows = useFetch<AgentRow[]>(`/api/analytics?scope=${scope}`, [scope]);
+function ModelView({ model, tab, scope, start }: { model: string; tab: Tab; scope: AnalyticsScope; start: AnalyticsStart }) {
+  const a = useFetch<ModelAnalytics>(`/api/analytics/${encodeURIComponent(model)}?scope=${scope}&start=${start}`, [model, scope, start]);
+  const rows = useFetch<AgentRow[]>(`/api/analytics?scope=${scope}&start=${start}`, [scope, start]);
   // Another model's numbers are never shown under this one's name; a scope switch dims the old ones until the new arrive.
   if (!a || a.row.model !== model) return <div className="empty">Loading…</div>;
   const r = a.row;
   const few = r.games < FEW_GAMES;
   return (
-    <div style={{ opacity: a.scope === scope ? 1 : 0.55, transition: "opacity 0.15s" }}>
+    <div style={{ opacity: a.scope === scope && a.start === start ? 1 : 0.55, transition: "opacity 0.15s" }}>
       <div className="model-head">
         <ModelBadge label={r.label} provider={r.provider} size={56} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -799,7 +1057,7 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
           </div>
         </div>
         {rows && rows.length > 1 && (
-          <select value={model} onChange={(e) => go(e.target.value, { tab, scope })} aria-label="Model">
+          <select value={model} onChange={(e) => go(e.target.value, { tab, scope, start })} aria-label="Model">
             {rows.map((x) => (
               <option key={x.model} value={x.model}>
                 {x.label}
@@ -854,7 +1112,7 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
 
       <div className="a-tabs" role="tablist">
         {TABS.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} onClick={() => go(model, { tab: t.id, scope })}>
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} onClick={() => go(model, { tab: t.id, scope, start })}>
             {t.label}
           </button>
         ))}
@@ -871,12 +1129,13 @@ function ModelView({ model, tab, scope }: { model: string; tab: Tab; scope: Anal
 
 export function AgentsPage({ model, query }: { model: string; query: URLSearchParams }) {
   const scope: AnalyticsScope = query.get("scope") === "rated" ? "rated" : "all";
+  const start: AnalyticsStart = query.get("start") === "free" ? "free" : query.get("start") === "set" ? "set" : "all";
   const tab = (TABS.find((t) => t.id === query.get("tab"))?.id ?? "overview") as Tab;
   return (
     <div className="page agents">
       <div className="agents-top">
         {model ? (
-          <a className="back" href={`#/agents${scope === "rated" ? "?scope=rated" : ""}`}>
+          <a className="back" href={hrefTo("", { scope, start })}>
             ← All agents
           </a>
         ) : (
@@ -885,9 +1144,12 @@ export function AgentsPage({ model, query }: { model: string; query: URLSearchPa
             <p className="sub">How each model plays: strength, move quality, thinking time, self-knowledge and more, from every finished game.</p>
           </div>
         )}
-        <ScopeToggle scope={scope} onChange={(s) => go(model, { tab, scope: s })} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <StartToggle start={start} onChange={(s) => go(model, { tab, scope, start: s })} />
+          <ScopeToggle scope={scope} onChange={(s) => go(model, { tab, scope: s, start })} />
+        </div>
       </div>
-      {model ? <ModelView model={model} tab={tab} scope={scope} /> : <Overview scope={scope} />}
+      {model ? <ModelView model={model} tab={tab} scope={scope} start={start} /> : <Overview scope={scope} start={start} />}
     </div>
   );
 }

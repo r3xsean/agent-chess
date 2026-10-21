@@ -11,6 +11,7 @@ import { mirrorChanged } from "./mirror";
 import { scoresChanged } from "./predictions";
 import { isHuman } from "../shared/naming";
 import { chess960Fen, newRules, START_FEN, VARIANTS, variantOf, type Rules, type Variant } from "../shared/rules";
+import { openingById, SUITE_VERSION, type SetOpening } from "../shared/openingSuite";
 import {
   freshStats,
   ensurePlayer,
@@ -69,7 +70,12 @@ export function createGame(opts: {
   rated?: boolean;
   /** A Chess960 game from this starting position (0–959). */
   chess960?: number;
+  /** A set opening (shared/openingSuite.ts) the arena plays before the players take over. */
+  opening?: string;
 }): Game {
+  const set = opts.opening ? openingById(opts.opening) : undefined;
+  if (opts.opening && !set) throw new ActionError(`No such set opening: ${opts.opening}`);
+  if (set && opts.chess960 !== undefined) throw new ActionError("A set opening is for standard chess, not Chess960.");
   const g: Game = {
     id: newId("g"),
     createdAt: Date.now(),
@@ -95,6 +101,7 @@ export function createGame(opts: {
     options: { pieceList: true, rated: opts.rated ?? true },
     classifierVersion: CLASSIFIER_VERSION,
   };
+  if (set) playSetOpening(g, set);
   ensurePlayer(opts.white, variantOf(g));
   ensurePlayer(opts.black, variantOf(g));
   games.set(g.id, g);
@@ -106,6 +113,40 @@ export function createGame(opts: {
   analyzeGame(g);
   return g;
 }
+
+/** The arena's moves of a set opening, each marked `supplied`, before either player has a turn. */
+function playSetOpening(g: Game, set: SetOpening) {
+  g.setOpening = { id: set.id, name: set.name, plies: set.moves.length, version: SUITE_VERSION };
+  const c = newRules(START_FEN, "standard");
+  for (const san of set.moves) {
+    const fenBefore = c.fen();
+    const mv = c.move(san);
+    g.moves.push({
+      ply: g.moves.length + 1,
+      color: mv.color,
+      san: mv.san,
+      uci: mv.uci,
+      from: mv.from,
+      to: mv.to,
+      fenBefore,
+      fenAfter: c.fen(),
+      commentary: "",
+      selfEval: null,
+      selfEvalRaw: "",
+      lines: [],
+      illegalAttempts: [],
+      offeredDraw: false,
+      thinkMs: 0,
+      ts: g.createdAt,
+      supplied: true,
+    });
+    const op = lookupOpening(c.fen());
+    if (op) g.opening = op;
+  }
+}
+
+/** Moves a player chose: everything but a set opening's supplied moves. */
+export const playedMoves = (g: Game) => g.moves.filter((m) => !m.supplied);
 
 function addSeatKey(gameId: string, role: SeatRole) {
   const key = `${gameId}-${role}-${randomBytes(4).toString("hex")}`;
@@ -216,6 +257,8 @@ function classifyPending(g: Game) {
         before.failed || after.failed
           ? { classification: "good", winBefore: 50, winAfter: 50, accuracy: 0, cpLoss: 0, evalAfter: after.score, unavailable: true }
           : classifyMove(m, before, after.score, g.moves[i - 1], allBook, variantOf(g));
+      // The arena's moves are book by definition, whatever the engine thinks of them.
+      if (m.supplied && !m.analysis.unavailable) m.analysis.classification = "book";
       changed = true;
     }
     if (m.analysis.classification !== "book") allBook = false;

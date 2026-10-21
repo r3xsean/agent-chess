@@ -113,11 +113,13 @@ export function classifyMove(
 
 /** Lichess-style game accuracy: mean of volatility-weighted mean and harmonic mean. */
 function gameAccuracy(game: Game, color: Color): number | null {
-  const wins = [winPercentWhite(game.analysis[game.moves[0]?.fenBefore]?.score ?? { cp: 20 })];
-  for (const m of game.moves) wins.push(m.analysis && !m.analysis.unavailable ? (m.color === "w" ? m.analysis.winAfter : 100 - m.analysis.winAfter) : wins[wins.length - 1]);
-  const windowSize = Math.max(2, Math.min(8, Math.floor(game.moves.length / 10)));
+  // A set opening's supplied moves are left out entirely: the game, for this, starts where the players took over.
+  const moves = game.moves.filter((m) => !m.supplied);
+  const wins = [winPercentWhite(game.analysis[moves[0]?.fenBefore]?.score ?? { cp: 20 })];
+  for (const m of moves) wins.push(m.analysis && !m.analysis.unavailable ? (m.color === "w" ? m.analysis.winAfter : 100 - m.analysis.winAfter) : wins[wins.length - 1]);
+  const windowSize = Math.max(2, Math.min(8, Math.floor(moves.length / 10)));
   const weights: number[] = [];
-  for (let i = 0; i < game.moves.length; i++) {
+  for (let i = 0; i < moves.length; i++) {
     const start = Math.max(0, Math.min(i, wins.length - windowSize));
     const w = wins.slice(start, start + windowSize);
     const mean = w.reduce((a, b) => a + b, 0) / w.length;
@@ -127,7 +129,7 @@ function gameAccuracy(game: Game, color: Color): number | null {
   let wsum = 0;
   let wacc = 0;
   const accs: number[] = [];
-  game.moves.forEach((m, i) => {
+  moves.forEach((m, i) => {
     if (m.color !== color || !m.analysis || m.analysis.unavailable) return;
     wsum += weights[i];
     wacc += weights[i] * m.analysis.accuracy;
@@ -140,7 +142,8 @@ function gameAccuracy(game: Game, color: Color): number | null {
 }
 
 export function reviewSide(game: Game, color: Color): SideReview {
-  const mine = game.moves.filter((m) => m.color === color && m.analysis && !m.analysis.unavailable);
+  // A set opening's supplied moves were nobody's choice, so they say nothing about either side.
+  const mine = game.moves.filter((m) => m.color === color && m.analysis && !m.analysis.unavailable && !m.supplied);
   const counts: SideReview["counts"] = {};
   for (const m of mine) counts[m.analysis!.classification] = (counts[m.analysis!.classification] ?? 0) + 1;
   const scored = mine.filter((m) => m.analysis!.classification !== "book");

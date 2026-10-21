@@ -8,6 +8,8 @@ import type { Classification, Color } from "./types";
  */
 
 export type AnalyticsScope = "all" | "rated";
+/** Which games by how they started: every one, only those the players opened themselves, or only set openings. */
+export type AnalyticsStart = "all" | "free" | "set";
 export type GamePhase = "opening" | "middlegame" | "endgame";
 export type Outcome = "W" | "D" | "L";
 
@@ -59,6 +61,65 @@ export interface AgentRow {
   /** Mean gap between its own winning chances and the engine's, in win-% points. */
   calibration: number | null;
   think: TimeStats;
+  /** Colour-swapped pairs (see PairResult): how many, and how it came out of them. */
+  pairs: { played: number; won: number; split: number; lost: number };
+}
+
+/**
+ * Two games between the same two players from the same start (a set opening, or a Chess960 position), once with
+ * each colour: scored together, so neither the colours nor the opening favour either side. `score` is this
+ * model's points from both (0–2).
+ */
+export interface PairResult {
+  opponent: string;
+  start: string;
+  score: number;
+  gameIds: [string, string];
+  ts: number;
+}
+
+/** How it did from one set opening (or a free game that reached the same position). */
+export interface SetOpeningRow {
+  id: string;
+  name: string;
+  games: number;
+  score: number;
+  accuracy: number | null;
+  white: { games: number; score: number | null };
+  black: { games: number; score: number | null };
+}
+
+/** Every model against every set opening, for the comparison page. */
+export interface OpeningGrid {
+  openings: { id: string; name: string }[];
+  rows: { model: string; label: string; provider: string; cells: Record<string, { games: number; score: number; accuracy: number | null }> }[];
+}
+
+/** Its first moves of a game: after the arena's set opening, or in an opening it chose itself. */
+export interface HandoverStats {
+  games: number;
+  moves: number;
+  /** Mean move accuracy. */
+  accuracy: number | null;
+  /** Share of those moves that were still theory (book). */
+  book: number | null;
+  blundersPer100: number | null;
+}
+
+/** How many first moves of each game the handover comparison looks at. */
+export const HANDOVER_MOVES = 10;
+
+/**
+ * The chance a rating of (r1 ± rd1) belongs to the stronger player than (r2 ± rd2): the gap between them, against
+ * how uncertain both still are (Glicko's deviations taken as normal errors).
+ */
+export function strongerChance(r1: number, rd1: number, r2: number, rd2: number): number {
+  const z = (r1 - r2) / Math.sqrt(rd1 * rd1 + rd2 * rd2 || 1);
+  // The normal distribution's CDF, from erf (Abramowitz–Stegun 7.1.26).
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
 }
 
 export interface RatingPoint {
@@ -136,10 +197,13 @@ export interface HeadToHead extends WDL {
   provider: string;
   myAccuracy: number | null;
   theirAccuracy: number | null;
+  /** The chance this model is the stronger of the two, from both best standard ratings (null: one is unrated). */
+  stronger: number | null;
 }
 
 export interface ModelAnalytics {
   scope: AnalyticsScope;
+  start: AnalyticsStart;
   row: AgentRow;
   ratingHistory: RatingSeries[];
   form: { last: FormGame[]; scoreLast10: number | null; accuracyLast10: number | null };
@@ -191,6 +255,11 @@ export interface ModelAnalytics {
   };
   tactics: { mates: number; matesFound: number; mateIn1: number; mateIn1Found: number; onlyMoves: number; onlyFound: number };
   openings: Record<Color, OpeningRow[]>;
+  /** By set opening, whoever chose it (shared/openingSuite.ts). */
+  setOpenings: SetOpeningRow[];
+  pairs: PairResult[];
+  /** Its first HANDOVER_MOVES moves of each game: after a set opening, and in openings it chose. */
+  handover: { set: HandoverStats; free: HandoverStats };
   endings: {
     wins: Record<string, number>;
     losses: Record<string, number>;

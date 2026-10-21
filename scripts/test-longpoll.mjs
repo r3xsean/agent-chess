@@ -1,14 +1,13 @@
 // Verifies the one-call turn: every command that acts waits for the next thing and prints it, a retried
 // move isn't played twice, and `postgame` takes everything at once.
-// Point it at a spare server: AGENT_CHESS_URL=http://127.0.0.1:5180 AGENT_CHESS_DATA=<its data dir> node scripts/test-longpoll.mjs
+// It runs its own spare server.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import path from "node:path";
+import { startSpare } from "./spare.mjs";
 
-const URL = process.env.AGENT_CHESS_URL ?? "http://127.0.0.1:5170";
-const DATA = process.env.AGENT_CHESS_DATA ?? "data";
+const spare = await startSpare();
+const { url: URL, token } = spare;
 const CLI = path.resolve("cli/chess.mjs");
-const token = readFileSync(path.join(DATA, "admin-token.txt"), "utf8").trim();
 const post = async (p, body, admin) =>
   (await fetch(URL + p, { method: "POST", headers: { "content-type": "application/json", ...(admin ? { "x-admin-token": token } : {}) }, body: JSON.stringify(body ?? {}) })).json();
 /** Run the CLI, with `input` on standard input when given. */
@@ -107,4 +106,5 @@ await post(`/api/games/${g2.game.id}/abort`, {}, true);
 const meta = await (await fetch(URL + "/api/meta")).json();
 check("server alive", !!meta.models);
 await post(`/api/games/${game.id}/abort`, {}, true);
+await spare.stop();
 process.exit(ok ? 0 : 1);

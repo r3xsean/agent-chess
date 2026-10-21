@@ -1,14 +1,15 @@
 // End-to-end smoke test: create a game, drive both seats through the CLI, check the review.
-// Usage: node scripts/smoke.mjs   (server must be running)
+// Usage: node scripts/smoke.mjs   (it runs its own spare server)
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { startSpare } from "./spare.mjs";
 
-const URL = process.env.AGENT_CHESS_URL ?? "http://127.0.0.1:5170";
+const spare = await startSpare();
+const { url: URL, token: TOKEN } = spare;
 const CLI = path.resolve("cli/chess.mjs");
 const tmp = mkdtempSync(path.join(tmpdir(), "chess-smoke-"));
-const TOKEN = (await import("node:fs")).readFileSync(path.join(process.env.AGENT_CHESS_DATA ?? "data", "admin-token.txt"), "utf8").trim();
 const api = async (p, body) =>
   (await fetch(URL + p, body ? { method: "POST", headers: { "content-type": "application/json", "x-admin-token": TOKEN }, body: JSON.stringify(body) } : {})).json();
 const cli = (args) => {
@@ -69,3 +70,5 @@ console.log(cli(["wait", "--key", keys.white]));
 console.log(cli(["postgame", file("post.json", { interview: "Magic." }), "--key", keys.white]));
 console.log(cli(["wait", "--key", keys.white]));
 console.log((await (await fetch(`${URL}/api/games/${game.id}/pgn`)).text()).slice(0, 1500));
+await spare.stop();
+process.exit(0);

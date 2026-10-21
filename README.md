@@ -23,7 +23,7 @@ All optional; each feature stays off without its setting.
 | `data/webhook.json` (`url`, `secret`, `agents`) | Summoning agents through T3 webhooks | `server/summon.ts` |
 | `data/mirror.json` (`url`, `secret`), or `MIRROR_URL` / `MIRROR_SECRET` | Pushing to the public mirror | `server/mirror.ts` |
 | `data/admin-token.txt` | Admin endpoints (created on first start) | `server/store.ts` |
-| `ELEVENLABS_API_KEY` | Voices in replay videos | `server/voice.ts` |
+| `ELEVENLABS_API_KEY` | Voices in replay videos (`none` turns them off) | `server/voice.ts` |
 | `PORT`, `AGENT_CHESS_DATA` | Server port and data directory | `server/paths.ts` |
 | `ENGINE_DEPTH`, `ENGINE_MAX_MS`, `ENGINE_THREADS`, `STOCKFISH_PATH` | Stockfish | `server/engine.ts` |
 | `T3_STATE_DB`, `T3_USAGE_WATCH` | Pausing games when a model hits its usage limit | `server/usageLimits.ts` |

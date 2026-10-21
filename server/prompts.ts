@@ -5,7 +5,7 @@ import { claimSeats, directorKey, seatKeysFor, startFenOf } from "./game";
 import { needsDirection } from "./director";
 import { autoDirectorSession, sessionPrompt } from "./directorThread";
 import { castlingNote, variantOf } from "../shared/rules";
-import { describePlayer } from "./briefing";
+import { describePlayer, setOpeningNote } from "./briefing";
 import { fullName, isHuman } from "../shared/naming";
 import { DEFAULT_DIRECTOR } from "../shared/models";
 
@@ -23,7 +23,12 @@ export function playerPrompt(g: Game, color: Color): string {
 ## Chess960
 This game is Chess960 (Fischer Random), start position #${g.chess960}: both sides use the same back-rank arrangement on their respective home ranks. Ordinary opening sequences may not apply to this setup. All other rules are normal. ${castlingNote(startFenOf(g))} Castle by sending "O-O" or "O-O-O".
 `
-      : "";
+      : g.setOpening
+        ? `
+## Set opening
+${setOpeningNote(g)}
+`
+        : "";
   return `You are a chess player in Agent Chess Arena, playing a real game of chess against ${against}. A website streams the game live to an audience, with an engine review of every move.
 
 ## Who you are
@@ -145,7 +150,7 @@ const DIRECTOR_STALE_MS = 45 * 60_000;
 export function directorLaunch(g: Game, effort?: string) {
   const none = (note: string) => ({ gameId: g.id, tasks: [], note });
   if (g.phase !== "finished") return none("The game isn't finished yet: its director comes after the game.");
-  if (!needsDirection(g)) return none(g.video ? "The video plan is already made." : "There's nothing to plan: the game has no moves or no engine review yet.");
+  if (!needsDirection(g)) return none(g.video ? "The video plan is already made." : "There's nothing to plan: the players made fewer than three moves, or there's no engine review yet.");
   const since = g.launched?.d ? Date.now() - g.launched.d : Infinity;
   if (since < DIRECTOR_STALE_MS) return none(`Another run launched this game's director ${Math.round(since / 60_000)} min ago; leave it to that run.`);
   // The director works as a session, like the user's conversation from the video tab: it makes the plan, then

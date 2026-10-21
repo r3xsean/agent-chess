@@ -805,6 +805,19 @@ cg-board square.check {
 .opening-name b {
   color: white;
 }
+.set-opening-note {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.set-opening-note b {
+  color: var(--text-2);
+}
+.move-cell.supplied {
+  opacity: 0.5;
+  font-style: italic;
+}
 
 /* move list */
 .move-row {
@@ -1614,6 +1627,27 @@ button.toggle {
   align-items: center;
   gap: 10px;
 }
+.opening-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+  margin-top: 12px;
+}
+.opening-preview .cg-wrap coords {
+  display: none;
+}
+.opening-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 280px;
+}
+.opening-moves {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--text-2);
+}
 .inline-field {
   display: inline-flex;
   align-items: center;
@@ -1821,6 +1855,54 @@ button.toggle {
 .mp-check {
   color: var(--green);
   font-weight: 900;
+}
+/* The set-opening chooser: the model picker's look, with each opening's numbers under it. */
+.op-picker {
+  margin-bottom: 10px;
+}
+.op-glyph {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: #3d3b38;
+  font-size: 22px;
+}
+.op-pop:focus {
+  outline: none;
+}
+.op-pop .mp-list {
+  padding-top: 6px;
+}
+.op-opt {
+  align-items: flex-start;
+  padding: 8px 10px;
+}
+.op-opt + .op-opt {
+  border-top: 1px solid #353330;
+}
+.op-opt .mp-text b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.op-opt .mp-tag {
+  color: var(--green);
+}
+.op-auto .mp-text b {
+  color: var(--green);
+}
+.op-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.op-stats .muted {
+  color: var(--muted);
 }
 .mp-empty {
   padding: 14px 8px;
@@ -2837,6 +2919,9 @@ input[type="number"] {
 .agents .table.tight td { padding: 7px 10px; }
 .agents .table.tight th { padding: 8px 10px; }
 .agents .table tr.faded td { opacity: 0.5; }
+.opening-grid th.num, .stronger-grid th.num { font-size: 11px; white-space: normal; min-width: 62px; vertical-align: bottom; line-height: 1.25; }
+.opening-grid td.num, .stronger-grid td.num { white-space: nowrap; }
+.stronger-grid .pcell small { margin-left: 4px; }
 
 .model-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .model-head h1 { margin: 0 0 2px; }

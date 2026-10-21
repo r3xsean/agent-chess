@@ -231,6 +231,7 @@ export const ThinkingFeed = memo(function ThinkingFeed(props: {
   const liveFen = g.moves[g.moves.length - 1]?.fenAfter ?? g.startFen ?? START_FEN;
   const liveTurn = liveFen.split(" ")[1] as Color;
   const pending = g.pendingIllegal?.[liveTurn]?.length ?? 0;
+  const setPlies = g.moves.filter((m) => m.supplied).length;
   useEffect(() => {
     // On the latest position, the newest attempt in progress is where the thinking is.
     const sel =
@@ -238,11 +239,11 @@ export const ThinkingFeed = memo(function ThinkingFeed(props: {
         ? `.thought[data-try="${props.ply}:${tryAt}"]`
         : props.ply === g.moves.length && pending
           ? `.thought[data-try="${props.ply}:${pending - 1}"]`
-          : `.thought[data-ply="${props.ply}"]`;
+          : `.thought[data-ply="${props.ply > 0 && props.ply <= setPlies ? setPlies : props.ply}"]`;
     const target = ref.current?.querySelector(sel) ?? (props.ply === 0 ? ref.current?.firstElementChild : null);
     scrollIntoPanel(target, opened.current ? "nearest" : "center", false);
     opened.current = true;
-  }, [props.ply, tryAt, g.moves.length, pending]);
+  }, [props.ply, tryAt, g.moves.length, pending, setPlies]);
   const pre = g.phase === "pregame";
   const belief = useMemo(() => beliefs(g), [g]);
   // The attempts from the position after `ply` moves, as cards of their own (the live position's too).
@@ -263,12 +264,26 @@ export const ThinkingFeed = memo(function ThinkingFeed(props: {
         onPlayLine={props.onPlayLine}
       />
     ));
+  // A set opening's moves were played by the arena, so there's no thinking behind them: one card says so.
+  const supplied = g.moves.slice(0, setPlies);
   return (
     <div ref={ref}>
-      {g.moves.length === 0 && !g.pendingIllegal?.[liveTurn]?.length && (
+      {supplied.length > 0 && (
+        <div className={`thought set-opening ${props.ply > 0 && props.ply <= supplied.length && tryAt === null ? "on" : ""}`} data-ply={supplied.length} onClick={() => props.onSelect(supplied.length)}>
+          <div className="thought-body">
+            <div className="thought-head">
+              <span>♟ Set opening{g.setOpening ? `: ${g.setOpening.name}` : ""}</span>
+            </div>
+            <div className="bubble">
+              The arena played {supplied.map((m) => (m.color === "w" ? `${moveNo(m)}${m.san}` : m.san)).join(" ")} before either player had a turn. Neither of them chose these moves.
+            </div>
+          </div>
+        </div>
+      )}
+      {g.moves.length === supplied.length && !g.pendingIllegal?.[liveTurn]?.length && (
         <div className="empty">{pre ? "The players are in the pre-game studio. Their thinking will appear here move by move." : "Waiting for the first move…"}</div>
       )}
-      {g.moves.map((m, i) => (
+      {g.moves.map((m, i) => m.supplied ? null : (
         <Fragment key={m.ply}>
           {tries(m.ply - 1, m.color, m.fenBefore, m.illegalAttempts, m.tries)}
           <Thought

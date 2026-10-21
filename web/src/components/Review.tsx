@@ -77,7 +77,8 @@ export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; p
 
 export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: number; onSelect: (p: number) => void; ratings: Record<Color, number | undefined> }) {
   const rv = game.review;
-  const counts = (c: Color, k: string) => game.moves.filter((m) => m.color === c && m.analysis?.classification === k).length;
+  // A set opening's moves were nobody's choice, so they count for neither side.
+  const counts = (c: Color, k: string) => game.moves.filter((m) => m.color === c && !m.supplied && m.analysis?.classification === k).length;
   const selfColors = selfEvalColors(game);
   const pending = game.moves.filter((m) => !m.analysis && !game.analysis[m.fenAfter]?.failed && !game.analysis[m.fenBefore]?.failed).length;
   const failed = game.moves.length - pending - game.moves.filter((m) => m.analysis).length;

@@ -367,6 +367,8 @@ export function buildTimeline(g: Game, format: Format, opts: TimelineOptions = {
   const meanWeight = pacedMoves.reduce((n, i) => n + weight(i), 0) / (pacedMoves.length || 1);
   const hold = (i: number) => {
     if (keys[i]) return 2.5;
+    // A set opening's moves were the arena's, played before the players took over: they go by quickest of all.
+    if (g.moves[i].supplied) return wide ? 0.4 : 0.25;
     const usual = book(i) ? (wide ? 0.6 : 0.35) : wide ? 1.2 : 0.6;
     return paced(i) && meanWeight > 0 ? usual * Math.min(HOLD_MAX, Math.max(HOLD_MIN, weight(i) / meanWeight)) : usual;
   };

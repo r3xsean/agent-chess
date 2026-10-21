@@ -1,14 +1,13 @@
 // Checks the orchestrator's briefs (each run reads only its own job, with the tasks in it) and that each seat
 // key has only its own commands (a player can't direct, the director has its own key).
-// Point it at a spare server: AGENT_CHESS_URL=http://127.0.0.1:5180 AGENT_CHESS_DATA=<its data dir> node scripts/test-orchestrator.mjs
+// It runs its own spare server.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import path from "node:path";
+import { startSpare } from "./spare.mjs";
 
-const URL = process.env.AGENT_CHESS_URL ?? "http://127.0.0.1:5170";
-const DATA = process.env.AGENT_CHESS_DATA ?? "data";
+const spare = await startSpare();
+const { url: URL, token } = spare;
 const CLI = path.resolve("cli/chess.mjs");
-const token = readFileSync(path.join(DATA, "admin-token.txt"), "utf8").trim();
 const req = async (method, p, body, admin = true) => {
   const r = await fetch(URL + p, { method, headers: { "content-type": "application/json", ...(admin ? { "x-admin-token": token } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const t = await r.text();
@@ -83,8 +82,12 @@ const k2 = Object.fromEntries(g2.launch.tasks.map((t) => [t.seat, ["--key", keyO
 await cli(["interview", "--text", "Hi.", ...k2.w, "--no-wait"]);
 await cli(["interview", "--text", "Hi.", ...k2.b, "--no-wait"]);
 await sleep(2000);
-await cli(["wait", ...k2.w]);
-await cli(["move", "-", ...k2.w, "--no-wait"], JSON.stringify({ move: "e4", commentary: "The centre.", eval: "+0.3" }));
+// Three moves: a game needs that many for a video plan.
+for (const [s, move] of [["w", "e4"], ["b", "e5"], ["w", "Nf3"]]) {
+  await cli(["wait", ...k2[s]]);
+  await cli(["move", "-", ...k2[s], "--no-wait"], JSON.stringify({ move, commentary: "The centre.", eval: "+0.3" }));
+}
+await cli(["wait", ...k2.b]);
 await cli(["resign", ...k2.b, "--no-wait"]);
 for (const s of ["w", "b"]) await cli(["postgame", "-", ...k2[s]], JSON.stringify({ interview: "GG." }));
 let phase = "";
@@ -128,4 +131,5 @@ await req("POST", `/api/games/${tg}/abort`, {});
 check("unknown action is refused", (await brief({ action: "play-chess", gameId: game.id })).status === 400);
 check("bad game id is refused", (await brief({ action: "start-game", gameId: "../x" })).status === 400);
 check("brief needs the admin token", (await req("POST", "/api/orchestrator/brief", { action: "start-game", gameId: game.id }, false)).status === 400);
+await spare.stop();
 process.exit(ok ? 0 : 1);

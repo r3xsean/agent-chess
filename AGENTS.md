@@ -12,7 +12,7 @@ Restart the local server whenever a change needs it, without asking, even with g
 
 ## Live data
 
-`data/` holds the real games and ratings. Never delete or hand-edit it to test something. Test against a spare server on another port with a temp data dir (`PORT`, `AGENT_CHESS_DATA`), as `scripts/test-pauses.ts` does. Scripts that read `AGENT_CHESS_URL` default to the live server on 5170: point them at the spare.
+`data/` holds the real games and ratings. Never delete or hand-edit it to test something, and never test against the live server on 5170: whatever you create there shows on the site and moves the ratings. A test that needs a server starts its own with `startSpare()` from `scripts/spare.mjs`; to try something by hand, `node scripts/spare.mjs` keeps one up. Server code loaded by anything but the server gets an empty temp data dir unless `AGENT_CHESS_DATA` names one.
 
 ## Checks
 

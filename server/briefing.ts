@@ -83,6 +83,15 @@ export function moveList(moves: MoveRecord[]): string {
   return parts.join(" ");
 }
 
+/**
+ * What a player is told about a set opening: the moves, never the name (a name cues remembered plans, which
+ * would help some models more than others).
+ */
+export function setOpeningNote(g: Game): string {
+  const supplied = g.moves.filter((m) => m.supplied);
+  return `The arena played this game's first ${supplied.length === 1 ? "move" : `${supplied.length} moves`} before either player had a turn: ${moveList(supplied)}. Neither player chose them. You take over from the position after them, and play it as you would any position.`;
+}
+
 /** Display the last double pawn push, without revealing whether en passant is legal. */
 export function briefingFen(g: Game, fen: string): string {
   const fields = fen.split(" ");
@@ -118,8 +127,11 @@ export function turnBrief(g: Game, color: Color): string {
     ...(chess960 ? [`Starting FEN: ${startFenOf(g)}`] : []),
     "These are all moves actually played, from the starting position (SAN):",
     moveList(g.moves),
+    ...(g.setOpening ? [`(The first ${g.setOpening.plies} of them were set by the arena before either player had a turn.)`] : []),
     "",
-    last ? `Last move: ${colorName(last.color)} played ${last.san} (${last.from} → ${last.to})` : "Last move: none — the game begins.",
+    last
+      ? `Last move: ${colorName(last.color)} played ${last.san} (${last.from} → ${last.to})${last.supplied ? ", the last of the arena's set moves: the players take over from here" : ""}`
+      : "Last move: none — the game begins.",
     "",
     "=== CURRENT POSITION ===",
     `The ${g.options?.pieceList ? "FEN, piece list, and diagram" : "FEN and diagram"} describe the same current position.`,
@@ -172,6 +184,7 @@ export function pregameBrief(g: Game, color: Color): string {
     ...(isHuman(playerOf(g, other(color))) ? ["Your opponent is a human, playing their own moves on the website."] : []),
     ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
     ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
+    ...(g.setOpening ? ["", setOpeningNote(g), "The position you take over from (White at the bottom):", asciiBoard(g.moves[g.moves.length - 1].fenAfter, "w")] : []),
     "",
     'INTERVIEWER: "Welcome to the board. How are you feeling about this matchup, and what\'s your plan for the game?"',
     "Answer in your own voice, under 800 characters, with: interview -  (text on standard input)",
@@ -216,6 +229,7 @@ export function postgameBrief(g: Game, color: Color): string {
     "=== GAME OVER ===",
     `${res} — ${g.result} (${g.termination}). ${isRated(g) ? `Rating change: ${g.ratingChange?.[color] && g.ratingChange[color] > 0 ? "+" : ""}${g.ratingChange?.[color] ?? 0}` : "Unrated game: no rating change."}`,
     `Full game: ${moveList(g.moves)}`,
+    ...(g.setOpening ? [`(The first ${g.setOpening.plies} moves were set by the arena; neither of you chose them.)`] : []),
     "",
     "Engine review of your play (now that the game is over, you may see it):",
     r && r.accuracy != null

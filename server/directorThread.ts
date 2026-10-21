@@ -10,7 +10,7 @@ import { agentDir, games, saveGameNow } from "./store";
 import { ActionError, touch } from "./game";
 import { agentWebhook, orchestratorAvailable, triggerAgent, triggerOrchestrator } from "./summon";
 import { probeCommand } from "./probe";
-import { applyNarration, directorBrief, investigationNotes, narratorInvestigationNotes, narrateBrief, narratedReadback, packagingBrief, packagingChoices, planReadback, validatePlan } from "./director";
+import { applyNarration, directorBrief, investigationNotes, needsDirection, narratorInvestigationNotes, narrateBrief, narratedReadback, packagingBrief, packagingChoices, planReadback, validatePlan } from "./director";
 import { deepenLines, linesPrepared, linesReady } from "./lineDepth";
 import { videoRevision } from "./videoApproval";
 import { reviseVideoPlan } from "./reviseVideoPlan";
@@ -116,7 +116,8 @@ export function autoDirectorDone(g: Game): boolean {
 
 /** One persistent T3 conversation per game. Reopening never sends a new user message. */
 export async function openDirectorThread(g: Game, body: any, start = launch): Promise<DirectorThreadState> {
-  if (g.phase !== "finished" || !g.review || !g.moves.length) throw new ActionError("The game needs to be finished and reviewed first.");
+  if (g.phase !== "finished" || !g.review) throw new ActionError("The game needs to be finished and reviewed first.");
+  if (!g.video && !needsDirection(g)) throw new ActionError("There's no video to plan: the players made fewer than three moves.");
   let s = sessions.get(g.id);
   directorThreadState(g);
   // Once the auto director is done, its own thread becomes the conversation (keeping all its reasoning); a fresh

@@ -105,11 +105,14 @@ function viewerOf(id: unknown): Viewer {
 
 const picksOf = (gameId: string) => (store.games[gameId] ??= { result: dict(), moves: dict() });
 
+/** The ply result calls close at: ten moves into the players' own play (a set opening's moves don't count). */
+const lockPly = (g: Game) => RESULT_LOCK_PLY + (g.setOpening?.plies ?? 0);
+
 /** Whether each kind of prediction is open right now. */
 export function openFor(g: Game) {
   const live = (g.phase === "pregame" || g.phase === "playing") && !g.result;
   return {
-    result: live && g.moves.length < RESULT_LOCK_PLY,
+    result: live && g.moves.length < lockPly(g),
     move: g.phase === "playing" && !g.result,
   };
 }
@@ -122,7 +125,7 @@ export function predict(g: Game, viewerId: unknown, kind: unknown, pick: unknown
   const open = openFor(g);
   const p = picksOf(g.id);
   if (kind === "result") {
-    if (!open.result) throw new PredictionError(g.moves.length >= RESULT_LOCK_PLY ? "Result calls closed at move 10." : "This game isn't taking predictions.");
+    if (!open.result) throw new PredictionError(g.moves.length >= lockPly(g) ? `Result calls closed at move ${Math.ceil(lockPly(g) / 2)}.` : "This game isn't taking predictions.");
     if (pick !== "1-0" && pick !== "0-1" && pick !== "1/2-1/2") throw new PredictionError('Pick "1-0", "0-1" or "1/2-1/2".');
     p.result[v.id] = { pick, ts: Date.now() };
   } else if (kind === "move") {
@@ -150,7 +153,7 @@ const plyTime = (g: Game, ply: number) => g.mirrorCutoffs?.[ply] ?? g.moves[ply 
 /** When result calls really closed: the move that reached the lock, or the end of the game, whichever came first. */
 function resultCutoff(g: Game): number {
   const end = g.result ? (g.mirrorCutoffs?.end ?? g.endedAt ?? g.moves[g.moves.length - 1]?.ts ?? Infinity) : Infinity;
-  return Math.min(plyTime(g, RESULT_LOCK_PLY), end);
+  return Math.min(plyTime(g, lockPly(g)), end);
 }
 const guessCounts = (g: Game, ply: number, ts: number) => ts <= plyTime(g, ply);
 /** Old saved guesses were bare UCI strings. */
@@ -187,7 +190,7 @@ export function crowd(g: Game, viewerId?: string) {
   const myLast = me ? lastGuesses.find(([id]) => id === me) : undefined;
   return {
     open: openFor(g),
-    lockPly: RESULT_LOCK_PLY,
+    lockPly: lockPly(g),
     points: { result: RESULT_POINTS, move: MOVE_POINTS },
     result: { tally, total: Object.keys(p.result).length, mine: me ? p.result[me]?.pick ?? null : null, actual: g.result },
     move: {

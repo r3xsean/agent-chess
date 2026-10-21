@@ -1,8 +1,10 @@
 // Classify every move of some famous games through /api/explore, to sanity-check Brilliant/Great.
-// Usage: node scripts/test-brilliant.mjs   (server must be running)
+// Usage: node scripts/test-brilliant.mjs   (it runs its own spare server)
 import { Chess } from "chess.js";
+import { startSpare } from "./spare.mjs";
 
-const SERVER = "http://127.0.0.1:5170";
+const spare = await startSpare();
+const SERVER = spare.url;
 const GAMES = {
   "Morphy – Opera Game (1858)":
     "e4 e5 Nf3 d6 d4 Bg4 dxe5 Bxf3 Qxf3 dxe5 Bc4 Nf6 Qb3 Qe7 Nc3 c6 Bg5 b5 Nxb5 cxb5 Bxb5+ Nbd7 O-O-O Rd8 Rxd7 Rxd7 Rd1 Qe6 Bxd7+ Nxd7 Qb8+ Nxb8 Rd8#",
@@ -37,3 +39,4 @@ for (const [name, line] of Object.entries(GAMES)) {
   }
   console.log(out.join("\n"));
 }
+await spare.stop();

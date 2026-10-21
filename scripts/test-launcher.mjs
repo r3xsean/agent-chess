@@ -6,21 +6,10 @@
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import net from "node:net";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { startSpare } from "./spare.mjs";
 
-const freePort = async () => {
-  const s = net.createServer();
-  await new Promise((r) => s.listen(0, "127.0.0.1", r));
-  const port = s.address().port;
-  await new Promise((r) => s.close(r));
-  return port;
-};
-const DATA = mkdtempSync(path.join(tmpdir(), "chess-launcher-"));
-const PORT = await freePort();
-const URL = `http://127.0.0.1:${PORT}`;
 const CLI = path.resolve("cli/chess.mjs");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,21 +27,10 @@ const fake = createServer((rq, rs) => {
 });
 await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const HOOK = `http://127.0.0.1:${fake.address().port}`;
-writeFileSync(path.join(DATA, "webhook.json"), JSON.stringify({ url: `${HOOK}/orchestrator`, secret: SECRET, agents: { "claude-haiku-5-5@low": `${HOOK}/haiku-low` } }));
+const webhooks = { url: `${HOOK}/orchestrator`, secret: SECRET, agents: { "claude-haiku-5-5@low": `${HOOK}/haiku-low` } };
 
-// One process (no tsx wrapper), so killing it stops the server.
-const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-  env: { ...process.env, PORT: String(PORT), AGENT_CHESS_DATA: DATA, PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "", T3_USAGE_WATCH: "0", CLAUDE_BIN: "none", CODEX_BIN: "none" },
-  stdio: "ignore",
-  windowsHide: true,
-});
-for (let n = 0; n < 300; n++) {
-  try {
-    if ((await fetch(URL + "/api/meta")).ok) break;
-  } catch {}
-  await sleep(100);
-}
-const token = readFileSync(path.join(DATA, "admin-token.txt"), "utf8").trim();
+const spare = await startSpare({ prepare: (data) => writeFileSync(path.join(data, "webhook.json"), JSON.stringify(webhooks)) });
+const { url: URL, token } = spare;
 const req = async (method, p, body) => {
   const r = await fetch(URL + p, { method, headers: { "content-type": "application/json", "x-admin-token": token }, body: body ? JSON.stringify(body) : undefined });
   const t = await r.text();
@@ -108,9 +86,6 @@ try {
   check("an unknown key tells the agent to stop", (await cli(["start", "--key", "nope-w-0000"])).includes("stop now"));
 } finally {
   fake.close();
-  server.kill();
-  await new Promise((r) => (server.exitCode !== null ? r() : server.once("exit", r)));
-  await sleep(300);
-  rmSync(DATA, { recursive: true, force: true });
+  await spare.stop();
 }
 process.exit(ok ? 0 : 1);

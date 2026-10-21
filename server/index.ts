@@ -55,9 +55,11 @@ import { orchestratorBrief, tournamentNext } from "./orchestrator";
 import { PROBE_COMMANDS, probeCommand } from "./probe";
 import { editUploadText, isPublisherKey, pickPackaging, publisherCommand, publishLaunch, publishState, recordPublished, requestPublish, resumePublishes, setPackagingOptions } from "./publish";
 import { gameToPgn } from "./pgn";
-import { analyticsRows, modelAnalytics } from "./analytics";
-import type { AnalyticsScope } from "../shared/analytics";
+import { analyticsRows, modelAnalytics, openingGrid } from "./analytics";
+import type { AnalyticsScope, AnalyticsStart } from "../shared/analytics";
 import { loadOpenings } from "./openings";
+import { openingById } from "../shared/openingSuite";
+import { nextOpening, openingStats } from "./setOpenings";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
@@ -259,6 +261,14 @@ function chess960Choice(v: unknown): number | undefined {
   return n;
 }
 
+/** The set-opening choice from a request: none, the one these players have played least (true), or a given one. */
+function openingChoice(v: unknown, white: PlayerRef, black: PlayerRef): string | undefined {
+  if (v === undefined || v === null || v === false || v === "") return undefined;
+  if (v === true || v === "next") return nextOpening(white.id, black.id);
+  if (typeof v !== "string" || !openingById(v)) throw new ActionError(`No such set opening: ${String(v)}`);
+  return v;
+}
+
 const handle =
   (fn: (req: Request, res: Response) => unknown | Promise<unknown>) => async (req: Request, res: Response) => {
     try {
@@ -297,6 +307,7 @@ function gameSummary(g: Game) {
     termination: g.termination,
     plies: g.moves.length,
     opening: g.opening,
+    setOpening: g.setOpening?.name,
     tournamentId: g.tournamentId,
     variant: variantOf(g),
     rated: isRated(g),
@@ -522,11 +533,50 @@ app.post(
     const black = playerRef(req.body.black ?? {});
     if (isHuman(white) && isHuman(black)) throw new ActionError("Pick an agent for one of the seats — this is for playing against an agent.");
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model and effort). Change one of them.");
-    const g = createGame({ white, black, rated: req.body.rated !== false, chess960: chess960Choice(req.body.chess960) });
-    // Whoever sets up a game against an agent gets that seat's key: the browser plays with it.
-    const human = humanSide(g);
-    const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
-    return isAdmin(req) ? { game: g, launch: launchSpec(g), humanKey } : { game: g, humanKey };
+    const chess960 = chess960Choice(req.body.chess960);
+    const opening = chess960 === undefined ? openingChoice(req.body.opening, white, black) : undefined;
+    const g = createGame({ white, black, rated: req.body.rated !== false, chess960, opening });
+    return newGameReply(req, g);
+  }),
+);
+
+/** Whoever sets up a game against an agent gets that seat's key: the browser plays with it. */
+function newGameReply(req: Request, g: Game) {
+  const human = humanSide(g);
+  const humanKey = human ? seatKeysFor(g.id)[human] : undefined;
+  return isAdmin(req) ? { game: g, launch: launchSpec(g), humanKey } : { game: g, humanKey };
+}
+
+/**
+ * The set openings for the new-game form: the one a game between these seats would get for "next" (the one
+ * they've played least), and every opening's numbers for them. Without seats (a tournament), the numbers only.
+ */
+app.post(
+  "/api/openings/stats",
+  localOnly,
+  handle((req) => {
+    if (!req.body.white || !req.body.black) return { next: null, openings: openingStats() };
+    const white = playerRef(req.body.white);
+    const black = playerRef(req.body.black);
+    return { next: nextOpening(white.id, black.id), openings: openingStats(white.id, black.id) };
+  }),
+);
+
+/** The same game again with the colours swapped: the same set opening or Chess960 position, rated the same way. */
+app.post(
+  "/api/games/:id/rematch",
+  localOnly,
+  handle((req) => {
+    const was = getGame(String(req.params.id));
+    if (!was.result) throw new ActionError("A rematch is for a finished game.");
+    const g = createGame({
+      white: was.black,
+      black: was.white,
+      rated: isRated(was),
+      chess960: variantOf(was) === "chess960" ? was.chess960 : undefined,
+      opening: was.setOpening?.id,
+    });
+    return newGameReply(req, g);
   }),
 );
 app.get("/api/games/:id", handle((req) => getGame(String(req.params.id))));
@@ -681,11 +731,15 @@ app.get(
 
 /** The Agents tab: every model's row of the comparison table, and one model's full analytics (?scope=rated: rated games only). */
 const analyticsScope = (req: Request): AnalyticsScope => (req.query.scope === "rated" ? "rated" : "all");
-app.get("/api/analytics", handle((req) => analyticsRows(analyticsScope(req))));
+/** ?start=free: only games the players opened themselves; ?start=set: only set openings. */
+const analyticsStart = (req: Request): AnalyticsStart => (req.query.start === "free" || req.query.start === "set" ? req.query.start : "all");
+app.get("/api/analytics", handle((req) => analyticsRows(analyticsScope(req), analyticsStart(req))));
+/** Every model against every set opening (before :model, which would take "openings" for a model). */
+app.get("/api/analytics/openings", handle((req) => openingGrid(analyticsScope(req), analyticsStart(req))));
 app.get(
   "/api/analytics/:model",
   handle((req) => {
-    const a = modelAnalytics(String(req.params.model), analyticsScope(req));
+    const a = modelAnalytics(String(req.params.model), analyticsScope(req), analyticsStart(req));
     if (!a) throw new ActionError("No games for this model yet");
     return a;
   }),
@@ -722,6 +776,18 @@ app.post(
         const key = [p.white, p.black].sort().join("|");
         if (!byPair.has(key)) byPair.set(key, randomChess960());
         p.chess960 = byPair.get(key);
+      }
+    } else if (req.body.openings) {
+      // "each": every pairing gets the opening its players have played least, and a double round-robin's return
+      // game replays it with colours swapped. An opening id: every game starts from that one.
+      const one = req.body.openings === "each" ? undefined : String(req.body.openings);
+      if (one && !openingById(one)) throw new ActionError(`No such set opening: ${one}`);
+      t.openings = one ?? "each";
+      const byPair = new Map<string, string>();
+      for (const p of t.pairings) {
+        const key = [p.white, p.black].sort().join("|");
+        if (!byPair.has(key)) byPair.set(key, one ?? nextOpening(p.white, p.black, t.pairings));
+        p.opening = byPair.get(key);
       }
     }
     tournaments.set(t.id, t);
@@ -987,7 +1053,7 @@ app.post(
       if (["direct", "confirm", "narrate", "packaging"].includes(cmd) && (videoEditBlocked(g) || directorThreadBusy(g))) throw new ActionError("A video edit or render is already in progress. Wait for it to finish.");
       if (cmd === "brief") {
         if (g.video && !planDrafts.has(g.id)) return text("DONE — this game's video plan is saved. Your task is complete; you can stop now.");
-        if (g.phase !== "finished" || !needsDirection(g)) throw new ActionError("This game isn't ready for its video plan yet (it needs to be finished and reviewed).");
+        if (g.phase !== "finished" || !needsDirection(g)) throw new ActionError("This game isn't ready for its video plan (it needs to be finished and reviewed, with at least three moves the players made).");
         // The lines the video can show are followed move by move first (once per game), so the brief lists
         // them whole, every move with its verdict.
         if (!linesReady(g)) {

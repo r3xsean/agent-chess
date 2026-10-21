@@ -118,6 +118,8 @@ export interface MoveRecord {
   thinkMs: number;
   ts: number;
   analysis?: MoveAnalysis;
+  /** Played by the arena from a set opening (Game.setOpening), not chosen by either player: no player stat counts it. */
+  supplied?: true;
 }
 
 /** A turn submitted with an illegal move: the move was rejected, but the thinking behind it stays. */
@@ -158,6 +160,11 @@ export interface Game {
   chess960?: number;
   /** The starting position, when it isn't the normal one. */
   startFen?: string;
+  /**
+   * A set opening (shared/openingSuite.ts): its first `plies` moves were played by the arena before the players
+   * took over (each marked `supplied`). The players are shown the moves, never the name.
+   */
+  setOpening?: { id: string; name: string; plies: number; version: number };
   tournamentId?: string;
   phase: Phase;
   moves: MoveRecord[];
@@ -516,7 +523,12 @@ export interface Tournament {
   autoRun?: boolean;
   /** Every game is Chess960; each pairing carries its start position (shared by a double round-robin's return game). */
   chess960?: boolean;
-  pairings: { white: string; black: string; gameId?: string; chess960?: number }[];
+  /**
+   * Set openings: "each" gives every pairing its own (the next one its players have played least, shared by a
+   * double round-robin's return game); an opening id plays that one in every game.
+   */
+  openings?: string;
+  pairings: { white: string; black: string; gameId?: string; chess960?: number; opening?: string }[];
   status: "running" | "finished";
   /** Games played at once (default: as many as the players fill, half of them). Above 1, no model is ever in two rated games at the same time, in or out of the tournament; unrated games don't count. */
   boards?: number;

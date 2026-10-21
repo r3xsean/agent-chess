@@ -1746,7 +1746,8 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
   );
   const turn: Color = b.fen.split(" ")[1] as Color;
   const mat = v.material ?? prep.material[b.i + 1];
-  const opening = g.opening && b.i >= prep.firstOutOfBook - 1 ? g.opening.name : "";
+  // A set opening is named while its moves play, so they don't read as either player's choice.
+  const opening = g.setOpening && b.i < g.setOpening.plies ? `Set opening: ${g.setOpening.name}` : g.opening && b.i >= prep.firstOutOfBook - 1 ? g.opening.name : "";
   const card = (c: Color) => <PlayerCard g={g} color={c} material={mat} rating={ratings?.[c].before} toMove={turn === c && !b.anim} clockMs={v.clocks?.[c] ?? 0} />;
   const callout = b.illegal ? <IllegalBanner g={g} b={b} /> : v.callout ? <Callout c={v.callout} wide={wide} /> : null;
   const hook =
@@ -1986,7 +1987,7 @@ function ResultScene({ g, v, wide, ratings, rival }: { g: Game; v: View; wide: b
           {whoLine(ref)}
         </div>
         <div className="v-time-total">
-          ⏱ {clock(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0))} thinking · {took(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0) / Math.max(1, g.moves.filter((m) => m.color === c).length))} a move
+          ⏱ {clock(g.moves.filter((m) => m.color === c).reduce((sum, m) => sum + m.thinkMs, 0))} thinking · {took(g.moves.filter((m) => m.color === c && !m.supplied).reduce((sum, m) => sum + m.thinkMs, 0) / Math.max(1, g.moves.filter((m) => m.color === c && !m.supplied).length))} a move
         </div>
         <div className="v-acc">
           <span>{r?.accuracy?.toFixed(1) ?? "—"}</span>

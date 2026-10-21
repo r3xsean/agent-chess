@@ -74,7 +74,10 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
                 {!g.rated && <div style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>unrated</div>}
               </td>
               <td className="g-acc">{g.accuracy ? `${g.accuracy.w?.toFixed(1) ?? "–"} / ${g.accuracy.b?.toFixed(1) ?? "–"}` : "–"}</td>
-              <td className="g-open" style={{ color: "var(--text-2)", maxWidth: 220 }}>{g.opening?.name ?? "–"}</td>
+              <td className="g-open" style={{ color: "var(--text-2)", maxWidth: 220 }}>
+                {g.opening?.name ?? "–"}
+                {g.setOpening && <div style={{ color: "var(--muted)", fontSize: 11 }}>set opening: {g.setOpening}</div>}
+              </td>
               <td className="g-moves">{Math.ceil(g.plies / 2)}</td>
               <td className="g-date" style={{ color: "var(--muted)" }}>{new Date(g.createdAt).toLocaleDateString()}</td>
             </tr>
@@ -296,7 +299,7 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
             {live.map((g) => (
               <a key={g.id} className={`live-card${g.clockPause ? " is-paused" : ""}`} href={`#/game/${g.id}`}>
                 <PlayerCell p={g.white} rating={ratings[g.variant][g.white.id]} variant={g.variant} />
-                <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs{g.variant === "chess960" ? " · Chess960" : ""}</div>
+                <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs{g.variant === "chess960" ? " · Chess960" : g.setOpening ? ` · Set: ${g.setOpening}` : ""}</div>
                 <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings[g.variant][g.black.id]} variant={g.variant} />
                 <div style={{ fontSize: 13, color: g.clockPause ? "var(--pause-color)" : "var(--green)", fontWeight: 700 }}>
                   {phaseLabel(g)}

@@ -5,6 +5,10 @@ import { SeatPicker, useRatings, type Ratings, type SeatChoice } from "./ModelPi
 import { PlayerAvatar } from "./PlayerName";
 import { saveName, saveSeat, savedName } from "../seat";
 import { sideLooks } from "../../../shared/looks";
+import { newRules, START_FEN } from "../../../shared/rules";
+import { openingById, openingMovesText, type OpeningStats } from "../../../shared/openingSuite";
+import { Board } from "./Board";
+import { OpeningPicker, StatsLines, type SeatNames } from "./OpeningPicker";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const idOf = (s: SeatChoice) => `${s.model}@${s.effort}`;
@@ -150,6 +154,115 @@ const chess960Valid = (v: Chess960Choice) => {
 /** What the server expects: false, true (random) or a position number. */
 export const chess960Body = (v: Chess960Choice) => (!v.on ? false : v.position.trim() === "" ? true : Number(v.position));
 
+/** A set opening on or off; an empty `pick` is the one the players have played least (a tournament: each pairing its own). */
+export interface OpeningChoice {
+  on: boolean;
+  pick: string;
+}
+
+/** The position the players take over from, and the arena's last move. */
+function handover(moves: string[]) {
+  const c = newRules(START_FEN, "standard");
+  let last: [string, string] | undefined;
+  for (const san of moves) {
+    const m = c.move(san);
+    last = [m.from, m.to];
+  }
+  return { fen: c.fen(), last };
+}
+
+function OpeningPreview({ id, extra }: { id: string; extra?: React.ReactNode }) {
+  const o = openingById(id);
+  if (!o) return null;
+  const h = handover(o.moves);
+  return (
+    <div className="opening-preview">
+      <div style={{ "--size": "168px" } as React.CSSProperties}>
+        <Board fen={h.fen} orientation="w" lastMove={h.last} />
+      </div>
+      <div className="opening-info">
+        <b>{o.name}</b>
+        <span className="opening-moves">{openingMovesText(o.moves)}</span>
+        <small className="hint">{o.kind}</small>
+        {extra}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The arena plays an opening's first moves and the players take over. A game gets the one its two players have
+ * played least, or one picked here; `white`/`black` are the seats as sent to the server, with `names` for
+ * them. `coloursKnown` false (colours not drawn yet): the seats only give the numbers, not "next". A tournament
+ * gives each pairing its own, or one opening to every game.
+ */
+export function SetOpeningOption({
+  value,
+  onChange,
+  white,
+  black,
+  names = null,
+  coloursKnown = true,
+  tournament,
+}: {
+  value: OpeningChoice;
+  onChange: (v: OpeningChoice) => void;
+  white?: unknown;
+  black?: unknown;
+  names?: SeatNames;
+  coloursKnown?: boolean;
+  tournament?: boolean;
+}) {
+  const [data, setData] = useState<{ next: string | null; openings: OpeningStats[] } | null>(null);
+  const body = value.on ? JSON.stringify(!tournament && white && black ? { white, black } : {}) : null;
+  useEffect(() => {
+    if (!body) return;
+    let alive = true;
+    setData(null);
+    api<{ next: string | null; openings: OpeningStats[] }>("/api/openings/stats", JSON.parse(body))
+      .then((r) => alive && setData(r))
+      .catch(() => alive && setData(null));
+    return () => {
+      alive = false;
+    };
+  }, [body]);
+  const auto = value.pick === "";
+  const next = coloursKnown && !tournament ? (data?.next ?? null) : null;
+  const shown = auto ? next : value.pick;
+  const seatNames = tournament ? null : names;
+  const note = !value.on
+    ? "The players open the game themselves."
+    : tournament
+      ? auto
+        ? "Every pairing starts from the opening its players have played least; a double round-robin replays it with colours swapped."
+        : "Every game starts from this opening: a thematic tournament."
+      : "The arena plays these moves first; neither player chose them.";
+  const autoNote = tournament
+    ? "The opening each pairing's players have played least"
+    : !coloursKnown || !white || !black
+      ? "The opening these two have played least, once the colours are drawn"
+      : next
+        ? `${openingById(next)?.name}: the one these two have played least`
+        : "Finding the one these two have played least…";
+  return (
+    <OptionRow icon="♟" title="Set opening" on={value.on} onChange={(on) => onChange({ ...value, on })} note={note}>
+      <OpeningPicker
+        value={value.pick}
+        onChange={(pick) => onChange({ ...value, pick })}
+        autoLabel={tournament ? "Each pairing gets its own" : "Next for this pair"}
+        autoNote={autoNote}
+        next={next}
+        stats={data?.openings}
+        names={seatNames}
+      />
+      {shown && <OpeningPreview id={shown} extra={<StatsLines s={data?.openings.find((s) => s.id === shown)} names={seatNames} />} />}
+    </OptionRow>
+  );
+}
+
+/** What the server expects for a game: nothing, true (the least played) or an opening id. Off under Chess960. */
+const openingBody = (v: OpeningChoice, c960: Chess960Choice) => (c960.on || !v.on ? undefined : v.pick || true);
+
 /** The one-click way: ask T3 (via its webhook) to summon the agents. */
 export function SummonButton({ gameId, tournamentId, compact }: { gameId?: string; tournamentId?: string; compact?: boolean }) {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "already" | "error">("idle");
@@ -187,6 +300,33 @@ export function SummonButton({ gameId, tournamentId, compact }: { gameId?: strin
       )}
       {state === "error" && <span style={{ color: "var(--c-blunder)", fontSize: 13 }}>{err}</span>}
     </div>
+  );
+}
+
+/** The same game again with the colours swapped (same set opening, rated the same way), then its board. */
+export function RematchButton({ gameId }: { gameId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const go = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await api<{ game: Game; humanKey?: string }>(`/api/games/${gameId}/rematch`, {});
+      if (r.humanKey) saveSeat(r.game.id, r.humanKey);
+      location.hash = `#/game/${r.game.id}`;
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button className="btn" disabled={busy} onClick={go} title="Play the same opening again, each side with the other colour">
+        {busy ? "Setting up…" : "⇄ Rematch, colours swapped"}
+      </button>
+      {err && <span style={{ color: "var(--c-blunder)", fontSize: 13 }}>{err}</span>}
+    </>
   );
 }
 
@@ -276,8 +416,8 @@ function SeatCard({ title, children, className = "" }: { title: React.ReactNode;
 }
 
 /** The settings at a glance, for the footer. */
-const summary = (rated: boolean, c960: Chess960Choice) =>
-  [rated ? "Rated" : "Unrated", c960.on ? "Chess960" : "Standard chess"].join(" · ");
+const summary = (rated: boolean, c960: Chess960Choice, opening: OpeningChoice) =>
+  [rated ? "Rated" : "Unrated", c960.on ? "Chess960" : opening.on ? "Set opening" : "Standard chess"].join(" · ");
 
 const Err = ({ text }: { text: string }) => (text ? <p className="form-err" role="alert">{text}</p> : null);
 
@@ -287,6 +427,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const [black, setBlack] = useState<SeatChoice>({ model: "gpt-6-astra", effort: "high" });
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
+  const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
@@ -305,7 +446,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr("");
     try {
-      const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, rated, chess960: chess960Body(c960) });
+      const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, rated, chess960: chess960Body(c960), opening: openingBody(opening, c960) });
       setCreated(r.game.id);
     } catch (e) {
       setErr(errText(e));
@@ -326,7 +467,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <span className="foot-note">{same ? <span className="warn">Both seats are the same player — change the model or effort.</span> : summary(rated, c960)}</span>
+          <span className="foot-note">{same ? <span className="warn">Both seats are the same player — change the model or effort.</span> : summary(rated, c960, opening)}</span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
@@ -356,6 +497,15 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
       {!same && <Matchup ratings={ratings} white={refOf(meta.models, white)} black={refOf(meta.models, black)} whiteId={idOf(white)} blackId={idOf(black)} />}
       <div className="opt-list">
         <Chess960Option value={c960} onChange={setC960} />
+        {!c960.on && (
+          <SetOpeningOption
+            value={opening}
+            onChange={setOpening}
+            white={same ? undefined : white}
+            black={same ? undefined : black}
+            names={same ? null : { w: refOf(meta.models, white).modelLabel, b: refOf(meta.models, black).modelLabel }}
+          />
+        )}
         <RatedOption value={rated} onChange={setRated} />
       </div>
       <Err text={err} />
@@ -371,6 +521,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const [agent, setAgent] = useState<SeatChoice>({ model: "claude-opus-5-5", effort: "high" });
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
+  const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
@@ -378,6 +529,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState("");
   if (!meta) return null;
   const myName = name.trim() || "Human";
+  const human = { human: true, name: myName };
   const me = { provider: "human", modelLabel: myName };
   const myId = `human:${myName.toLowerCase()}`;
   const mine = ratings.get(myId);
@@ -386,13 +538,13 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
     setErr("");
     try {
       const color = side === "random" ? (Math.random() < 0.5 ? "w" : "b") : side;
-      const human = { human: true, name: myName };
       saveName(name.trim());
       const r = await api<{ game: Game; humanKey: string }>("/api/games", {
         white: color === "w" ? human : agent,
         black: color === "b" ? human : agent,
         rated,
         chess960: chess960Body(c960),
+        opening: openingBody(opening, c960),
       });
       saveSeat(r.game.id, r.humanKey);
       if (!meta.summonAvailable) return setCreated(r.game.id);
@@ -426,7 +578,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <span className="foot-note">{summary(rated, c960)}</span>
+          <span className="foot-note">{summary(rated, c960, opening)}</span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
@@ -481,6 +633,16 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
       )}
       <div className="opt-list">
         <Chess960Option value={c960} onChange={setC960} />
+        {!c960.on && (
+          <SetOpeningOption
+            value={opening}
+            onChange={setOpening}
+            white={side === "b" ? agent : human}
+            black={side === "b" ? human : agent}
+            names={side === "b" ? { w: agentRef.modelLabel, b: myName } : { w: myName, b: agentRef.modelLabel }}
+            coloursKnown={side !== "random"}
+          />
+        )}
         <RatedOption value={rated} onChange={setRated} />
       </div>
       <Err text={err} />
@@ -509,6 +671,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   const [breakHours, setBreakHours] = useState(0);
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
+  const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
@@ -536,7 +699,8 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr("");
     try {
-      const t = await api<Tournament>("/api/tournaments", { name: name.trim(), players: seats, doubleRound: double, rated, chess960: c960.on, boards: board || undefined, breakHours });
+      const openings = !c960.on && opening.on ? opening.pick || "each" : undefined;
+      const t = await api<Tournament>("/api/tournaments", { name: name.trim(), players: seats, doubleRound: double, rated, chess960: c960.on, openings, boards: board || undefined, breakHours });
       setCreated(t.id);
     } catch (e) {
       setErr(errText(e));
@@ -562,7 +726,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
               <span className="warn">Two seats are the same player — change the model or effort.</span>
             ) : (
               <>
-                <b>{n}</b> players · <b>{games}</b> games · <b>{rounds}</b> rounds · {summary(rated, c960)}
+                <b>{n}</b> players · <b>{games}</b> games · <b>{rounds}</b> rounds · {summary(rated, c960, opening)}
               </>
             )}
           </span>
@@ -665,6 +829,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
 
       <div className="opt-list">
         <Chess960Option value={c960} onChange={setC960} tournament />
+        {!c960.on && <SetOpeningOption value={opening} onChange={setOpening} tournament />}
         <RatedOption value={rated} onChange={setRated} tournament />
       </div>
       <Err text={err} />

@@ -203,7 +203,8 @@ const OBVIOUS_GAIN = 3;
 function rawLine(g: Game, i: number, kind: LineKind, legacy: boolean, asked: boolean): ShownLine | null {
   const m = g.moves[i];
   const cls = m?.analysis?.classification;
-  if (!m || !cls || m.analysis!.unavailable) return null;
+  // A set opening's moves were the arena's, not a player's: there's nothing to show instead of or after them.
+  if (!m || !cls || m.analysis!.unavailable || m.supplied) return null;
   const variant = variantOf(g);
   const mover = m.color;
   const opp: Color = mover === "w" ? "b" : "w";

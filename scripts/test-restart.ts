@@ -90,7 +90,8 @@ try {
 
   // A second game, over and reviewed: it gets a publish request, a director's summon and a tournament below.
   const done = await newGame();
-  assert.equal((await done.act("w", "move", { turn: { move: "e4", commentary: "Centre.", eval: "0.3" } })).status, 200);
+  // Three moves: a game needs that many for a video plan.
+  for (const [seat, move] of [["w", "e4"], ["b", "e5"], ["w", "Nf3"]]) assert.equal((await done.act(seat, "move", { turn: { move, commentary: "Centre.", eval: "0.3" } })).status, 200);
   assert.equal((await done.act("b", "resign")).status, 200);
   await until(async () => !!(await done.game()).review, "the engine review");
 

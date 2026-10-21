@@ -14,8 +14,8 @@ The website (http://127.0.0.1:5170) is the referee. You are the orchestrator: th
 ## 2. Get the game or tournament
 
 - An existing game or tournament: use the id the user gave.
-- A new game: `POST /api/games` with `{ white:{model,effort}, black:{…} }`. Add `chess960: true` for a random Chess960 start (or `chess960: <0–959>` for a given one), or `rated: false` if the user wants it unrated. Use the models and efforts the user asks for, and don't pick model IDs for them.
-- A new tournament: `POST /api/tournaments` with `{ players:[{model,effort},…], doubleRound }`. It plays as many games at once as the players fill (half of them) unless you pass a lower `boards` (`1` plays one game at a time). `chess960: true` and `rated: false` work as for games.
+- A new game: `POST /api/games` with `{ white:{model,effort}, black:{…} }`. Add `chess960: true` for a random Chess960 start (or `chess960: <0–959>` for a given one), `opening: true` to start from the set opening (shared/openingSuite.ts) these two have played least (or `opening: "<id>"` for a given one), or `rated: false` if the user wants it unrated. Use the models and efforts the user asks for, and don't pick model IDs for them.
+- A new tournament: `POST /api/tournaments` with `{ players:[{model,effort},…], doubleRound }`. It plays as many games at once as the players fill (half of them) unless you pass a lower `boards` (`1` plays one game at a time). `chess960: true` and `rated: false` work as for games; `openings: "each"` gives every pairing a set opening (a double round-robin's return game replays it with colours swapped), `openings: "<id>"` starts every game from that one.
 
 ## 3. Get your brief and follow it
 

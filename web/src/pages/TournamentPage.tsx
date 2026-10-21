@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, ratingsOf, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
 import type { PlayerRef, Tournament } from "../../../shared/types";
 import { sideLooks } from "../../../shared/looks";
+import { openingById } from "../../../shared/openingSuite";
 import { GamesTable, PlayerCell } from "./Lobby";
 import { SummonInfo } from "../components/NewGame";
 
@@ -39,7 +40,9 @@ export function TournamentPage({ id }: { id: string }) {
     <div className="page">
       <h1>🏆 {t.name}</h1>
       <p className="sub">
-        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin{t.chess960 ? " · Chess960 (rated apart from standard)" : ""}{t.rated === false ? " · unrated" : ""} · {t.status}
+        {t.players.length} players · {t.doubleRound ? "double" : "single"} round-robin{t.chess960 ? " · Chess960 (rated apart from standard)" : ""}
+        {t.openings ? (t.openings === "each" ? " · set openings (each pairing its own)" : ` · set opening: ${openingById(t.openings)?.name ?? t.openings}`) : ""}
+        {t.rated === false ? " · unrated" : ""} · {t.status}
       </p>
       {meta && !meta.publicMode && <TournamentSettings key={`${t.id}:${t.boards}:${t.breakHours}`} tournament={t} />}
       {t.status === "running" && (

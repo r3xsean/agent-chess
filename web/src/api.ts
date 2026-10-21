@@ -13,6 +13,8 @@ export interface GameSummary {
   termination: string | null;
   plies: number;
   opening: Game["opening"];
+  /** The set opening's name, when the arena played the first moves. */
+  setOpening?: string;
   tournamentId?: string;
   variant: Variant;
   rated: boolean;

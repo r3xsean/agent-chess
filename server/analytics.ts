@@ -2,10 +2,15 @@ import type { Classification, Color, Game, MoveRecord, PlayerRef, Score } from "
 import type {
   AgentRow,
   AnalyticsScope,
+  AnalyticsStart,
   BlownGame,
   FormGame,
   GamePhase,
+  HandoverStats,
   HeadToHead,
+  OpeningGrid,
+  PairResult,
+  SetOpeningRow,
   IllegalKind,
   ModelAnalytics,
   OpeningRow,
@@ -24,6 +29,9 @@ import { games, players, players960, ratingPool } from "./store";
 import { GLICKO_START, glickoUpdate, type Glicko } from "./glicko";
 import { isRated, lineTokens } from "./game";
 import { chessComEstimates, moveReading, phaseEstimate, type MoveSample } from "./chessCom";
+import { openingOf } from "./setOpenings";
+import { OPENINGS } from "../shared/openingSuite";
+import { HANDOVER_MOVES, strongerChance } from "../shared/analytics";
 
 /*
  * Everything the Agents tab shows, from the finished games: one pass over them per scope, kept until a
@@ -47,8 +55,11 @@ function timeStats(ms: number[]): TimeStats {
   return { n: s.length, avgMs: Math.round(mean(s)!), medianMs: Math.round(s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2) };
 }
 
-/** A move's think time, when it means something: not each side's first move (it includes the agent starting up). */
-const thinkOf = (m: MoveRecord) => (m.ply > 2 && m.thinkMs > 0 ? m.thinkMs : null);
+/** Each side's first move of a game (sidesOf fills it in): its think time includes the agent starting up. */
+const firstTurns = new WeakSet<MoveRecord>();
+
+/** A move's think time, when it means something: not each side's first move. */
+const thinkOf = (m: MoveRecord) => (!firstTurns.has(m) && m.thinkMs > 0 ? m.thinkMs : null);
 
 /** Analysed moves that say something about quality: book and forced moves are free. */
 const graded = (m: MoveRecord) => !!m.analysis && !m.analysis.unavailable && m.analysis.classification !== "book" && m.analysis.classification !== "forced";
@@ -222,6 +233,9 @@ function sidesOf(g: Game): Side[] {
     const me = color === "w" ? g.white : g.black;
     if (isHuman(me)) continue;
     const points = g.result === "1/2-1/2" ? 0.5 : (g.result === "1-0") === (color === "w") ? 1 : 0;
+    // A set opening's supplied moves were nobody's choice: they count for neither side.
+    const own = g.moves.filter((m) => m.color === color && !m.supplied);
+    if (own[0]) firstTurns.add(own[0]);
     out.push({
       g,
       color,
@@ -229,7 +243,7 @@ function sidesOf(g: Game): Side[] {
       opp: color === "w" ? g.black : g.white,
       outcome: points === 1 ? "W" : points === 0 ? "L" : "D",
       points,
-      own: g.moves.filter((m) => m.color === color),
+      own,
       accuracy: g.review?.[color].accuracy ?? null,
       ts: g.endedAt ?? g.createdAt,
     });
@@ -314,6 +328,71 @@ function endLabel(term: string, outcome: Outcome): string {
 
 const bump = (rec: Record<string, number>, key: string, by = 1) => (rec[key] = (rec[key] ?? 0) + by);
 
+/** One player's points from a finished game. */
+const pointsFor = (g: Game, id: string) => (g.result === "1/2-1/2" ? 0.5 : (g.result === "1-0") === (g.white.id === id) ? 1 : 0);
+
+/**
+ * Colour-swapped pairs among these games, by model: the same two players from the same start (a set opening or
+ * a Chess960 position), once each way round, matched oldest first. A model playing itself (another effort) is
+ * left out, as in head-to-head.
+ */
+function colourPairs(list: Game[]): Map<string, PairResult[]> {
+  const startOf = (g: Game) => (g.setOpening ? g.setOpening.name : variantOf(g) === "chess960" ? `Chess960 #${g.chess960}` : null);
+  const groups = new Map<string, Game[]>();
+  for (const g of list) {
+    const start = startOf(g);
+    if (!g.result || !start) continue;
+    const key = `${start}|${[g.white.id, g.black.id].sort().join("|")}`;
+    groups.set(key, [...(groups.get(key) ?? []), g]);
+  }
+  const out = new Map<string, PairResult[]>();
+  for (const gs of groups.values()) {
+    gs.sort((a, b) => a.createdAt - b.createdAt);
+    const used = new Set<Game>();
+    for (const g of gs) {
+      if (used.has(g)) continue;
+      const back = gs.find((x) => !used.has(x) && x !== g && x.white.id === g.black.id);
+      if (!back) continue;
+      used.add(g).add(back);
+      for (const [me, opp] of [
+        [g.white, g.black],
+        [g.black, g.white],
+      ]) {
+        if (isHuman(me) || opp.model === me.model) continue;
+        const list = out.get(me.model) ?? [];
+        list.push({ opponent: labelOf(opp), start: startOf(g)!, score: pointsFor(g, me.id) + pointsFor(back, me.id), gameIds: [g.id, back.id], ts: back.endedAt ?? back.createdAt });
+        out.set(me.model, list);
+      }
+    }
+  }
+  return out;
+}
+
+/** Its first moves of each game (a set opening's own moves aside), as one HandoverStats. */
+function handoverOf(sides: Side[]): HandoverStats {
+  const moves = sides.flatMap((s) => s.own.slice(0, HANDOVER_MOVES).filter((m) => m.analysis && !m.analysis.unavailable));
+  return {
+    games: sides.length,
+    moves: moves.length,
+    accuracy: round1(mean(moves.map((m) => m.analysis!.accuracy))),
+    book: pct(moves.filter((m) => m.analysis!.classification === "book").length, moves.length),
+    blundersPer100: per100(moves.filter((m) => m.analysis!.classification === "blunder").length, moves.length),
+  };
+}
+
+/** How it did from each set opening, the arena's or reached in a free game. */
+function setOpeningRows(sides: Side[]): SetOpeningRow[] {
+  return OPENINGS.flatMap((o) => {
+    const ss = sides.filter((s) => openingOf(s.g) === o.id);
+    if (!ss.length) return [];
+    const by = (c: Color) => {
+      const cs = ss.filter((s) => s.color === c);
+      return { games: cs.length, score: scoreOf(cs) };
+    };
+    return [{ id: o.id, name: o.name, games: ss.length, score: scoreOf(ss)!, accuracy: accOf(ss), white: by("w"), black: by("b") }];
+  });
+}
+
 /* ------------------------------ one model ------------------------------ */
 
 /** A model's players in one variant's ratings: its most settled one (lowest RD, i.e. most games, not a lucky one-game effort) and their record. */
@@ -359,11 +438,20 @@ function rowOf(model: string, sides: Side[]): AgentRow {
     // Filled in from the move-by-move beliefs (analyse), so the table and the model's page agree.
     calibration: null,
     think: timeStats(own.map(thinkOf).filter((x): x is number => x !== null)),
+    // Filled in from the pairs (analyse).
+    pairs: { played: 0, won: 0, split: 0, lost: 0 },
   };
 }
 
-function analyse(model: string, sides: Side[], field: Partial<Record<Classification, number>>, history: Record<Variant, ReturnType<typeof ratingHistories>>): ModelAnalytics {
+function analyse(
+  model: string,
+  sides: Side[],
+  field: Partial<Record<Classification, number>>,
+  history: Record<Variant, ReturnType<typeof ratingHistories>>,
+  pairs: PairResult[],
+): ModelAnalytics {
   const row = rowOf(model, sides);
+  row.pairs = { played: pairs.length, won: pairs.filter((p) => p.score > 1).length, split: pairs.filter((p) => p.score === 1).length, lost: pairs.filter((p) => p.score < 1).length };
   const chrono = [...sides].sort((a, b) => a.ts - b.ts);
   const own = sides.flatMap((s) => s.own);
 
@@ -626,7 +714,8 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
       }
     }
     const first = s.own.find((m) => m.analysis && !m.analysis.unavailable && BAD.includes(m.analysis.classification));
-    if (first) firstMistakes.push(Math.ceil(first.ply / 2));
+    // Counted in its own moves, so a set opening's moves don't push it later.
+    if (first) firstMistakes.push(s.own.indexOf(first) + 1);
     else if (s.own.some((m) => m.analysis && !m.analysis.unavailable)) clean++;
   }
   blown.sort((a, b) => b.peak - a.peak);
@@ -636,7 +725,8 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
   for (const c of ["w", "b"] as const) {
     const byName = new Map<string, Side[]>();
     for (const s of sides) {
-      if (s.color !== c || !s.g.opening || s.g.variant === "chess960") continue;
+      // Its repertoire: what it chose to play, so not the games the arena set the opening for.
+      if (s.color !== c || !s.g.opening || s.g.variant === "chess960" || s.g.setOpening) continue;
       const name = s.g.opening.name.split(":")[0].trim();
       byName.set(name, [...(byName.get(name) ?? []), s]);
     }
@@ -650,7 +740,7 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
   const endings: ModelAnalytics["endings"] = { wins: {}, losses: {}, draws: {}, avgLength: { W: null, D: null, L: null }, drawnFromWinning };
   for (const s of sides) bump(s.outcome === "W" ? endings.wins : s.outcome === "L" ? endings.losses : endings.draws, endLabel(s.g.termination ?? "", s.outcome));
   for (const o of ["W", "D", "L"] as const) {
-    const len = mean(sides.filter((s) => s.outcome === o).map((s) => Math.ceil(s.g.moves.length / 2)));
+    const len = mean(sides.filter((s) => s.outcome === o).map((s) => Math.ceil(s.g.moves.filter((m) => !m.supplied).length / 2)));
     endings.avgLength[o] = len === null ? null : Math.round(len);
   }
 
@@ -662,14 +752,18 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
     byOpp.set(key, [...(byOpp.get(key) ?? []), s]);
   }
   const h2h: HeadToHead[] = [...byOpp]
-    .map(([key, ss]) => ({
-      model: key,
-      label: key === "human" ? "Humans" : labelOf(ss[0].opp),
-      provider: ss[0].opp.provider,
-      ...wdlOf(ss),
-      myAccuracy: accOf(ss),
-      theirAccuracy: round1(mean(ss.map((s) => s.g.review?.[other(s.color)].accuracy ?? null).filter((x): x is number => x !== null))),
-    }))
+    .map(([key, ss]) => {
+      const theirs = key === "human" ? null : standingIn("standard", key).best;
+      return {
+        model: key,
+        label: key === "human" ? "Humans" : labelOf(ss[0].opp),
+        provider: ss[0].opp.provider,
+        ...wdlOf(ss),
+        myAccuracy: accOf(ss),
+        theirAccuracy: round1(mean(ss.map((s) => s.g.review?.[other(s.color)].accuracy ?? null).filter((x): x is number => x !== null))),
+        stronger: theirs && row.rating !== null && row.rd !== null ? round1(strongerChance(row.rating, row.rd, theirs.rating, theirs.rd) * 100) : null,
+      };
+    })
     .sort((a, b) => b.games - a.games);
 
   /* effort */
@@ -700,6 +794,7 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
 
   return {
     scope: "all",
+    start: "all",
     row,
     ratingHistory,
     form: { last: last.map(formOf), scoreLast10: scoreOf(last), accuracyLast10: accOf(last) },
@@ -719,6 +814,12 @@ function analyse(model: string, sides: Side[], field: Partial<Record<Classificat
     conversion: { winning, converted, losing, saved, blown: blown.slice(0, 5), firstMistake: { games: firstMistakes.length + clean, clean, avgMove: round1(mean(firstMistakes)) } },
     tactics: { mates, matesFound, mateIn1, mateIn1Found, onlyMoves, onlyFound },
     openings,
+    setOpenings: setOpeningRows(sides),
+    pairs: [...pairs].sort((a, b) => b.ts - a.ts),
+    handover: {
+      set: handoverOf(sides.filter((s) => s.g.setOpening)),
+      free: handoverOf(sides.filter((s) => !s.g.setOpening && variantOf(s.g) === "standard")),
+    },
     endings,
     h2h,
     setup: { efforts, players: setupPlayers },
@@ -731,8 +832,9 @@ interface Computed {
   sig: string;
   rows: AgentRow[];
   models: Map<string, ModelAnalytics>;
+  grid: OpeningGrid;
 }
-const cache = new Map<AnalyticsScope, Computed>();
+const cache = new Map<string, Computed>();
 
 /**
  * Changes whenever anything the numbers come from does: a finished game (its result, moves, review and
@@ -750,16 +852,20 @@ function signature() {
   return parts.join("|");
 }
 
-function compute(scope: AnalyticsScope): Computed {
+function compute(scope: AnalyticsScope, start: AnalyticsStart): Computed {
   const sig = signature();
-  const hit = cache.get(scope);
+  const hit = cache.get(`${scope}|${start}`);
   if (hit && hit.sig === sig) return hit;
 
   const byModel = new Map<string, Side[]>();
+  const inScope: Game[] = [];
   for (const g of games.values()) {
     if (scope === "rated" && !isRated(g)) continue;
+    if (start !== "all" && !!g.setOpening !== (start === "set")) continue;
+    inScope.push(g);
     for (const s of sidesOf(g)) byModel.set(s.me.model, [...(byModel.get(s.me.model) ?? []), s]);
   }
+  const pairs = colourPairs(inScope);
   // Models with rated players but no game in this scope still get a row.
   for (const p of [...Object.values(players), ...Object.values(players960)]) if (!isHuman(p.ref) && !byModel.has(p.ref.model)) byModel.set(p.ref.model, []);
 
@@ -768,17 +874,28 @@ function compute(scope: AnalyticsScope): Computed {
 
   const history = { standard: ratingHistories("standard"), chess960: ratingHistories("chess960") };
   const models = new Map<string, ModelAnalytics>();
-  for (const [model, sides] of byModel) models.set(model, { ...analyse(model, sides, field, history), scope });
+  for (const [model, sides] of byModel) models.set(model, { ...analyse(model, sides, field, history, pairs.get(model) ?? []), scope, start });
   const all = [...models.values()];
   const estimates = chessComEstimates(
     all.map((a) => ({ move: moveReading(movesOf(byModel.get(a.row.model)!).map((x) => x.all), a.row.model), rating: a.row.rating, rd: a.row.rd })),
   );
   all.forEach((a, i) => (a.row.chessCom = estimates[i]));
   const rows =[...models.values()].map((a) => a.row).sort((a, b) => (b.rating ?? -Infinity) - (a.rating ?? -Infinity) || b.games - a.games);
-  const out = { sig, rows, models };
-  cache.set(scope, out);
+  // Every model against every set opening: the openings anyone has played from, the models by rating as above.
+  const played = new Set(all.flatMap((a) => a.setOpenings.map((o) => o.id)));
+  const grid: OpeningGrid = {
+    openings: OPENINGS.filter((o) => played.has(o.id)).map((o) => ({ id: o.id, name: o.name })),
+    rows: rows.flatMap((r) => {
+      const a = models.get(r.model)!;
+      if (!a.setOpenings.length) return [];
+      return [{ model: r.model, label: r.label, provider: r.provider, cells: Object.fromEntries(a.setOpenings.map((o) => [o.id, { games: o.games, score: o.score, accuracy: o.accuracy }])) }];
+    }),
+  };
+  const out = { sig, rows, models, grid };
+  cache.set(`${scope}|${start}`, out);
   return out;
 }
 
-export const analyticsRows = (scope: AnalyticsScope) => compute(scope).rows;
-export const modelAnalytics = (model: string, scope: AnalyticsScope) => compute(scope).models.get(model) ?? null;
+export const analyticsRows = (scope: AnalyticsScope, start: AnalyticsStart = "all") => compute(scope, start).rows;
+export const openingGrid = (scope: AnalyticsScope, start: AnalyticsStart = "all") => compute(scope, start).grid;
+export const modelAnalytics = (model: string, scope: AnalyticsScope, start: AnalyticsStart = "all") => compute(scope, start).models.get(model) ?? null;

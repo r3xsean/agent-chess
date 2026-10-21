@@ -1,48 +1,33 @@
 // Isolated HTTP server and synthetic T3 database: never changes live games or calls a model.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { checkUsageLimits } from "../server/usageLimits";
 import { seatKeys } from "../server/store";
 import { currentThinkMs } from "../shared/thinkingClock";
 import type { Game } from "../shared/types";
+import { startSpare } from "./spare.mjs";
 
-const data = mkdtempSync(path.join(tmpdir(), "chess-pauses-"));
-const database = path.join(data, "t3.sqlite");
+const t3 = mkdtempSync(path.join(tmpdir(), "chess-pauses-t3-"));
+const database = path.join(t3, "t3.sqlite");
 const db = new DatabaseSync(database);
 db.exec(`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT, provider_instance_id TEXT, created_at TEXT);
 CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT, thread_id TEXT, type TEXT, status TEXT, parent_item_id TEXT, updated_at TEXT, ordinal INTEGER, payload_json TEXT);`);
-const socket = net.createServer();
-await new Promise<void>((r) => socket.listen(0, "127.0.0.1", r));
-const port = (socket.address() as net.AddressInfo).port;
-await new Promise<void>((r) => socket.close(() => r()));
-const url = `http://127.0.0.1:${port}`;
-let output = "";
-const server = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "server/index.ts"], {
-  env: { ...process.env, PORT: String(port), AGENT_CHESS_DATA: data, T3_STATE_DB: database, T3_USAGE_WATCH: "1", PUBLIC_MODE: "0", ENGINE_DEPTH: "1", ENGINE_MAX_MS: "100", MIRROR_URL: "", MIRROR_SECRET: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-  windowsHide: true,
-});
-server.stdout.on("data", (s) => output += s);
-server.stderr.on("data", (s) => output += s);
+const spare = await startSpare({ env: { T3_STATE_DB: database, T3_USAGE_WATCH: "1" } });
+const { url, token } = spare;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(check: () => Promise<boolean>, label: string) {
   for (let n = 0; n < 100; n++) { if (await check()) return; await sleep(100); }
-  throw new Error(`Timed out: ${label}\n${output}`);
+  throw new Error(`Timed out: ${label}\n${spare.output()}`);
 }
-let token = "";
 const request = async (p: string, body?: unknown, admin = false) => {
   const res = await fetch(url + p, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", ...(admin ? { "x-admin-token": token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   return { status: res.status, text, json: () => JSON.parse(text) };
 };
 try {
-  await until(async () => { try { return (await fetch(url + "/api/meta")).ok; } catch { return false; } }, "server start");
-  token = readFileSync(path.join(data, "admin-token.txt"), "utf8").trim();
   const created = (await request("/api/games", {
     white: { model: "claude-sonnet-5-5", effort: "high" },
     black: { model: "gpt-6-astra", effort: "high" },
@@ -149,8 +134,7 @@ try {
   console.log("PASS: automatic T3 pause, Watch metadata, frozen move timing, action-only recovery, multiple seats, manual reasons, authorization, stale/restarted/unrelated errors");
   console.log("PASS: duplicate illegal attempts cannot resume; unrecovered blockers survive game results");
 } finally {
-  server.kill("SIGTERM");
-  await new Promise<void>((r) => { if (server.exitCode !== null) r(); else server.once("close", () => r()); });
+  await spare.stop();
   db.close();
-  rmSync(data, { recursive: true, force: true });
+  rmSync(t3, { recursive: true, force: true });
 }

@@ -13,7 +13,7 @@ import { explainIllegal, illegalMovePath, lineBreakReason, triesOf } from "../..
 import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
 import { CrowdPanel, useCrowd } from "../components/Crowd";
 import { crowdApi, useViewer } from "../viewer";
-import { SummonButton } from "../components/NewGame";
+import { RematchButton, SummonButton } from "../components/NewGame";
 import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
 import { PlayerBar } from "../components/PlayerBar";
@@ -688,6 +688,12 @@ export function GamePage({ id }: { id: string }) {
                 game.review.b.accuracy != null &&
                 ` · Accuracy ${game.review.w.accuracy.toFixed(1)} – ${game.review.b.accuracy.toFixed(1)}`}
             </p>
+            {/* A set opening is fairest played both ways round: one click sets up the other half of the pair. */}
+            {game.result && game.setOpening && meta && !meta.publicMode && (
+              <div className="row-actions" style={{ justifyContent: "center", marginTop: 8 }}>
+                <RematchButton gameId={game.id} />
+              </div>
+            )}
           </div>
         )}
         {tryIdx !== null && (

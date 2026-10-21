@@ -32,10 +32,11 @@ const MAX_CHARS_PER_GAME = VOICE_BUDGET + 2000;
 let savedKey: string | undefined;
 /**
  * The key from the environment, or on Windows from the user's saved variables (so a server started
- * before the key was set still finds it).
+ * before the key was set still finds it). "none" turns voice off.
  */
 function apiKey(): string {
   const env = process.env.ELEVENLABS_API_KEY?.trim();
+  if (env === "none") return "";
   if (env) return env;
   if (savedKey === undefined) {
     savedKey = "";

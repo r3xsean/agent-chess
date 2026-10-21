@@ -49,8 +49,26 @@ function names(commentary: string, san: string): boolean {
   return new RegExp(`(^|[^A-Za-z0-9-])${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9-])`).test(commentary);
 }
 
-/** A finished game still waiting for its video plan. */
-export const needsDirection = (g: Game) => !g.video && !!g.review && g.moves.length > 0;
+/** A set opening's moves, numbered ("1.d4 Nf6 2.c4 e6"). */
+const setMoves = (g: Game) =>
+  g.moves
+    .filter((m) => m.supplied)
+    .map((m) => (m.color === "w" ? `${Math.ceil(m.ply / 2)}.${m.san}` : m.san))
+    .join(" ");
+
+/** What the director is told about a set opening: the arena's moves, which neither player chose. */
+function setOpeningLines(g: Game): string[] {
+  if (!g.setOpening) return [];
+  return [
+    `Set opening: ${g.setOpening.name}. The arena played ${setMoves(g)} (plies 1–${g.setOpening.plies}) before the players took over at ply ${g.setOpening.plies + 1}. Neither player chose those moves, so never credit or explain them as a player's decision. You may name the opening for viewers ("they were handed the ${g.setOpening.name}"); the video plays the set moves quickly under that label.`,
+  ];
+}
+
+/**
+ * A finished game still waiting for its video plan: one with enough of the players' own moves for the three
+ * moments a plan needs (a set opening's moves can't carry one).
+ */
+export const needsDirection = (g: Game) => !g.video && !!g.review && g.moves.filter((m) => !m.supplied).length >= 3;
 
 /** How many of each title, caption and thumbnail the director offers the user. */
 const PACKAGING_OPTIONS = { min: 3, max: 5 };
@@ -114,6 +132,7 @@ export function directorBrief(g: Game): string {
     `Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.`,
     ...(human ? [`${name(human)} is a human: their moves come without commentary, so moments on their moves have no quote (the board, the verdict and the agent's reaction tell those).`] : []),
     `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
+    ...setOpeningLines(g),
     ...(g.ratingBefore && g.ratingChange
       ? [`${variantOf(g) === "chess960" ? "Chess960 ratings (the video shows these; Chess960 is rated apart from standard chess)" : "Ratings (the video shows these)"}: ${(["w", "b"] as Color[]).map((c) => `${name(c)} ${g.ratingBefore![c]} → ${g.ratingBefore![c] + g.ratingChange![c]}`).join(", ")}.`]
       : []),
@@ -139,7 +158,9 @@ export function directorBrief(g: Game): string {
 
   out.push("## The game, move by move", "(eval and win% are White's view, win% before → after the move; self-eval is what the mover believed)", "");
   const belief = beliefs(g);
+  if (g.setOpening) out.push(`plies 1–${g.setOpening.plies} — ${setMoves(g)}: the arena's set moves (no moments, asides or hook on these)`);
   g.moves.forEach((m, i) => {
+    if (m.supplied) return;
     const a = m.analysis;
     const verdict = a ? `${a.classification}${a.bestSan && a.bestSan !== m.san ? `, engine preferred ${a.bestSan} (${pvSan(m.fenBefore, g.analysis[m.fenBefore]?.pv, 6, variantOf(g))})` : ""}` : "unrated";
     const ww = whiteWin(m);
@@ -261,7 +282,9 @@ export function directorBrief(g: Game): string {
     "  - line.squares, line.draw, line.refs: what the board shows with the caption, at the end of the line, as in marks. The line's moves are played out on the board, but nothing else is drawn unless you say: `squares` circles pieces or squares (\"e6\"), each up while its piece stays there; `draw` adds a piece's attack or defence as \"from>to\" (\"e6>e2\": the rook guarding the pawn), checked against the board. `refs`: every word of the caption that names a square, a move or a piece goes in a ref saying what it points at: { \"words\": \"the rook\", \"to\": \"e6\" }, or one of the line's moves: { \"words\": \"Kg4\", \"to\": \"Kg4\" }. A square a ref points at must be drawn: circled, at an end of a reach, or where one of the line's moves went from or to (a piece the line takes can be pointed at where it was taken). Those words light up in the colour of what they point at: green for the side the line favours, red for the other, amber for an empty square. A caption without refs lights nothing.",
     "  - line.punish (an `instead` line listed with `allows:` only, optional): before the line, the video plays what the move played allowed (the moves after `allows:`) and explains it, then winds the board back for the line. Use it when the reason the move was bad isn't obvious from the better line alone, which is most of the time: a fork, a skewer, the back rank, a piece left loose. In your own words, say what the punishment does: { \"at\": \"Nd4+\", \"caption\": \"Nd4+ forks the king and the rook.\", \"draw\": [\"d4>f3\", \"d4>e6\"], \"squares\": [\"f3\", \"e6\"], \"refs\": [{ \"words\": \"Nd4+\", \"to\": \"Nd4+\" }, { \"words\": \"king\", \"to\": \"f3\" }, { \"words\": \"rook\", \"to\": \"e6\" }] }. `at` is the move after which the caption shows and the board pauses on it (by default the last); `squares`, `draw` and `refs` work as for the line, on the board right after `at`, and the moves on the board then include the move played. A circled piece comes off when it moves or is taken, so the rook circled at the fork disappears when the knight takes it. Say only what those moves show, and draw the idea (the fork's two reaches, the pin through the piece, the mating square), not every move. Then the line's own caption can build on it (\"Kg4 instead: no fork, and the rook stays safe\").",
     "- asides: lines said in passing while the game plays on, in the player's own voice, with nothing drawn. The board doesn't stop for them: each is said as its move lands, and the next moves play on under it, often several of them before the line ends. So an aside must stay true while the board moves on: a plan, a verdict on the position, a worry, an attitude, a read on the opponent, a habit, what they're aiming for over the next few moves, a line that comes back later (\"Queens are off and the queenside is where the game will be decided\", \"I am still worse, but fewer pawns improve my defensive chances\", \"Knight check Ne2+ is the one trick to watch\"). Never a line about the move itself or a tactic that's only there for one move (\"Rook to the open c-file\", \"...Kg8 is safest\", \"So ...Nxe4 regains the pawn\", \"Now ...Rb8 attacks the b5 pawn\"): three moves later the voice would still be explaining a position that's gone. A single-move thought worth hearing is a moment (importance 1 if it's minor), where the game stops for it; otherwise leave it out. Each is { \"ply\": 7, \"quote\": \"…\", \"delivery\": \"…\" } (delivery optional), quoted exactly from that move's `commentary:` (or from what was `said with illegal attempt` on it), at most 25 words. Not on a ply that's one of your moments, nor on the last move.",
-    "  - Open with a short exchange: 4–6 asides over the first 10–16 plies, the two players taking turns, so the opening has them talking about who they are and what they're going for (an opening choice and why, how they see the opponent, the kind of game they want), not narrating the moves (\"I take space in the center\" is the move, not the player). Where asides come one after another, each move waits for the line before it, so keep those short.",
+    g.setOpening
+      ? `  - Open with a short exchange: 4–6 asides over the first 10–16 plies the players chose (from ply ${g.setOpening.plies + 1}), the two players taking turns, so the game starts with them talking about who they are and what they're going for (how they read the position they were handed, how they see the opponent, the kind of game they want), not narrating the moves (\"I take space in the center\" is the move, not the player). The set moves were nobody's choice: never credit them to a player or have one explain them as theirs. Where asides come one after another, each move waits for the line before it, so keep those short.`
+      : "  - Open with a short exchange: 4–6 asides over the first 10–16 plies, the two players taking turns, so the opening has them talking about who they are and what they're going for (an opening choice and why, how they see the opponent, the kind of game they want), not narrating the moves (\"I take space in the center\" is the move, not the player). Where asides come one after another, each move waits for the line before it, so keep those short.",
     `  - Every aside is in the YouTube cut. Mark the ones the TikTok cut says too with \`"short": true\`: it shows only your importance 2–3 moments and its quiet moves fly by, so the short's asides are what keep it talking between them. Pick the ones that set up your headline moments or carry the most personality, one or two from the opening, and enough that the short never goes more than ${MAX_SILENCE.portrait} seconds with nothing said (the server checks this too). At most ${MAX_SHORT_ASIDES}.`,
     "  - An illegal attempt gets an aside on its move: usually the player owning up to it (the move's commentary often does), or what they meant by it. It's said while the rejected move is on the board.",
     "  - An aside that runs into the next moment holds the board until it's said (it's never said before its own move), so a long aside just before a moment delays it.",
@@ -455,7 +478,7 @@ function shapeLines(g: Game): string[] {
   const name = (c: Color) => sideName(g, c);
   const at = (i: number) => `ply ${g.moves[i].ply}, ${moveNo(g.moves[i].ply)} ${g.moves[i].san}`;
   const pts = g.moves.flatMap((m, i) => {
-    const w = whiteWin(m);
+    const w = m.supplied ? null : whiteWin(m);
     return w ? [{ i, ...w }] : [];
   });
   if (!pts.length) return [];
@@ -591,6 +614,7 @@ function checkPlan(g: Game, raw: unknown, existing?: VideoPlan): VideoPlan {
     const ply = int(x?.ply);
     const m = g.moves.find((mv) => mv.ply === ply);
     if (!m) throw new ActionError(`${where}: ply must be a ply number from the game (1–${g.moves.length}).`);
+    playersMove(g, m, where);
     if (seen.has(ply)) throw new ActionError(`${where}: ply ${ply} is listed twice.`);
     seen.add(ply);
     if (existing?.moments.includes(x)) return x;
@@ -629,7 +653,7 @@ function checkPlan(g: Game, raw: unknown, existing?: VideoPlan): VideoPlan {
   let hook: VideoHook;
   if (existing?.hook && h === existing.hook) hook = existing.hook;
   else {
-  const hookMove = moveAt(g, h.ply, "hook");
+  const hookMove = playersMove(g, moveAt(g, h.ply, "hook"), "hook");
   const hookQuote = moveQuote(g, hookMove, h.quote, "hook", 50, 40, 340);
   // A hook quoted from a moment's marked quote draws what the moment draws, unless the director says otherwise.
   const copied = h.marks === undefined || h.marks === null ? hookMarksFrom(moments.find((x) => x.ply === hookMove.ply), hookQuote) : undefined;
@@ -771,6 +795,7 @@ export function packagingBrief(g: Game): string {
     "",
     `Matchup: White ${describePlayer(g, "w")} vs Black ${describePlayer(g, "b")}.`,
     `Opening: ${g.opening?.name ?? "unknown"}. Result: ${g.result} (${g.termination}).`,
+    ...setOpeningLines(g),
     ...historyLines(g),
     "",
     ...shapeLines(g),
@@ -861,7 +886,7 @@ function asideList(g: Game, raw: unknown, moments: VideoMoment[]): VideoAside[] 
   const seen = new Set<number>();
   const out = raw.map((x: any, n): VideoAside => {
     const where = `asides[${n}]`;
-    const m = moveAt(g, x?.ply, where);
+    const m = playersMove(g, moveAt(g, x?.ply, where), where);
     if (seen.has(m.ply)) throw new ActionError(`${where}: ply ${m.ply} already has an aside; give it one.`);
     seen.add(m.ply);
     if (moments.some((y) => y.ply === m.ply)) throw new ActionError(`${where}: ply ${m.ply} is one of your moments, so its quote is said there. Put the line in that quote, or give the aside to another ply.`);
@@ -889,6 +914,12 @@ function moveAt(g: Game, rawPly: unknown, where: string): MoveRecord {
   return m;
 }
 
+/** A move a player chose: a set opening's moves were the arena's, so nothing is said or stopped for on them. */
+function playersMove(g: Game, m: MoveRecord, where: string): MoveRecord {
+  if (m.supplied) throw new ActionError(`${where}: ply ${m.ply} is one of the arena's set moves; the players took over at ply ${(g.setOpening?.plies ?? 0) + 1}.`);
+  return m;
+}
+
 /**
  * An optional verbatim quote from a move's commentary (none on a human's move). Capped in words and
  * characters both: every quote is also sent to the voice engine, which charges by the character.
@@ -896,6 +927,7 @@ function moveAt(g: Game, rawPly: unknown, where: string): MoveRecord {
 function moveQuote(g: Game, m: MoveRecord, raw: unknown, where: string, hardMax: number, max: number, maxChars: number): string | undefined {
   const q = str(raw).trim();
   if (!q) return undefined;
+  playersMove(g, m, where);
   if (!m.commentary.trim()) throw new ActionError(`${where}: ${sideName(g, m.color)} is a human and shared no commentary on ply ${m.ply} — leave the quote out.`);
   if (!isExcerpt(q, m.commentary)) throw new ActionError(`${where}: the quote must match that move's commentary exactly (ply ${m.ply}, ${m.san}). It doesn't.`);
   if (words(q) > hardMax || q.length > maxChars) throw new ActionError(`${where}: the quote is too long (${words(q)} words); keep it to at most ${max}.`);
