@@ -98,7 +98,7 @@ const rowLook = (r: { provider: string; label: string }) => lookOf({ provider: r
 /* ------------------------------ the comparison table ------------------------------ */
 
 const CHESSCOM_HINT =
-  "The Chess.com rapid rating it would plausibly hold (80% range): how it moves in standard games while the position is still open, set against how people play at each rating, blended with its arena rating. A rough guide: for a person, the move reading is typically about 300 points off. Needs about 5 standard games.";
+  "The Chess.com rapid rating it would plausibly hold (80% range): how it moves in standard games while the position is still open, set against how people play at each rating, blended with its arena rating. A rough guide: for a person, the move reading is typically about 230 points off. Needs about 5 standard games.";
 
 type Col = { key: string; label: string; hint: string; get: (r: AgentRow) => number | null; show: (r: AgentRow) => ReactNode; lowerBetter?: boolean };
 
@@ -329,13 +329,14 @@ function OverviewTab({ a }: { a: ModelAnalytics }) {
       </Panel>
 
       <Panel
-        title="Middlegame rating"
-        hint="How its middlegame moves compare with how people of each rating play the middlegame, from moves alone (no results). Provisional: for a person it's typically about 260 points off."
+        title="Rating by phase"
+        hint="How its moves in each phase compare with how people of each rating play that phase, from moves alone (no results). For a person it's typically about 230 points off."
       >
         <Bars
           max={2500}
           rows={[
             { label: "Overall", est: a.row.chessCom },
+            { label: "Opening", est: q.phases.opening.chessCom },
             { label: "Middlegame", est: q.phases.middlegame.chessCom },
           ].map(({ label, est }) => ({
             label,
@@ -346,7 +347,7 @@ function OverviewTab({ a }: { a: ModelAnalytics }) {
           }))}
         />
         <p className="panel-foot">
-          Chess.com rapid. The opening and endgame aren't rated: tested on real players, opening moves haven't yet shown a reliable range, and endgame moves guessed a person's rating worse than picking the average.
+          Chess.com rapid. The opening counts only moves after the book runs out. The endgame isn't rated: tested on real players, endgame moves guessed a person's rating worse than picking the average.
         </p>
       </Panel>
 

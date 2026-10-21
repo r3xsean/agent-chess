@@ -4,18 +4,26 @@ import { HUMAN_RAPID, HUMAN_RAPID_BY_PHASE, type HumanBand } from "./humanCurve"
 /*
  * The Chess.com rapid rating a model would plausibly hold, from two readings of its games:
  *
- *  - how it moves: its centipawn loss, blunder rate and error rate over its standard games, each read off the
- *    human curve (humanCurve.ts: how people play at each Lichess rapid rating) and combined;
+ *  - how it moves: its centipawn loss, blunder rate and error rate over its standard games, each move weighted by
+ *    how open the position was, read off how people play at each Lichess rapid rating (humanCurve.ts);
  *  - how it scores: its arena rating, shifted onto the human scale by where the other models' arena ratings sit
  *    against their own move readings (the arena rating says who beats whom, not what that's worth outside).
  *
- * The two are blended by how sure each is, then carried from Lichess rapid to Chess.com rapid. The middlegame also
- * gets a reading of its own, from its moves alone against how people play it (phaseEstimate, PHASE_SCALES).
+ * The two are blended by how sure each is, then carried from Lichess rapid to Chess.com rapid. The opening and
+ * the middlegame also get a reading of their own, from their moves alone (phaseEstimate, PHASE_SCALES).
  *
- * Every constant here was settled by validating against held-out Lichess players (people the curve never saw,
- * each with ten or more games): the move reading is off by about 280 Lichess points for a typical person, and its
- * 80% range held their real rating 79% of the time. The blended range for a model is the same model's arithmetic,
- * not something that could be checked against a known answer.
+ * Every constant here was settled on a month of Lichess rapid (2.8 million analysed games), checked on 3,000
+ * held-out players with ten or more games each, people the tables never saw: the move reading is typically 230
+ * Lichess points off for a person, reads them 42 high on average, and its 80% range held 82% of them. The blended
+ * range for a model is the same model's arithmetic, not something that could be checked against a known answer.
+ *
+ * Tried and left out: reading the moves position by position (how likely a person of each rating is to make each
+ * size of mistake in each kind of position) read people better (212 off) but not the agents, whose mix of
+ * pinpoint moves and blunders no person has, so their many precise moves outvoted the blunders that decide games;
+ * counting only mistakes, against how many people of each rating would make in the same positions, kept the
+ * blunders' weight but read people worse (242), and blended with this reading added nothing (230); leaving out
+ * moves made in time trouble changed nothing (229); counting result-changing endgame moves against the tablebases
+ * told almost nothing, and the agents rarely get there anyway.
  */
 
 /** What one standard game says about how a side moves, each move weighted by how open the position was. */
@@ -42,26 +50,26 @@ export const MIN_GAMES = 5;
 /** What a move reading is measured against and how far to trust it. */
 export interface ReadingScale {
   curve: HumanBand[];
-  /** How far a player's moves can sit from their rating, beyond what their game count explains (Lichess points). */
+  /** How far a person's moves can sit from their rating, beyond what their game count explains (Lichess points). */
   tau: number;
   minWeight: number;
   minGames: number;
   /** Whether its readings held up on held-out players well enough to show. */
   shown: boolean;
 }
-const WHOLE_GAME: ReadingScale = { curve: HUMAN_RAPID, tau: 275, minWeight: MIN_WEIGHT, minGames: MIN_GAMES, shown: true };
+const WHOLE_GAME: ReadingScale = { curve: HUMAN_RAPID, tau: 250, minWeight: MIN_WEIGHT, minGames: MIN_GAMES, shown: true };
 
 /**
- * Each phase read against how people play that phase alone, fitted and checked on held-out Lichess players the
- * same way as the whole-game reading. Only the middlegame earned a place: typically 264 points off, its 80% range
- * held 73% of people (60–83%). The opening tracks rating (0.85 correlation) but its range only came good on a
- * setting picked after a first one failed, so it waits for fresh players to confirm it. Endgame moves told a
- * person's rating worse than guessing the middle of the field (414 points off against 305).
+ * Each phase read against how people play that phase alone, checked on the same held-out players. The opening
+ * and middlegame held up: 236 and 228 points off, their 80% ranges holding 82% and 84% of people. The opening
+ * needs only half the evidence (strong players stay in book so long that few of their opening moves count, and
+ * at 50 it still held 82%); the middlegame lost accuracy below 100. Endgame moves told a person's rating worse
+ * than guessing the middle of the field (298 points off against 273), so it isn't shown.
  */
 export const PHASE_SCALES: Record<GamePhase, ReadingScale> = {
-  opening: { curve: HUMAN_RAPID_BY_PHASE.opening, tau: 250, minWeight: 100, minGames: MIN_GAMES, shown: false },
-  middlegame: { curve: HUMAN_RAPID_BY_PHASE.middlegame, tau: 175, minWeight: 100, minGames: MIN_GAMES, shown: true },
-  endgame: { curve: HUMAN_RAPID_BY_PHASE.endgame, tau: 325, minWeight: 75, minGames: MIN_GAMES, shown: false },
+  opening: { curve: HUMAN_RAPID_BY_PHASE.opening, tau: 250, minWeight: 50, minGames: MIN_GAMES, shown: true },
+  middlegame: { curve: HUMAN_RAPID_BY_PHASE.middlegame, tau: 250, minWeight: 100, minGames: MIN_GAMES, shown: true },
+  endgame: { curve: HUMAN_RAPID_BY_PHASE.endgame, tau: 300, minWeight: 100, minGames: MIN_GAMES, shown: false },
 };
 
 /** The least the arena's gaps may be taken to differ from human gaps: seven models can't rule out more. */
@@ -88,12 +96,14 @@ export function ratingFor(key: Key, value: number, curve: HumanBand[] = HUMAN_RA
   const n = ys.length;
   const k = Math.min(3, n - 1);
   const along = (i: number, j: number) => (ys[j] === ys[i] ? Math.min(xs[i], xs[j]) : xs[i] + ((v - ys[i]) * (xs[j] - xs[i])) / (ys[j] - ys[i]));
+  const exact = ys.indexOf(v);
   let elo: number;
-  if (v <= ys[0]) elo = along(0, k);
-  else if (v >= ys[n - 1]) elo = along(n - 1 - k, n - 1);
+  if (exact !== -1) elo = xs[exact];
+  else if (v < ys[0]) elo = along(0, k);
+  else if (v > ys[n - 1]) elo = along(n - 1 - k, n - 1);
   else {
-    const i = ys.findIndex((y) => y >= v);
-    elo = ys[i] === v ? xs[ys.indexOf(v)] : along(i - 1, i);
+    const i = ys.findIndex((y) => y > v);
+    elo = along(i - 1, i);
   }
   return Math.max(100, Math.min(3200, elo));
 }

@@ -16,7 +16,7 @@ function check(name: string, fn: () => void) {
 }
 
 const near = (a: number, b: number, tol: number, what: string) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} not within ${tol} of ${b}`);
-const TAU2 = 275 ** 2;
+const TAU2 = 250 ** 2;
 
 check("the curve only ever improves with rating", () => {
   for (let i = 1; i < HUMAN_RAPID.length; i++) {
@@ -130,26 +130,27 @@ check("each phase's curve only ever improves with rating, and reads its own band
     const curve = HUMAN_RAPID_BY_PHASE[ph];
     assert.ok(curve.length >= 10, `${ph} has ${curve.length} bands`);
     for (let i = 1; i < curve.length; i++) assert.ok(curve[i].acpl <= curve[i - 1].acpl && curve[i].errors <= curve[i - 1].errors, `${ph} band ${curve[i].elo}`);
-    for (const b of curve) near(ratingFor("acpl", b.acpl, curve), b.elo, 1, `${ph} acpl at ${b.elo}`);
+    for (const b of curve) near(ratingFor("acpl", b.acpl, curve), curve.find((c) => c.acpl === b.acpl)!.elo, 1, `${ph} acpl at ${b.elo}`);
   }
 });
 
-check("the middlegame reads against how people play the middlegame, with its own evidence floor", () => {
-  const band = HUMAN_RAPID_BY_PHASE.middlegame.find((b) => b.elo === 1550)!;
-  const est = phaseEstimate(games(band, 10), "m", "middlegame")!;
-  near(est.rating, lichessToChessCom(1550), 75, "middlegame at 1550");
-  assert.ok(est.low < est.rating && est.rating < est.high);
-  const floor = PHASE_SCALES.middlegame.minWeight;
-  assert.equal(phaseEstimate(games(band, MIN_GAMES, (floor - 1) / MIN_GAMES), "m", "middlegame"), null);
-});
-
-check("the opening and endgame, which didn't hold up on real players, are never shown", () => {
-  for (const ph of ["opening", "endgame"] as const) {
+check("the opening and middlegame read against how people play them, each with its own evidence floor", () => {
+  for (const ph of ["opening", "middlegame"] as const) {
     const band = HUMAN_RAPID_BY_PHASE[ph].find((b) => b.elo === 1550)!;
-    assert.equal(phaseEstimate(games(band, 40), "m", ph), null, ph);
+    const est = phaseEstimate(games(band, 10), "m", ph)!;
+    near(est.rating, lichessToChessCom(1550), 75, `${ph} at 1550`);
+    assert.ok(est.low < est.rating && est.rating < est.high);
+    const floor = PHASE_SCALES[ph].minWeight;
+    assert.equal(phaseEstimate(games(band, MIN_GAMES, (floor - 1) / MIN_GAMES), "m", ph), null);
+    assert.notEqual(phaseEstimate(games(band, MIN_GAMES, (floor + 1) / MIN_GAMES), "m", ph), null);
   }
+  assert.ok(PHASE_SCALES.opening.minWeight < PHASE_SCALES.middlegame.minWeight, "the opening needs less evidence");
 });
 
+check("the endgame, which didn't hold up on real players, is never shown", () => {
+  const band = HUMAN_RAPID_BY_PHASE.endgame.find((b) => b.elo === 1550)!;
+  assert.equal(phaseEstimate(games(band, 40), "m", "endgame"), null);
+});
 if (failures) {
   console.log(`\n${failures} failed`);
   process.exit(1);

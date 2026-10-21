@@ -259,7 +259,8 @@ function illegalTurns(s: Side): { fen: string; ply: number; tries: string[]; pla
  * What a reviewed standard game says about how it moves, for the Chess.com estimate, measured exactly as
  * scripts/human-curve.mjs measures people: each move weighted by how open the position was (4·p·(1−p) on its
  * winning chances, so a move in a decided position barely counts), losses taken from the raw evals (no zero for
- * matching the engine's choice, which a Lichess PGN can't show). Chess960 has no book to leave out.
+ * matching the engine's choice, which a Lichess PGN can't show), in all and per phase. Chess960 has no book to
+ * leave out.
  */
 function moveSample(s: Side): { all: MoveSample; phases: Record<GamePhase, MoveSample> } | null {
   if (s.g.variant === "chess960" || s.accuracy === null) return null;

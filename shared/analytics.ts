@@ -49,7 +49,7 @@ export interface AgentRow {
   /**
    * The Chess.com rapid rating it would plausibly hold, with an 80% range: its standard games' moves set
    * against how people play at each rating, blended with its arena rating (server/chessCom.ts). Null until
-   * its standard games hold enough moves in open positions (about five games' worth).
+   * its standard games hold 100 graded moves from at least five games.
    */
   chessCom: { rating: number; low: number; high: number } | null;
   /** Points per game in scope (win 1, draw ½), as a percentage. */
@@ -90,8 +90,8 @@ export interface PhaseStats {
   think: TimeStats;
   /**
    * The Chess.com rapid rating its moves in this phase look like, against how people of each rating play the
-   * phase, with an 80% range: moves only, no arena rating. Only the middlegame's held up on real players
-   * (server/chessCom.ts PHASE_SCALES): null for the others, and until the middlegame holds enough moves.
+   * phase, with an 80% range: moves only, no arena rating. The endgame's didn't hold up on real players
+   * (server/chessCom.ts PHASE_SCALES), so it's always null; the others are null until they hold enough moves.
    */
   chessCom: { rating: number; low: number; high: number } | null;
 }
