@@ -72,6 +72,11 @@ export interface PositionAnalysis {
    * analysed too: what an engine line's moves are badged with (see server/lineDepth.ts).
    */
   bestVerdict?: Classification;
+  /**
+   * The line-analysis version (server/lineDepth.ts LINE_DEPTH_VERSION) this position's line work was done under:
+   * an older one is redone at the current depth (a game's own positions keep their review's search).
+   */
+  lineVersion?: number;
 }
 
 export interface CalcLine {

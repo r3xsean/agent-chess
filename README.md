@@ -25,7 +25,8 @@ All optional; each feature stays off without its setting.
 | `data/admin-token.txt` | Admin endpoints (created on first start) | `server/store.ts` |
 | `ELEVENLABS_API_KEY` | Voices in replay videos (`none` turns them off) | `server/voice.ts` |
 | `PORT`, `AGENT_CHESS_DATA` | Server port and data directory | `server/paths.ts` |
-| `ENGINE_DEPTH`, `ENGINE_MAX_MS`, `ENGINE_THREADS`, `STOCKFISH_PATH` | Stockfish | `server/engine.ts` |
+| `ENGINE_DEPTH` (the review's depth goal, default `22`), `ENGINE_MAX_MS` (unset: no time limit; set: a time cap instead, for the replay lines' engines too), `LINES_DEPTH` (the replay lines' and engine questions' depth goal, default `24`), `PROBE_ANSWER_MS` (how long an engine question runs before answering WAITING, default 270 s), `ENGINE_RUNAWAY_MS` (last-resort stop, default 30 minutes), `ENGINE_THREADS` (per engine), `ENGINE_COUNT` (game-review engines side by side, default `2`), `STOCKFISH_PATH` | Stockfish | `server/engine.ts` |
+| `GAMING_PROCESSES` (comma-separated, default `deadlock.exe`; empty turns it off), `GAMING_THREADS` (default `1`) | Slowing Stockfish down while one of those programs runs | `server/engine.ts` |
 | `T3_STATE_DB`, `T3_USAGE_WATCH` | Pausing games when a model hits its usage limit | `server/usageLimits.ts` |
 | `PUBLIC_MODE=1` | Running as the read-only public mirror (see `Dockerfile`) | `server/paths.ts` |
 

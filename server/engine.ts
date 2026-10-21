@@ -1,14 +1,49 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PositionAnalysis, Score } from "../shared/types";
 import { newRules, type Variant } from "../shared/rules";
 import { ROOT } from "./paths";
 
-// Agents think for minutes per move, so the engine can afford a deep search: depth 22,
-// capped at 12 s for the rare position that would take longer.
+// Agents think for minutes per move, so each position is searched to its depth goal (22, past the point
+// where deeper search stops paying off much), however long that takes. ENGINE_MAX_MS, when set, caps it instead.
 const ANALYSIS_DEPTH = Number(process.env.ENGINE_DEPTH ?? 22);
-const ANALYSIS_MAX_MS = Number(process.env.ENGINE_MAX_MS ?? 12_000);
+const ANALYSIS_MAX_MS = process.env.ENGINE_MAX_MS ? Number(process.env.ENGINE_MAX_MS) : undefined;
+/** Last resort for a runaway search: stopped (and logged) after this long, keeping the depth it reached. */
+const RUNAWAY_MS = Number(process.env.ENGINE_RUNAWAY_MS ?? 30 * 60_000);
+/** Stockfish answers `isready` even mid-search: one that hasn't for HANG_MS is hung, however long the search. */
+const PING_MS = 15_000;
+const HANG_MS = 120_000;
+
+// While one of these programs runs (a game on this PC), every engine searches with GAMING_THREADS
+// threads at idle priority, so it takes neither CPU time nor the CPU's shared power budget from the
+// game: the same depth, later. Engines whose work nobody is waiting on (pauseWhileGaming) wait instead.
+const GAMING_PROCESSES = (process.env.GAMING_PROCESSES ?? "deadlock.exe")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const GAMING_THREADS = Math.max(1, Number(process.env.GAMING_THREADS ?? 1));
+let gaming = false;
+let gamingWatch: NodeJS.Timeout | null = null;
+const gamingListeners = new Set<() => void>();
+
+function watchGaming() {
+  if (gamingWatch || process.platform !== "win32" || !GAMING_PROCESSES.length) return;
+  const check = () =>
+    execFile("tasklist", ["/FO", "CSV", "/NH"], { windowsHide: true, maxBuffer: 8 << 20 }, (err, out) => {
+      if (err) return;
+      const running = new Set(out.split(/\r?\n/).map((l) => l.split('","')[0].replace(/^"/, "").toLowerCase()));
+      const now = GAMING_PROCESSES.some((p) => running.has(p));
+      if (now === gaming) return;
+      gaming = now;
+      console.log(now ? `[engine] a game is running: engines drop to ${GAMING_THREADS} thread(s) at idle priority` : "[engine] no game running: engines back to full speed");
+      for (const f of gamingListeners) f();
+    });
+  check();
+  gamingWatch = setInterval(check, 10_000);
+  gamingWatch.unref();
+}
 
 function findStockfish(): string {
   if (process.env.STOCKFISH_PATH) return process.env.STOCKFISH_PATH;
@@ -29,23 +64,30 @@ interface Job {
   reject: (e: Error) => void;
   attempts?: number;
   cancelled?: boolean;
+  urgent?: boolean;
 }
 
 export interface EngineOptions {
   label: string;
+  /** The goal: a search is done when it reaches this depth. */
   depth: number;
-  maxMs: number;
+  /** Cut each search short after this long instead (quick answers: the website's analysis board, a shallow guess). */
+  maxMs?: number;
   threads: number;
   hashMb: number;
+  /** While a game runs, start only urgent searches; the rest (nobody waiting on them) wait for it to end. */
+  pauseWhileGaming?: boolean;
 }
 
 const GAME_ENGINE: EngineOptions = {
   label: "engine",
   depth: ANALYSIS_DEPTH,
-  maxMs: ANALYSIS_MAX_MS,
-  threads: Math.max(1, Math.min(12, Number(process.env.ENGINE_THREADS ?? 8))),
+  ...(ANALYSIS_MAX_MS !== undefined && { maxMs: ANALYSIS_MAX_MS }),
+  threads: Math.max(1, Math.min(os.availableParallelism(), Number(process.env.ENGINE_THREADS ?? 8))),
   hashMb: 512,
 };
+/** Game-review engines searching side by side: positions are independent, and two 8-thread searches get through more of them than one 16-thread search. */
+const GAME_ENGINES = Math.max(1, Math.min(8, Number(process.env.ENGINE_COUNT ?? 2)));
 
 export class SupersededError extends Error {}
 
@@ -60,10 +102,43 @@ export class Engine {
   private restarts = 0;
   /** Whether Stockfish is in Chess960 mode (castling as king-takes-rook in and out). */
   private chess960 = false;
+  /** Threads and idle priority the running process has now (see `gaming`). */
+  private threadsNow = 0;
+  private idleNow = false;
 
-  constructor(private opts: EngineOptions = GAME_ENGINE) {}
+  /** `runnable`: whether it may start a search now (a pool parks its spare engines while a game runs). */
+  constructor(
+    private opts: EngineOptions = GAME_ENGINE,
+    private runnable: () => boolean = () => true,
+  ) {}
+
+  /** Searches queued or running. */
+  get load() {
+    return this.queue.length + (this.busy ? 1 : 0);
+  }
+
+  /** Hand over the queued (not yet running) searches. */
+  drain(): Job[] {
+    return this.queue.splice(0);
+  }
+
+  adopt(jobs: Job[]) {
+    for (const job of jobs) {
+      if (job.urgent) this.queue.splice(this.queue.filter((j) => j.urgent).length, 0, job);
+      else this.queue.push(job);
+    }
+    this.pump();
+  }
+
+  kick() {
+    this.pump();
+  }
+
+  /** When Stockfish last answered `isready`. */
+  private lastReady = 0;
 
   start() {
+    watchGaming();
     const exe = findStockfish();
     this.proc = spawn(exe, [], { stdio: "pipe", windowsHide: true });
     this.proc.on("error", (e) => {
@@ -79,7 +154,8 @@ export class Engine {
       while ((i = this.buffer.indexOf("\n")) >= 0) {
         const line = this.buffer.slice(0, i).trim();
         this.buffer = this.buffer.slice(i + 1);
-        this.lineHandler?.(line);
+        if (line === "readyok") this.lastReady = Date.now();
+        else this.lineHandler?.(line);
       }
     });
     this.proc.on("exit", (code) => {
@@ -91,9 +167,11 @@ export class Engine {
     this.send(`setoption name Threads value ${threads}`);
     this.send(`setoption name Hash value ${hashMb}`);
     this.send("setoption name MultiPV value 2");
+    this.threadsNow = threads;
+    this.idleNow = false;
     this.chess960 = false;
     this.send("isready");
-    console.log(`[${label}] ${exe} (threads=${threads}, depth=${depth}, max ${maxMs} ms)`);
+    console.log(`[${label}] ${exe} (threads=${threads}, depth=${depth}${maxMs !== undefined ? `, max ${maxMs} ms` : ", no time limit"})`);
   }
 
   /** Drop every queued request and cut the running search short — only the newest request matters. */
@@ -140,29 +218,53 @@ export class Engine {
     this.proc?.stdin.write(cmd + "\n");
   }
 
-  /** `multipv`: search that many lines and return them all (`multi`), best first. */
-  analyze(fen: string, variant: Variant = "standard", multipv?: number): Promise<PositionAnalysis & { multi?: { score: Score; pv: string[] }[] }> {
+  /** `multipv`: search that many lines and return them all (`multi`), best first. `urgent`: someone is waiting on it, so it goes ahead of queued background searches. */
+  analyze(fen: string, variant: Variant = "standard", multipv?: number, urgent = false): Promise<PositionAnalysis & { multi?: { score: Score; pv: string[] }[] }> {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fen, variant, resolve, reject, ...(multipv && { multipv }) });
-      this.pump();
+      this.adopt([{ fen, variant, resolve, reject, ...(multipv && { multipv }), ...(urgent && { urgent }) }]);
     });
   }
 
   private pump() {
-    if (this.busy || !this.proc) return;
+    if (this.busy || !this.proc || !this.runnable()) return;
+    // Urgent searches are at the front: while a game runs, a pausing engine starts only those.
+    if (gaming && this.opts.pauseWhileGaming && !this.queue[0]?.urgent) return;
     const job = this.queue.shift();
     if (!job) return;
     this.busy = true;
     this.current = job;
+    const { label } = this.opts;
     const sideToMove = job.fen.split(" ")[1] === "b" ? "b" : "w";
     const lines: Record<number, { depth: number; score: Score; pv: string[] }> = {};
-    const timer = setTimeout(() => this.send("stop"), this.opts.maxMs);
-    // Watchdog: if 'stop' doesn't produce a bestmove, the process is hung.
-    const watchdog = setTimeout(() => {
-      console.error(`[${this.opts.label}] analysis hung; restarting stockfish`);
-      this.handleExit();
-    }, this.opts.maxMs + 10_000);
-    this.timers = [timer, watchdog];
+    const threads = gaming ? Math.min(this.opts.threads, GAMING_THREADS) : this.opts.threads;
+    if (threads !== this.threadsNow) {
+      this.send(`setoption name Threads value ${threads}`);
+      this.threadsNow = threads;
+    }
+    if (gaming !== this.idleNow && this.proc.pid) {
+      try {
+        os.setPriority(this.proc.pid, gaming ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_NORMAL);
+      } catch {}
+      this.idleNow = gaming;
+    }
+    const timers: NodeJS.Timeout[] = [];
+    if (this.opts.maxMs !== undefined) timers.push(setTimeout(() => this.send("stop"), this.opts.maxMs));
+    timers.push(
+      setTimeout(() => {
+        console.error(`[${label}] runaway search stopped after ${Math.round(RUNAWAY_MS / 60_000)} min at depth ${lines[1]?.depth ?? 0} (goal ${this.opts.depth}): ${job.fen}`);
+        this.send("stop");
+      }, RUNAWAY_MS),
+    );
+    // Liveness, not a time limit: a search may take as long as it needs, but Stockfish has to keep answering.
+    this.lastReady = Date.now();
+    timers.push(
+      setInterval(() => {
+        if (Date.now() - this.lastReady <= HANG_MS) return this.send("isready");
+        console.error(`[${label}] stockfish stopped responding; restarting it`);
+        this.handleExit();
+      }, PING_MS),
+    );
+    this.timers = timers;
     this.lineHandler = (line) => {
       if (line.startsWith("info") && line.includes(" pv ")) {
         const m = /multipv (\d+)/.exec(line);
@@ -178,8 +280,7 @@ export class Engine {
           : { cp: Number(cp?.[1] ?? 0) * sign };
         lines[idx] = { depth: Number(d?.[1] ?? 0), score, pv };
       } else if (line.startsWith("bestmove")) {
-        clearTimeout(timer);
-        clearTimeout(watchdog);
+        for (const t of timers) clearTimeout(t);
         this.timers = [];
         this.restarts = 0;
         this.lineHandler = null;
@@ -219,6 +320,59 @@ export class Engine {
   stop() {
     this.proc?.removeAllListeners("exit");
     this.proc?.kill();
+  }
+}
+
+/**
+ * Game-review engines working side by side, each search going to the least busy one (a game sticks
+ * to the engine that has its recent positions in hash, when that one is no busier). While a game runs
+ * on this PC only the first engine searches, slowed as above; the others' waiting searches move to it.
+ */
+export class EnginePool {
+  private engines: Engine[];
+  private home = new Map<string, number>();
+  private onGaming = () => this.rebalance();
+
+  constructor(count = GAME_ENGINES, opts: EngineOptions = GAME_ENGINE) {
+    this.engines = Array.from(
+      { length: count },
+      (_, i) => new Engine(i ? { ...opts, label: `${opts.label}-${i + 1}` } : opts, i ? () => !gaming : () => true),
+    );
+  }
+
+  start() {
+    for (const e of this.engines) e.start();
+    gamingListeners.add(this.onGaming);
+  }
+
+  stop() {
+    gamingListeners.delete(this.onGaming);
+    for (const e of this.engines) e.stop();
+  }
+
+  /** `key`: what the position belongs to (a game id), so its searches can share an engine's hash; `urgent`: see Engine.analyze. */
+  analyze(fen: string, variant: Variant = "standard", multipv?: number, { key, urgent = false }: { key?: string; urgent?: boolean } = {}) {
+    const i = this.pick(key);
+    if (key !== undefined) this.home.set(key, i);
+    return this.engines[i].analyze(fen, variant, multipv, urgent);
+  }
+
+  private pick(key?: string) {
+    if (gaming) return 0;
+    const least = Math.min(...this.engines.map((e) => e.load));
+    const home = key === undefined ? undefined : this.home.get(key);
+    if (home !== undefined && this.engines[home]?.load === least) return home;
+    return this.engines.findIndex((e) => e.load === least);
+  }
+
+  private rebalance() {
+    const [first, ...rest] = this.engines;
+    if (gaming) {
+      for (const e of rest) first.adopt(e.drain());
+      return;
+    }
+    for (const job of first.drain()) this.engines[this.pick()].adopt([job]);
+    for (const e of this.engines) e.kick();
   }
 }
 

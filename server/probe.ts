@@ -42,11 +42,17 @@ function position(g: Game, raw: string | undefined): Where {
   return { ...from, fen: pre.at(-1)!.after, label: `${from.label}, then ${pre.map((mv) => mv.san).join(" ")}`, pre };
 }
 
+/** How far an engine question has got: positions searched so far (its WAITING reply reports it). */
+interface Progress {
+  positions: number;
+}
+
 /** Analyses and badges the moves a position's slashes played, so they show like any probed move (and can be a branch). */
-async function playedThrough(g: Game, from: Where): Promise<void> {
+async function playedThrough(g: Game, from: Where, p: Progress): Promise<void> {
   for (const mv of from.pre) {
-    await analysed(g, mv.before);
-    await analysed(g, mv.after);
+    await analysed(g, mv.before, true);
+    await analysed(g, mv.after, true);
+    p.positions += 2;
     judge(g, mv);
   }
 }
@@ -102,7 +108,7 @@ function comesTo(g: Game, moves: RulesMove[]): string {
 }
 
 /** probe <where> <move> [move…]: the moves played from there, then the engine's best play, followed position by position. */
-async function probe(g: Game, args: string[]): Promise<string> {
+async function probe(g: Game, args: string[], p: Progress): Promise<string> {
   const from = position(g, args[0]);
   const asked = args.slice(1);
   if (!asked.length) throw new ActionError(`probe ${args[0]} <move> [move…]: give the moves to play there (SAN or UCI).`);
@@ -113,14 +119,17 @@ async function probe(g: Game, args: string[]): Promise<string> {
     const legal = newRules(fen, variant).moves().map((mv) => mv.san);
     throw new ActionError(`${asked[played.length]} isn't legal ${played.length ? `after ${played.map((mv) => mv.san).join(" ")}` : "there"}. Legal: ${legal.join(" ")}.`);
   }
-  await playedThrough(g, from);
-  await analysed(g, from.fen);
+  await playedThrough(g, from, p);
+  await analysed(g, from.fen, true);
+  p.positions++;
   for (const mv of played) {
-    await analysed(g, mv.after);
+    await analysed(g, mv.after, true);
+    p.positions++;
     judge(g, mv);
   }
   const end = played.at(-1)!.after;
-  await follow(g, end, LINE_WALK);
+  let counted = true; // `end` itself was counted above
+  await follow(g, end, LINE_WALK, true, () => (counted ? (counted = false) : p.positions++));
   const cont = enginePath(g, end, SHOW);
   saveGame(g);
   const all = [...played, ...cont];
@@ -144,14 +153,14 @@ async function probe(g: Game, args: string[]): Promise<string> {
 }
 
 /** options <where> [n]: the side to move's best n moves, each with the engine's line after it and what it comes to. */
-async function options(g: Game, args: string[]): Promise<string> {
+async function options(g: Game, args: string[], p: Progress): Promise<string> {
   const from = position(g, args[0]);
   const variant = variantOf(g);
   const legal = newRules(from.fen, variant).moves();
-  await playedThrough(g, from);
+  await playedThrough(g, from, p);
   if (!legal.length) return `From ${from.label}: no legal moves (the game is over there).`;
   const n = Math.min(legal.length, MAX_OPTIONS, Math.max(1, Number(args[1]) || 5));
-  const a = await engineFor().analyze(from.fen, variant, n);
+  const a = await engineFor().analyze(from.fen, variant, n, { key: g.id, urgent: true });
   if (a.failed || !a.multi?.length) throw new ActionError("The engine couldn't analyse that position; try again.");
   const side = turnOf(from.fen);
   const best = winPercentFor(a.multi[0].score, side);
@@ -172,18 +181,18 @@ async function options(g: Game, args: string[]): Promise<string> {
 }
 
 /** threat <where>: what the side that just moved would play if it got another move now (the other side passes). */
-async function threat(g: Game, args: string[]): Promise<string> {
+async function threat(g: Game, args: string[], p: Progress): Promise<string> {
   const from = position(g, args[0]);
   const variant = variantOf(g);
   const side = turnOf(from.fen);
-  await playedThrough(g, from);
+  await playedThrough(g, from, p);
   if (newRules(from.fen, variant).inCheck()) return `From ${from.label}: ${sideName(g, side)} is in check, so there's no passing: the check is the threat.`;
   const parts = from.fen.split(" ");
   const other: Color = side === "w" ? "b" : "w";
   const passed = [parts[0], other, parts[2], "-", parts[4], parts[5]].join(" ");
   let a;
   try {
-    a = await engineFor().analyze(passed, variant);
+    a = await engineFor().analyze(passed, variant, undefined, { key: g.id, urgent: true });
   } catch {
     throw new ActionError("The engine couldn't analyse that.");
   }
@@ -198,10 +207,10 @@ async function threat(g: Game, args: string[]): Promise<string> {
 }
 
 /** board <where>: the position, with whose move it is and the eval. */
-async function board(g: Game, args: string[]): Promise<string> {
+async function board(g: Game, args: string[], p: Progress): Promise<string> {
   const from = position(g, args[0]);
-  await playedThrough(g, from);
-  const a = await analysed(g, from.fen);
+  await playedThrough(g, from, p);
+  const a = await analysed(g, from.fen, true);
   saveGame(g);
   return [`${from.label}: ${sideName(g, turnOf(from.fen))} to move, eval ${formatScore(a.score)}${a.bestSan ? `, the engine's move ${a.bestSan}` : ""}.`, asciiBoard(from.fen, "w"), `FEN: ${from.fen}`].join("\n");
 }
@@ -229,12 +238,36 @@ export function investigated(gameId: string, who: Asker): { lines: Set<string>; 
   return { lines, plies, count: list.length };
 }
 
+/**
+ * The engine searches every position to full depth however long that takes, but an agent's command has to answer
+ * inside the CLI's window (330 s): one that isn't done by then answers WAITING while the work carries on, and the
+ * same question asked again joins it (finished positions are kept in the game) instead of starting over.
+ */
+const ANSWER_WITHIN_MS = Number(process.env.PROBE_ANSWER_MS ?? 270_000);
+const working = new Map<string, { done: Promise<string>; p: Progress }>();
+
 /** The director's engine questions (see the top of this file), or null for any other command. `who` asks (for its readbacks). */
 export async function probeCommand(g: Game, cmd: string, args: unknown, who: Asker = "director"): Promise<string | null> {
   const list = Array.isArray(args) ? args.map((x) => String(x)) : [];
   const run = cmd === "probe" ? probe : cmd === "options" ? options : cmd === "threat" ? threat : cmd === "board" ? board : null;
   if (!run) return null;
-  const out = await run(g, list);
+  const key = `${g.id}|${cmd}|${list.join(" ")}`;
+  let job = working.get(key);
+  if (!job) {
+    const p: Progress = { positions: 0 };
+    const done = run(g, list, p).finally(() => working.delete(key));
+    done.catch(() => {}); // a failure after a WAITING reply surfaces when the question is asked again
+    job = { done, p };
+    working.set(key, job);
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const out = await Promise.race([job.done, new Promise<null>((r) => (timer = setTimeout(() => r(null), ANSWER_WITHIN_MS)))]).finally(() => clearTimeout(timer));
+  if (out === null) {
+    const n = job.p.positions;
+    return cmd === "probe"
+      ? `WAITING — the engine is still following that line at full depth (${n} position${n === 1 ? "" : "s"} done so far, all kept). Run the same \`probe\` again to pick up where it is.`
+      : `WAITING — the engine is still searching that position at full depth. Run the same \`${cmd}\` again to pick up where it is.`;
+  }
   asked.set(g.id, [...(asked.get(g.id) ?? []), { who, cmd, where: String(list[0] ?? "").trim(), at: Date.now() }]);
   return out;
 }

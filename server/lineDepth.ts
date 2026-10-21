@@ -3,7 +3,8 @@ import { BRANCH_REACH, BRANCH_WALK, LINE_KINDS, LINE_WALK, branchCandidates, lin
 import { winPercentFor } from "../shared/evalmath";
 import { newRules, variantOf } from "../shared/rules";
 import { walk } from "../shared/why";
-import { Engine } from "./engine";
+import os from "node:os";
+import { Engine, EnginePool } from "./engine";
 import { classifyMove, terminalScore } from "./classify";
 import { saveGameNow } from "./store";
 import { touch } from "./game";
@@ -17,7 +18,7 @@ import { touch } from "./game";
  */
 
 /** Bump when what's analysed changes: games deepened by an older version are done again. */
-export const LINE_DEPTH_VERSION = 4;
+export const LINE_DEPTH_VERSION = 5;
 
 /** The verdicts that make a line worth showing (see shared/engineLine.ts). */
 const WRONG: Classification[] = ["inaccuracy", "mistake", "miss", "blunder"];
@@ -26,10 +27,19 @@ const STRONG: Classification[] = ["brilliant", "great"];
 const MIN_WALK = 8;
 const QUIET = 6;
 
-let lineEngine: Engine | null = null;
+/*
+ * A video has no clock, so its lines (and the director's probes, options and threats, which use the same
+ * engines) are searched deeper than live review: every position to depth 24, however long it takes. While a
+ * game runs on this PC, only searches an agent is waiting on go ahead (slowed, same depth); the rest wait.
+ * An agent's command that outlasts its window answers WAITING and picks up where it was (see probe.ts).
+ */
+let lineEngine: EnginePool | null = null;
 export const engineFor = () => {
   if (!lineEngine) {
-    lineEngine = new Engine({ label: "lines", depth: 20, maxMs: 4000, threads: 4, hashMb: 256 });
+    const threads = Math.max(1, Math.floor(os.availableParallelism() / 2));
+    const depth = Number(process.env.LINES_DEPTH ?? 24);
+    const maxMs = process.env.ENGINE_MAX_MS ? Number(process.env.ENGINE_MAX_MS) : undefined; // test servers cap every engine
+    lineEngine = new EnginePool(2, { label: "lines", depth, ...(maxMs !== undefined && { maxMs }), threads, hashMb: 1024, pauseWhileGaming: true });
     lineEngine.start();
   }
   return lineEngine;
@@ -148,7 +158,7 @@ export async function evidence(g: Game, sl: ShownLine): Promise<number> {
     }
     const legal = newRules(mv.before, variant).moves().length;
     if (mv.color !== sl.for && !a.options && legal > 1) {
-      const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal));
+      const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal), { key: g.id });
       if (r.failed || !r.multi) failed++;
       else a.options = r.multi.filter((l) => l.pv.length).map((l) => ({ uci: l.pv[0], score: l.score, pv: l.pv.slice(0, OPTION_PLIES) }));
     }
@@ -158,7 +168,7 @@ export async function evidence(g: Game, sl: ShownLine): Promise<number> {
         const fen = passed(mv.after, variant);
         if (!fen) after.threat = null;
         else {
-          const r = await engineFor().analyze(fen, variant);
+          const r = await engineFor().analyze(fen, variant, undefined, { key: g.id });
           if (r.failed) failed++;
           else after.threat = { score: r.score, pv: r.pv.slice(0, OPTION_PLIES) };
         }
@@ -198,7 +208,7 @@ export async function branches(g: Game, sl: ShownLine): Promise<number> {
     if (mv.color === sl.for && verdicts[k] !== "great" && verdicts[k] !== "brilliant") continue;
     const a = g.analysis[mv.before];
     if (!a || a.failed || a.secondUci || a.second === undefined || newRules(mv.before, variant).moves().length < 2) continue;
-    const fresh = await engineFor().analyze(mv.before, variant);
+    const fresh = await engineFor().analyze(mv.before, variant, undefined, { key: g.id });
     if (fresh.failed) failed++;
     else if (fresh.secondUci && (fresh.bestUci ?? fresh.pv[0]) === (a.bestUci ?? a.pv[0])) a.secondUci = fresh.secondUci;
   }
@@ -223,29 +233,63 @@ export async function branches(g: Game, sl: ShownLine): Promise<number> {
   return failed;
 }
 
-/** A position's analysis, from the game when it has one, else from the line engine (kept in the game unless it failed). */
-export async function analysed(g: Game, fen: string): Promise<PositionAnalysis> {
+const inGame = (g: Game, fen: string) => g.moves.some((m) => m.fenBefore === fen || m.fenAfter === fen);
+const searching = new Map<string, Promise<PositionAnalysis>>();
+
+/**
+ * A position's analysis: from the game when it has one done under the current LINE_DEPTH_VERSION, else from the
+ * line engine (kept in the game unless it failed). The game's own positions keep their review's search; only
+ * what the lines added to them (options, threat, badges) is redone. Callers asking for a position already being
+ * searched share that search. `urgent`: an agent is waiting on it.
+ */
+export async function analysed(g: Game, fen: string, urgent = false): Promise<PositionAnalysis> {
   const have = g.analysis[fen];
-  if (have && !have.failed) return have;
+  if (have && !have.failed) {
+    if (have.depth === 0 || (have.lineVersion ?? 0) >= LINE_DEPTH_VERSION) return have;
+    if (inGame(g, fen)) {
+      delete have.options;
+      delete have.threat;
+      delete have.verdicts;
+      delete have.bestVerdict;
+      have.lineVersion = LINE_DEPTH_VERSION;
+      return have;
+    }
+  }
   const term = terminalScore(fen);
-  const a = term ? { depth: 0, score: term, pv: [] } : await engineFor().analyze(fen, variantOf(g));
-  if (!a.failed) g.analysis[fen] = a;
-  return a;
+  if (term) return (g.analysis[fen] = { depth: 0, score: term, pv: [] });
+  const key = `${g.id}|${fen}`;
+  let search = searching.get(key);
+  if (!search) {
+    search = engineFor()
+      .analyze(fen, variantOf(g), undefined, { key: g.id, urgent })
+      .then((a) => {
+        if (!a.failed) g.analysis[fen] = { ...a, lineVersion: LINE_DEPTH_VERSION };
+        return g.analysis[fen] ?? a;
+      })
+      .finally(() => searching.delete(key));
+    searching.set(key, search);
+  }
+  return search;
 }
 
-/** Follow the engine's best play from a position, analysing each position it reaches, and badge each move. How many searches failed (0: all done). */
-export async function follow(g: Game, start: string, max = LINE_WALK): Promise<number> {
+/**
+ * Follow the engine's best play from a position, analysing each position it reaches, and badge each move. How many
+ * searches failed (0: all done). `urgent`: an agent is waiting on it; `onStep`: called as each position is done.
+ */
+export async function follow(g: Game, start: string, max = LINE_WALK, urgent = false, onStep?: () => void): Promise<number> {
   const variant = variantOf(g);
   let pos = start;
   let quiet = 0;
   for (let ply = 0; ply < max; ply++) {
-    const a = await analysed(g, pos);
+    const a = await analysed(g, pos, urgent);
+    if (ply === 0) onStep?.(); // later starting positions are the previous step's `next`
     if (a.failed) return 1;
     const uci = a.bestUci ?? a.pv[0];
     if (!uci) return 0;
     const [mv] = walk(pos, [uci], variant);
     if (!mv) return 0;
-    const next = await analysed(g, mv.after);
+    const next = await analysed(g, mv.after, urgent);
+    onStep?.();
     if (next.failed) return 1;
     if (!a.bestVerdict) a.bestVerdict = verdictOf(g, a, mv.before, mv.after, mv.uci, mv.color, next);
     if (mv.san.endsWith("#") || !next.pv.length) return 0;

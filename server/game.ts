@@ -3,7 +3,7 @@ import { currentThinkMs } from "../shared/thinkingClock";
 import { playerActed } from "./pauses";
 import { EventEmitter } from "node:events";
 import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
-import { Engine } from "./engine";
+import { EnginePool } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
 import { glickoUpdate } from "./glicko";
@@ -31,7 +31,7 @@ const MAX_INTERVIEW = 800;
 
 export const bus = new EventEmitter();
 bus.setMaxListeners(1000);
-export const engine = new Engine();
+export const engine = new EnginePool();
 
 const boards = new Map<string, Rules>();
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
@@ -231,7 +231,7 @@ export function analyzeGame(g: Game) {
     }
     inFlight.add(`${g.id}|${fen}`);
     engine
-      .analyze(fen, variantOf(g))
+      .analyze(fen, variantOf(g), undefined, { key: g.id })
       .then((a) => {
         if (g.analysis[fen]?.depth === 0) return; // pinned as terminal/drawn while we were searching
         g.analysis[fen] = a;
