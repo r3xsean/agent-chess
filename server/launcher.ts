@@ -6,7 +6,7 @@ import { directorLaunch, directorWho, launchSpec } from "./prompts";
 import { needsDirection } from "./director";
 import { directorTurnedUp } from "./directorThread";
 import { tournamentNext } from "./orchestrator";
-import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, triggerOrchestrator } from "./summon";
+import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, triggerOrchestrator, WebhookRefused } from "./summon";
 import { bootAt } from "./heartbeat";
 import { agentAlive, agentOutcome, agentPrompt, anyAgentCli, canRunAgent, limitWhileRunning, resumePrompt, startAgent, stopAgent, type AgentOutcome, type AgentProc } from "./agents";
 import { applyUsageLimit, lastActionAt, usageLimitPauses } from "./usageLimits";
@@ -120,6 +120,37 @@ export async function launchDirector(g: Game): Promise<string | undefined> {
   if (g.launched) delete g.launched.d;
   saveGameNow(g);
   await triggerOrchestrator({ action: "direct-video", gameId: g.id });
+}
+
+/** How long new titles and thumbnails asked for are waited on before they can be asked for again. */
+const PACKAGING_STALE_MS = 30 * 60_000;
+
+/**
+ * Start a director for new titles, captions and thumbnails on a game whose plan is saved (the director's seat
+ * does only that once there's a plan, see seatTask): in its own T3 thread when a webhook covers the director's
+ * model and effort, else in the background through its CLI. Undefined once started, else why not.
+ */
+export async function launchPackaging(g: Game): Promise<string | undefined> {
+  if (!g.video) return "The game has no video plan yet: its director makes the titles, captions and thumbnails with it.";
+  const since = g.packagingSummonedAt ? Date.now() - g.packagingSummonedAt : Infinity;
+  if (since < PACKAGING_STALE_MS) return `New titles and thumbnails were asked for ${Math.round(since / 60_000)} min ago and aren't in yet.`;
+  const who = directorWho(g);
+  const url = agentWebhook(who.model, who.effort);
+  if (!url && !canRunAgent(who.provider)) return `Nothing can start ${who.model}@${who.effort}: there's no T3 webhook for it (data/webhook.json) and its CLI isn't available.`;
+  const key = directorKey(g.id);
+  g.packagingSummonedAt = Date.now();
+  saveGameNow(g);
+  try {
+    if (url) await triggerAgent(url, key);
+    else await startAgent({ ...who, prompt: agentPrompt(key), logName: `${g.id}-packaging-${g.video.packagingRedos ?? 0}` });
+  } catch (e) {
+    // A webhook request that timed out or dropped may have started it all the same: only a refusal frees it.
+    if (!url || e instanceof WebhookRefused) {
+      delete g.packagingSummonedAt;
+      saveGameNow(g);
+    }
+    throw e;
+  }
 }
 
 /** How long after it was started a director that never turned up is started again, at most. */

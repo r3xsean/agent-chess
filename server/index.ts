@@ -38,8 +38,8 @@ import {
 } from "./game";
 import { humanSide, isHuman } from "../shared/naming";
 import { postgameBrief, pregameBrief, turnBrief } from "./briefing";
-import { directorLaunch, launchSpec, packagingLaunch, seatTask } from "./prompts";
-import { launchDirector, launchGame, startTournament, watch } from "./launcher";
+import { directorLaunch, launchSpec, seatTask } from "./prompts";
+import { launchDirector, launchGame, launchPackaging, startTournament, watch } from "./launcher";
 import { applyNarration, directorBrief, investigationNotes, narratedReadback, narrateBrief, needsDirection, packagingBrief, packagingChoices, packagingReadback, planReadback, validatePlan } from "./director";
 import { deepenLines, linesPrepared, linesProgress, linesReady } from "./lineDepth";
 import { dropThumbOptions, jobsFor,MUSIC_DIR, musicTracks, packagingFor, resumeRenders, startRender, VIDEO_DIR, videosFor, type RenderFormat } from "./render";
@@ -122,7 +122,7 @@ if (PUBLIC_MODE) {
 // Viewers may only predict (and, with the mirror's secret, the local server may sync). Everything that
 // creates games, launches agents, renders or reveals local paths stays on the local server.
 const PUBLIC_POSTS = [/^\/api\/games\/[^/]+\/predict$/, /^\/api\/viewers(\/[^/]+)?$/, /^\/api\/mirror\/sync$/, /^\/api\/explore$/];
-const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/packaging-launch$/,/\/publish-launch$/, /\/render$/, /\/voice$/, /\/director-thread$/, /^\/api\/music/];
+const PUBLIC_GET_BLOCKED = [/\/launch$/, /\/director-launch$/, /\/publish-launch$/, /\/render$/, /\/voice$/, /\/director-thread$/, /^\/api\/music/];
 // The local site's prediction panel talks to the public mirror directly, so its crowd endpoints allow any origin.
 const CROWD = /^\/api\/(games\/[^/]+\/(crowd|crowd\/stream|predict)|viewers(\/[^/]+)?|predictors)$/;
 app.use((req, res, next) => {
@@ -1231,6 +1231,7 @@ const renderState = (id: string) => {
     ...packagingFor(id),
     packaging: g.video?.packaging ?? null,
     packagingOptions: g.video?.packagingOptions ?? null,
+    packagingRequestedAt: g.packagingSummonedAt ?? null,
     music: musicTracks(),
     directed: !!g.video,
     approved: videoApproved(g),
@@ -1312,14 +1313,15 @@ app.post(
     return renderState(g.id);
   }),
 );
-// A director task for new titles, captions and thumbnails on a game whose plan is saved (nothing else in the plan changes).
-app.get(
-  "/api/games/:id/packaging-launch",
-  handle((req) => {
-    requireAdmin(req);
-    const g = getGame(String(req.params.id));
-    if (!g.video) throw new ActionError("The game has no video plan yet: its director makes the packaging with it.");
-    return packagingLaunch(g);
+// "Ask for new options" on the video page: a director for new titles, captions and thumbnails on a game whose plan is saved (see launchPackaging).
+app.post(
+  "/api/games/:id/repackage",
+  localOnly,
+  handle(async (req) => {
+    const note = await launchPackaging(getGame(String(req.params.id))).catch((e) => {
+      throw new ActionError(`Couldn't start the director: ${(e as Error).message}`);
+    });
+    return note ? { started: false, note } : { started: true };
   }),
 );
 // "Publish" on the video page: summons a publisher (through the T3 webhook) to post the videos from the user's browser.

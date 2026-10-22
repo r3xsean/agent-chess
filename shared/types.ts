@@ -214,6 +214,8 @@ export interface Game {
   directorSummonedAt?: number;
   /** How many times that director was summoned again because it never turned up. */
   directorResummons?: number;
+  /** When a director for new titles, captions and thumbnails was started, until they're saved. */
+  packagingSummonedAt?: number;
   /** Each seat's last accepted turn (its JSON, hashed), so a retried `move` isn't played again in the next position. */
   lastTurn?: Partial<Record<Color, { hash: string; san: string }>>;
   /** A replayed illegal submission is not evidence that the agent recovered. */

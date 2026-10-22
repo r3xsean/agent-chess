@@ -122,24 +122,6 @@ Run every command as:  ${cli} <command> --key ${key}
 3. \`packaging\` prints DONE once they're saved: your task is complete. Don't run \`brief\`, \`direct\` or \`confirm\`: the rest of the plan stays as it is.`;
 }
 
-/** The task for packagingPrompt, for the orchestrator to delegate. */
-export function packagingLaunch(g: Game) {
-  const who = DEFAULT_DIRECTOR;
-  return {
-    gameId: g.id,
-    tasks: [
-      {
-        role: "director",
-        seat: "d",
-        title: `🎬 Titles & thumbnails — ${g.id}`,
-        clientRequestId: `${g.id}-packaging${(g.video?.packagingRedos ?? 0) + 1}`,
-        target: { providerInstanceId: who.provider, model: who.model, options: effortOption(who.provider, who.effort) },
-        prompt: packagingPrompt(g),
-      },
-    ],
-  };
-}
-
 /** How long a launched director is left to finish before another run may launch one. */
 const DIRECTOR_STALE_MS = 45 * 60_000;
 

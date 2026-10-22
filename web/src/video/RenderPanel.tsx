@@ -135,6 +135,8 @@ interface RenderState {
   packaging: VideoPackaging | null;
   /** The director's options to pick from, its favourite first, and each thumbnail option's image (null: not made yet). */
   packagingOptions: VideoPackagingOptions | null;
+  /** When the director was asked for new options, until they're in. */
+  packagingRequestedAt: number | null;
   thumbOptionUrls: (string | null)[];
   description: string | null;
   thumbUrl: string | null;
@@ -202,6 +204,34 @@ function PackagingPicker({ state, locked, onPick }: { state: RenderState; locked
         </div>
       </div>
       {error && <div className="rp-error">{error}</div>}
+    </div>
+  );
+}
+
+/** Ask the director for new titles, captions and thumbnails; the rest of the plan stays as it is. */
+function NewOptions({ gameId, requestedAt, locked, onAsked }: { gameId: string; requestedAt: number | null; locked?: string; onAsked: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
+  const ask = async () => {
+    setAsking(true);
+    setNote("");
+    try {
+      const r = await api<{ started: boolean; note?: string }>(`/api/games/${gameId}/repackage`, {});
+      if (!r.started) setNote(r.note ?? "");
+      onAsked();
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setAsking(false);
+    }
+  };
+  return (
+    <div className="rp-row">
+      <button className="rp-small" onClick={ask} disabled={asking || !!locked} title={locked}>
+        {asking ? "Asking…" : "Ask for new options"}
+      </button>
+      {requestedAt && <span className="rp-muted">Asked the director at {new Date(requestedAt).toLocaleTimeString()}: the new ones show up here.</span>}
+      {note && <div className="rp-error">{note}</div>}
     </div>
   );
 }
@@ -468,6 +498,7 @@ export function RenderPanel({ gameId, onPlan, context }: { gameId: string; onPla
         <div className="rp-packaging">
           <h3>📦 For the upload</h3>
           {state.packagingOptions && <PackagingPicker state={state} locked={editLock} onPick={pick} />}
+          <NewOptions gameId={gameId} requestedAt={state.packagingRequestedAt} locked={editLock} onAsked={load} />
           <EditableText label="YouTube title" text={state.packaging.title} limit={100} locked={editLock} onSave={(t) => editText({ title: t })} />
           {(state.packaging.description ?? state.description) && (
             <EditableText

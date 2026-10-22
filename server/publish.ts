@@ -292,6 +292,7 @@ export function setPackagingOptions(g: Game, options: VideoPackagingOptions) {
   if (!v) throw new Error("The game has no video plan yet.");
   v.packagingOptions = options;
   v.packagingRedos = (v.packagingRedos ?? 0) + 1;
+  delete g.packagingSummonedAt;
   if (!inFlight(g.publish)) v.packaging = { ...favourites(options), ...(v.packaging?.description && { description: v.packaging.description }) };
   saveGameNow(g);
   touch(g);

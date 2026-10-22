@@ -1,12 +1,12 @@
 // Checks direct launches through T3 (for a seat the server can't run through a CLI: here both CLIs are turned
 // off): a seat whose model and effort have an agent webhook is started in its own thread (the webhook gets only
 // its key, signed), `start` gives that agent its task, and the rest go to an orchestrator run whose brief has only
-// them. It runs its own spare server, with its webhooks pointed at a fake T3 it runs itself.
+// them. New titles and thumbnails on a planned game start a director the same way. It runs its own spare server, with its webhooks pointed at a fake T3 it runs itself.
 //   node scripts/test-launcher.mjs
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { startSpare } from "./spare.mjs";
 
@@ -27,9 +27,17 @@ const fake = createServer((rq, rs) => {
 });
 await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const HOOK = `http://127.0.0.1:${fake.address().port}`;
-const webhooks = { url: `${HOOK}/orchestrator`, secret: SECRET, agents: { "claude-haiku-5-5@low": `${HOOK}/haiku-low` } };
+const webhooks = { url: `${HOOK}/orchestrator`, secret: SECRET, agents: { "claude-haiku-5-5@low": `${HOOK}/haiku-low`, "claude-opus-5-5@high": `${HOOK}/director` } };
 
-const spare = await startSpare({ prepare: (data) => writeFileSync(path.join(data, "webhook.json"), JSON.stringify(webhooks)) });
+const spare = await startSpare({
+  prepare: (data) => {
+    writeFileSync(path.join(data, "webhook.json"), JSON.stringify(webhooks));
+    // A finished game whose video plan is saved, for new titles and thumbnails.
+    mkdirSync(path.join(data, "games"), { recursive: true });
+    const planned = JSON.parse(readFileSync(path.resolve("scripts/fixtures/director-game.json"), "utf8"));
+    writeFileSync(path.join(data, "games", "director-test.json"), JSON.stringify({ seen: {}, ...planned }));
+  },
+});
 const { url: URL, token } = spare;
 const req = async (method, p, body) => {
   const r = await fetch(URL + p, { method, headers: { "content-type": "application/json", "x-admin-token": token }, body: body ? JSON.stringify(body) : undefined });
@@ -80,7 +88,19 @@ try {
 
   const agents = await req("GET", `/api/games/${game.id}`);
   check("the game records White as launched directly", !!agents.directLaunch?.w && !agents.directLaunch?.b, JSON.stringify(agents.directLaunch));
+  const unplanned = await req("POST", `/api/games/${game.id}/repackage`, {});
+  check("new titles need a saved plan", unplanned.started === false && /no video plan/.test(unplanned.note), JSON.stringify(unplanned));
   await req("POST", `/api/games/${game.id}/abort`, {});
+
+  // New titles and thumbnails: the director starts in its own thread, and its task is only the packaging.
+  const repack = await req("POST", "/api/games/director-test/repackage", {});
+  await sleep(300);
+  const dirHit = hits.find((h) => h.path === "/director");
+  check("new titles start a director in its own thread with only its key, signed", repack.started === true && dirHit?.signed && Object.keys(dirHit.body).join() === "key", JSON.stringify({ repack, dirHit }));
+  const dStart = dirHit ? await cli(["start", "--key", dirHit.body.key]) : "";
+  check("`start` gives that director only the titles and thumbnails", dStart.startsWith("🎬 Titles & thumbnails") && dStart.includes("packaging-brief"), dStart.split("\n")[0]);
+  const again = await req("POST", "/api/games/director-test/repackage", {});
+  check("asking again before they're in starts nothing", again.started === false && /asked for/.test(again.note) && hits.filter((h) => h.path === "/director").length === 1, JSON.stringify(again));
 
   // An unknown key says the seat may have been handed on.
   check("an unknown key tells the agent to stop", (await cli(["start", "--key", "nope-w-0000"])).includes("stop now"));
