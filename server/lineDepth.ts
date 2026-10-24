@@ -158,7 +158,7 @@ export async function evidence(g: Game, sl: ShownLine): Promise<number> {
     }
     const legal = newRules(mv.before, variant).moves().length;
     if (mv.color !== sl.for && !a.options && legal > 1) {
-      const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal), { key: g.id });
+      const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal));
       if (r.failed || !r.multi) failed++;
       else a.options = r.multi.filter((l) => l.pv.length).map((l) => ({ uci: l.pv[0], score: l.score, pv: l.pv.slice(0, OPTION_PLIES) }));
     }
@@ -168,7 +168,7 @@ export async function evidence(g: Game, sl: ShownLine): Promise<number> {
         const fen = passed(mv.after, variant);
         if (!fen) after.threat = null;
         else {
-          const r = await engineFor().analyze(fen, variant, undefined, { key: g.id });
+          const r = await engineFor().analyze(fen, variant);
           if (r.failed) failed++;
           else after.threat = { score: r.score, pv: r.pv.slice(0, OPTION_PLIES) };
         }
@@ -208,7 +208,7 @@ export async function branches(g: Game, sl: ShownLine): Promise<number> {
     if (mv.color === sl.for && verdicts[k] !== "great" && verdicts[k] !== "brilliant") continue;
     const a = g.analysis[mv.before];
     if (!a || a.failed || a.secondUci || a.second === undefined || newRules(mv.before, variant).moves().length < 2) continue;
-    const fresh = await engineFor().analyze(mv.before, variant, undefined, { key: g.id });
+    const fresh = await engineFor().analyze(mv.before, variant);
     if (fresh.failed) failed++;
     else if (fresh.secondUci && (fresh.bestUci ?? fresh.pv[0]) === (a.bestUci ?? a.pv[0])) a.secondUci = fresh.secondUci;
   }
@@ -261,7 +261,7 @@ export async function analysed(g: Game, fen: string, urgent = false): Promise<Po
   let search = searching.get(key);
   if (!search) {
     search = engineFor()
-      .analyze(fen, variantOf(g), undefined, { key: g.id, urgent })
+      .analyze(fen, variantOf(g), undefined, urgent)
       .then((a) => {
         if (!a.failed) g.analysis[fen] = { ...a, lineVersion: LINE_DEPTH_VERSION };
         return g.analysis[fen] ?? a;

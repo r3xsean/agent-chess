@@ -106,11 +106,22 @@ export class Engine {
   private threadsNow = 0;
   private idleNow = false;
 
-  /** `runnable`: whether it may start a search now (a pool parks its spare engines while a game runs). */
+  /** `runnable`: whether it may start a search now (a pool parks its spare engines while a game runs). `steal`: where it takes work from when its own queue is empty. */
   constructor(
     private opts: EngineOptions = GAME_ENGINE,
     private runnable: () => boolean = () => true,
+    private steal: (urgentOnly: boolean) => Job | undefined = () => undefined,
   ) {}
+
+  /** Hand over the first queued search (an urgent one only, if asked). */
+  take(urgentOnly: boolean): Job | undefined {
+    if (urgentOnly && !this.queue[0]?.urgent) return undefined;
+    return this.queue.shift();
+  }
+
+  get queued() {
+    return this.queue.length;
+  }
 
   /** Searches queued or running. */
   get load() {
@@ -228,8 +239,8 @@ export class Engine {
   private pump() {
     if (this.busy || !this.proc || !this.runnable()) return;
     // Urgent searches are at the front: while a game runs, a pausing engine starts only those.
-    if (gaming && this.opts.pauseWhileGaming && !this.queue[0]?.urgent) return;
-    const job = this.queue.shift();
+    const urgentOnly = gaming && !!this.opts.pauseWhileGaming;
+    const job = this.queue.length ? (urgentOnly && !this.queue[0].urgent ? undefined : this.queue.shift()) : this.steal(urgentOnly);
     if (!job) return;
     this.busy = true;
     this.current = job;
@@ -313,6 +324,9 @@ export class Engine {
       this.chess960 = want960;
     }
     if (job.multipv) this.send(`setoption name MultiPV value ${job.multipv}`);
+    // A fresh hash for every search: one left full of other positions' (often mate) scores can turn a
+    // few-second search into a stall at depth 11 for many minutes, and costs time even when it doesn't.
+    this.send("ucinewgame");
     this.send(`position fen ${job.fen}`);
     this.send(`go depth ${this.opts.depth}`);
   }
@@ -324,20 +338,34 @@ export class Engine {
 }
 
 /**
- * Game-review engines working side by side, each search going to the least busy one (a game sticks
- * to the engine that has its recent positions in hash, when that one is no busier). While a game runs
- * on this PC only the first engine searches, slowed as above; the others' waiting searches move to it.
+ * Game-review engines working side by side, each search going to the least busy one, and an engine
+ * that runs out of work taking the others' queued searches. While a game runs on this PC only the
+ * first engine searches, slowed as above; the others' waiting searches move to it.
  */
 export class EnginePool {
   private engines: Engine[];
-  private home = new Map<string, number>();
   private onGaming = () => this.rebalance();
 
   constructor(count = GAME_ENGINES, opts: EngineOptions = GAME_ENGINE) {
     this.engines = Array.from(
       { length: count },
-      (_, i) => new Engine(i ? { ...opts, label: `${opts.label}-${i + 1}` } : opts, i ? () => !gaming : () => true),
+      (_, i) =>
+        new Engine(
+          i ? { ...opts, label: `${opts.label}-${i + 1}` } : opts,
+          i ? () => !gaming : () => true,
+          (urgentOnly) => this.stealFor(i, urgentOnly),
+        ),
     );
+  }
+
+  /** An idle engine takes the oldest queued search of the busiest one, so nothing waits behind a long search while an engine sits free. */
+  private stealFor(i: number, urgentOnly: boolean) {
+    const from = this.engines.filter((e, j) => j !== i && e.queued).sort((a, b) => b.queued - a.queued);
+    for (const e of from) {
+      const job = e.take(urgentOnly);
+      if (job) return job;
+    }
+    return undefined;
   }
 
   start() {
@@ -350,18 +378,16 @@ export class EnginePool {
     for (const e of this.engines) e.stop();
   }
 
-  /** `key`: what the position belongs to (a game id), so its searches can share an engine's hash; `urgent`: see Engine.analyze. */
-  analyze(fen: string, variant: Variant = "standard", multipv?: number, { key, urgent = false }: { key?: string; urgent?: boolean } = {}) {
-    const i = this.pick(key);
-    if (key !== undefined) this.home.set(key, i);
-    return this.engines[i].analyze(fen, variant, multipv, urgent);
+  /** `urgent`: see Engine.analyze. */
+  analyze(fen: string, variant: Variant = "standard", multipv?: number, urgent = false) {
+    const done = this.engines[this.pick()].analyze(fen, variant, multipv, urgent);
+    for (const e of this.engines) e.kick(); // an idle one picks it up if it queued behind a search
+    return done;
   }
 
-  private pick(key?: string) {
+  private pick() {
     if (gaming) return 0;
     const least = Math.min(...this.engines.map((e) => e.load));
-    const home = key === undefined ? undefined : this.home.get(key);
-    if (home !== undefined && this.engines[home]?.load === least) return home;
     return this.engines.findIndex((e) => e.load === least);
   }
 

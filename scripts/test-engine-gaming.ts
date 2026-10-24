@@ -30,7 +30,7 @@ const spread = (pool as unknown as { engines: { load: number }[] }).engines;
 const searches = [
   "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
   "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1",
-].map((f, i) => pool.analyze(f, "standard", undefined, { key: `g${i}` }));
+].map((f) => pool.analyze(f, "standard"));
 assert.deepEqual(
   spread.map((x) => x.load),
   [2, 0],
@@ -43,8 +43,8 @@ pool.stop();
 const lines = new EnginePool(1, { label: "lines", depth: 6, threads: 2, hashMb: 16, pauseWhileGaming: true });
 lines.start();
 let backgroundDone = false;
-const background = lines.analyze(START, "standard", undefined, { key: "g" }).then(() => (backgroundDone = true));
-const urgent = await lines.analyze("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2", "standard", undefined, { key: "g", urgent: true });
+const background = lines.analyze(START, "standard").then(() => (backgroundDone = true));
+const urgent = await lines.analyze("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2", "standard", undefined, true);
 assert.ok(urgent.depth >= 6, "an agent's search runs while a game does");
 await new Promise((r) => setTimeout(r, 1500));
 assert.equal(backgroundDone, false, "background line work waits while a game runs");

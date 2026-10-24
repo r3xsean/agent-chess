@@ -13,7 +13,7 @@ const fens = [
   "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
   "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2",
 ];
-const done = fens.map((f, i) => pool.analyze(f, "standard", undefined, { key: i < 2 ? "game-a" : "game-b" }));
+const done = fens.map((f) => pool.analyze(f, "standard"));
 assert.deepEqual(
   engines.map((e) => e.load),
   [2, 2],
@@ -25,6 +25,14 @@ assert.deepEqual(
   engines.map((e) => e.load),
   [0, 0],
 );
+
+// Searches queued behind a running one on the first engine: the idle engine takes them.
+const first = engines[0] as unknown as { analyze: (f: string) => Promise<unknown> };
+const queuedBehind = fens.slice(0, 3).map((f) => first.analyze(f));
+assert.deepEqual(engines.map((e) => e.load), [3, 0]);
+(engines[1] as unknown as { kick: () => void }).kick();
+assert.deepEqual(engines.map((e) => e.load), [2, 1], "an idle engine takes a search queued on a busy one");
+await Promise.all(queuedBehind);
 pool.stop();
-console.log("PASS: the game-review pool spreads searches over its engines and finishes them all");
+console.log("PASS: the game-review pool spreads searches over its engines, idle engines take queued ones, and all finish");
 process.exit(0);

@@ -160,7 +160,7 @@ async function options(g: Game, args: string[], p: Progress): Promise<string> {
   await playedThrough(g, from, p);
   if (!legal.length) return `From ${from.label}: no legal moves (the game is over there).`;
   const n = Math.min(legal.length, MAX_OPTIONS, Math.max(1, Number(args[1]) || 5));
-  const a = await engineFor().analyze(from.fen, variant, n, { key: g.id, urgent: true });
+  const a = await engineFor().analyze(from.fen, variant, n, true);
   if (a.failed || !a.multi?.length) throw new ActionError("The engine couldn't analyse that position; try again.");
   const side = turnOf(from.fen);
   const best = winPercentFor(a.multi[0].score, side);
@@ -192,7 +192,7 @@ async function threat(g: Game, args: string[], p: Progress): Promise<string> {
   const passed = [parts[0], other, parts[2], "-", parts[4], parts[5]].join(" ");
   let a;
   try {
-    a = await engineFor().analyze(passed, variant, undefined, { key: g.id, urgent: true });
+    a = await engineFor().analyze(passed, variant, undefined, true);
   } catch {
     throw new ActionError("The engine couldn't analyse that.");
   }

@@ -231,7 +231,7 @@ export function analyzeGame(g: Game) {
     }
     inFlight.add(`${g.id}|${fen}`);
     engine
-      .analyze(fen, variantOf(g), undefined, { key: g.id })
+      .analyze(fen, variantOf(g))
       .then((a) => {
         if (g.analysis[fen]?.depth === 0) return; // pinned as terminal/drawn while we were searching
         g.analysis[fen] = a;
