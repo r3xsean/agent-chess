@@ -6,9 +6,10 @@ import type { PositionAnalysis, Score } from "../shared/types";
 import { newRules, type Variant } from "../shared/rules";
 import { ROOT } from "./paths";
 
-// Agents think for minutes per move, so each position is searched to its depth goal (22, past the point
-// where deeper search stops paying off much), however long that takes. ENGINE_MAX_MS, when set, caps it instead.
-const ANALYSIS_DEPTH = Number(process.env.ENGINE_DEPTH ?? 22);
+// Agents think for minutes per move, so each position is searched to its depth goal (20: against depth 22,
+// a game's verdicts change no more often than rerunning 22 changes them), however long that takes.
+// ENGINE_MAX_MS, when set, caps it instead.
+const ANALYSIS_DEPTH = Number(process.env.ENGINE_DEPTH ?? 20);
 const ANALYSIS_MAX_MS = process.env.ENGINE_MAX_MS ? Number(process.env.ENGINE_MAX_MS) : undefined;
 /** Last resort for a runaway search: stopped (and logged) after this long, keeping the depth it reached. */
 const RUNAWAY_MS = Number(process.env.ENGINE_RUNAWAY_MS ?? 30 * 60_000);

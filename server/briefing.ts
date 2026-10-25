@@ -139,7 +139,7 @@ export function turnBrief(g: Game, color: Color): string {
     "",
     "=== CURRENT POSITION ===",
     ...(view === "image"
-      ? [`The board picture is the current position, from your side: your ${colorName(color)} pieces at the bottom.`]
+      ? [`The board picture is the current position, with White at the bottom whichever colour you play. You are ${colorName(color)}.`]
       : [
           `The ${g.options?.pieceList ? "FEN, piece list, and diagram" : "FEN and diagram"}${view === "added" ? ", and the board picture," : ""} describe the same current position.`,
           `FEN: ${fen}`,
@@ -154,7 +154,7 @@ export function turnBrief(g: Game, color: Color): string {
     ...(view !== "text"
       ? [
           "",
-          `The board picture shows it from your side (your ${colorName(color)} pieces at the bottom), with the last move's two squares tinted. Send the check code at its top as "seen" with your move.`,
+          `The board picture shows it the same way round as the diagram (White at the bottom), with the last move's two squares tinted. Send the check code at its top as "seen" with your move.`,
           `BOARD PICTURE: ${writeBoardImage(g, color)}`,
         ]
       : []),

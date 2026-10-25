@@ -130,7 +130,7 @@ function SetupPicker({ label, value, onChange }: { label: React.ReactNode; value
 }
 
 const SETUP_NOTE =
-  "📷 adds a picture of the board from the player's side each turn; 🖼️ gives only the picture. Either way the player must send the picture's check code with each move, so it has to look. Experiment games' agents play through chess tools that bring the picture with each turn.";
+  "📷 adds a picture of the board each turn (White at the bottom, like the text diagram); 🖼️ gives only the picture. Either way the player must send the picture's check code with each move, so it has to look. Experiment games' agents play through chess tools that bring the picture with each turn.";
 
 /** A game's experiment: each seat's toggles. Off: both see the text briefing as always. */
 export interface GameSetupChoice {

@@ -229,6 +229,7 @@ try {
     const status = (await tools.call("tools/call", { name: "status", arguments: {} })).result;
     const text = status.content[0].text as string;
     assert.ok(text.includes("FEN:") && text.includes("BOARD PICTURE: attached to this reply.") && !text.includes(".png"), text);
+    assert.ok(text.includes("same way round as the diagram (White at the bottom)"), "Black's picture has White at the bottom too");
     assert.equal(status.content[1].type, "image");
     assert.equal(Buffer.from(status.content[1].data, "base64").subarray(1, 4).toString(), "PNG");
     // One call is the whole turn: the move goes in, it waits for White's reply, and the next position comes back with its picture.

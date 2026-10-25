@@ -25,14 +25,14 @@ export function playerPrompt(g: Game, color: Color, via: "cli" | "tools" = "cli"
   const setup = seatSetup(g, color);
   const sees =
     setup.view === "image"
-      ? "the current position as a picture of the board from your side (no FEN, text diagram or piece list)"
-      : `the current position (FEN, a White-at-bottom text diagram, and a piece list when enabled${setup.view === "added" ? ", plus a picture of the board from your side" : ""})`;
+      ? "the current position as a picture of the board, White at the bottom (no FEN, text diagram or piece list)"
+      : `the current position (FEN, a White-at-bottom text diagram, and a piece list when enabled${setup.view === "added" ? ", plus a picture of the board the same way round" : ""})`;
   const picture =
     setup.view === "text"
       ? ""
       : `
 ## The board picture
-Every time you're shown the position (YOUR MOVE, POSITION STATUS), it comes with a picture of the board from your side: your pieces at the bottom, files and ranks marked round the edge, the last move's two squares tinted, and a king in check ringed in red. ${tools ? "It is attached to the tool's reply." : "Its file is on the BOARD PICTURE line: open it with your file-reading or image-viewing tool every turn (it's a PNG)."}${setup.view === "image" ? " It is the only board you get: read the position from it." : ""}
+Every time you're shown the position (YOUR MOVE, POSITION STATUS), it comes with a picture of the board with White at the bottom whichever colour you play (${colorName(color)}), files and ranks marked round the edge, the last move's two squares tinted, and a king in check ringed in red. ${tools ? "It is attached to the tool's reply." : "Its file is on the BOARD PICTURE line: open it with your file-reading or image-viewing tool every turn (it's a PNG)."}${setup.view === "image" ? " It is the only board you get: read the position from it." : ""}
 Above the board is a check code that changes every move. Send it as "seen" with your move: a move without the code of this turn's picture is turned down (that isn't an illegal move, and it isn't shown with your moves).
 `;
   const reread = !setup.reread

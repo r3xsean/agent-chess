@@ -29,7 +29,8 @@ const QUIET = 6;
 
 /*
  * A video has no clock, so its lines (and the director's probes, options and threats, which use the same
- * engines) are searched deeper than live review: every position to depth 24, however long it takes. While a
+ * engines) are searched to the review's depth on engines of their own: every position to depth 20, however
+ * long it takes (24 took three times as long, and no eval moved by more than a few points of winning chances). While a
  * game runs on this PC, only searches an agent is waiting on go ahead (slowed, same depth); the rest wait.
  * An agent's command that outlasts its window answers WAITING and picks up where it was (see probe.ts).
  */
@@ -37,7 +38,7 @@ let lineEngine: EnginePool | null = null;
 export const engineFor = () => {
   if (!lineEngine) {
     const threads = Math.max(1, Math.floor(os.availableParallelism() / 2));
-    const depth = Number(process.env.LINES_DEPTH ?? 24);
+    const depth = Number(process.env.LINES_DEPTH ?? 20);
     const maxMs = process.env.ENGINE_MAX_MS ? Number(process.env.ENGINE_MAX_MS) : undefined; // test servers cap every engine
     lineEngine = new EnginePool(2, { label: "lines", depth, ...(maxMs !== undefined && { maxMs }), threads, hashMb: 1024, pauseWhileGaming: true });
     lineEngine.start();

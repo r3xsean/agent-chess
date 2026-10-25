@@ -8,8 +8,8 @@ import { DATA, ROOT } from "./paths";
 import { agentDir } from "./store";
 
 /*
- * The board picture an experiment's seat is shown each turn (shared/seatSetup.ts): the position from the
- * player's side, coordinates round the edge, the last move tinted and a king in check ringed, and a check code
+ * The board picture an experiment's seat is shown each turn (shared/seatSetup.ts): the position with White at
+ * the bottom, coordinates round the edge, the last move tinted and a king in check ringed, and a check code
  * that changes every turn. A move is only taken with the code of the picture for that position, so a player can't
  * play without having looked at it.
  */
@@ -121,7 +121,8 @@ export const renderPng = (svg: string) => new Resvg(svg, { font: { loadSystemFon
 
 /**
  * The picture of the current position for a seat, written once per position (the earlier ones removed): its
- * path. From the seat's own side; the last move tinted.
+ * path. White at the bottom for both colours, like the text diagram, so a seat shown both never has to turn one
+ * round to match the other; the last move tinted.
  */
 export function writeBoardImage(g: Game, c: Color): string {
   const file = boardImagePath(g, c);
@@ -130,6 +131,6 @@ export function writeBoardImage(g: Game, c: Color): string {
   for (const f of readdirSync(dir)) if (/^board-\d+\.png$/.test(f)) rmSync(path.join(dir, f), { force: true });
   const lastMove = g.moves[g.moves.length - 1];
   const fen = lastMove?.fenAfter ?? g.startFen ?? "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-  writeFileSync(file, renderPng(boardSvg(fen, c, boardCode(g, c), lastMove && { from: lastMove.from, to: lastMove.to })));
+  writeFileSync(file, renderPng(boardSvg(fen, "w", boardCode(g, c), lastMove && { from: lastMove.from, to: lastMove.to })));
   return file;
 }
