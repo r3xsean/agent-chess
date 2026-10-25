@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Game, SeatRole, Tournament } from "../shared/types";
+import { pairingSetups } from "../shared/seatSetup";
 import { DATA, PORT } from "./paths";
 import { games, saveTournament, saveTournamentNow, tournaments } from "./store";
 import { ActionError, boardsOf, claimSeats, createGame, seatClaimed, startablePairings, tournamentBreakUntil } from "./game";
@@ -34,7 +35,15 @@ export function tournamentNext(t: Tournament): { finished: true } | { games: Gam
   }
   const byId = new Map(t.players.map((p) => [p.id, p]));
   const start = (next: Tournament["pairings"][number]) => {
-    const g = createGame({ white: byId.get(next.white)!, black: byId.get(next.black)!, tournamentId: t.id, rated: t.rated !== false, chess960: next.chess960, opening: next.opening });
+    const g = createGame({
+      white: byId.get(next.white)!,
+      black: byId.get(next.black)!,
+      tournamentId: t.id,
+      rated: t.rated !== false,
+      chess960: next.chess960,
+      opening: next.opening,
+      seats: pairingSetups(t, next),
+    });
     next.gameId = g.id;
     return g;
   };

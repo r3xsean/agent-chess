@@ -48,7 +48,7 @@ import { videoApproved, videoRevision } from "./videoApproval";
 import { rivalry } from "./rivalry";
 import { gameFolder, gameVideoDir, migrateFlatVideos, videoPath } from "./videoFiles";
 import { VOICE_DIR, voiceManifest } from "./voice";
-import { roundRobin } from "./schedule";
+import { roundRobin, splitSides } from "./schedule";
 import { summonAvailable } from "./summon";
 import { anyAgentCli } from "./agents";
 import { orchestratorBrief, tournamentNext } from "./orchestrator";
@@ -59,6 +59,8 @@ import { analyticsRows, modelAnalytics, openingGrid } from "./analytics";
 import type { AnalyticsScope, AnalyticsStart } from "../shared/analytics";
 import { loadOpenings } from "./openings";
 import { openingById } from "../shared/openingSuite";
+import { isExperiment, isNormalSetup, parseSetup, seatSetup, setupKey } from "../shared/seatSetup";
+import { experimentReport } from "./experiments";
 import { nextOpening, openingStats } from "./setOpenings";
 import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
@@ -312,6 +314,7 @@ function gameSummary(g: Game) {
     variant: variantOf(g),
     rated: isRated(g),
     accuracy: g.review ? { w: g.review.w.accuracy, b: g.review.b.accuracy } : null,
+    ...(isExperiment(g) && { seats: { w: seatSetup(g, "w"), b: seatSetup(g, "b") } }),
   };
 }
 
@@ -535,7 +538,8 @@ app.post(
     if (white.id === black.id) throw new ActionError("Both seats are the same player (model and effort). Change one of them.");
     const chess960 = chess960Choice(req.body.chess960);
     const opening = chess960 === undefined ? openingChoice(req.body.opening, white, black) : undefined;
-    const g = createGame({ white, black, rated: req.body.rated !== false, chess960, opening });
+    const seats = req.body.seats ?? {};
+    const g = createGame({ white, black, rated: req.body.rated !== false, chess960, opening, seats: { w: parseSetup(seats.w), b: parseSetup(seats.b) } });
     return newGameReply(req, g);
   }),
 );
@@ -575,6 +579,8 @@ app.post(
       rated: isRated(was),
       chess960: variantOf(was) === "chess960" ? was.chess960 : undefined,
       opening: was.setOpening?.id,
+      // Each player keeps its own experiment toggles in its new colour.
+      seats: { w: seatSetup(was, "b"), b: seatSetup(was, "w") },
     });
     return newGameReply(req, g);
   }),
@@ -747,6 +753,9 @@ app.get(
   }),
 );
 
+/** The Experiments page: every reviewed seat by its toggles (?scope=experiments | all | t:<tournament id>). */
+app.get("/api/experiments", handle((req) => experimentReport(String(req.query.scope ?? "experiments"))));
+
 /* ------------------------------ tournaments ------------------------------ */
 
 app.post(
@@ -767,6 +776,13 @@ app.post(
       pairings: roundRobin(unique.map((r) => r.id), !!req.body.doubleRound),
       status: "running",
     };
+    // The experiment's toggles: `a` for everyone, or a split, `a` against `b` in every pairing (see Tournament.setups).
+    const a = req.body.setups?.a ? parseSetup(req.body.setups.a) : undefined;
+    const b = a && req.body.setups?.b ? parseSetup(req.body.setups.b) : undefined;
+    if (a && (!isNormalSetup(a) || (b && !isNormalSetup(b)))) {
+      t.setups = { a, ...(b && setupKey(b) !== setupKey(a) ? { b } : {}) };
+      if (t.setups.b) splitSides(t.pairings);
+    }
     // Left out, boards means as many games at once as the players can fill; 1 plays them one at a time.
     if (req.body.boards != null) t.boards = Math.floor(Number(req.body.boards)) || 1;
     t.breakHours = parseBreakHours(req.body.breakHours ?? 0);
@@ -1059,11 +1075,16 @@ app.post(
     const { g, role } = seat(String(req.body?.key ?? ""));
     const text = (t: string) => res.type("text/plain").send(t);
     // Each seat sees only its own commands.
-    if (cmd === "help") return text(`Your commands (run each as: node chess.mjs <command> --key <your key>):\n${SEAT_COMMANDS[role]}`);
+    if (cmd === "help")
+      return text(
+        req.body?.via === "tools"
+          ? `Your chess tools: wait, move, accept_draw, resign, interview, postgame, status (and start, for your task again).`
+          : `Your commands (run each as: node chess.mjs <command> --key <your key>):\n${SEAT_COMMANDS[role]}`,
+      );
     // An agent the server started in its own thread: its thread's title, then its task.
     if (cmd === "start") {
       if ((role === "w" || role === "b") && seatIsHuman(g, role)) throw new ActionError("This seat is played on the website.");
-      const task = seatTask(g, role);
+      const task = seatTask(g, role, req.body?.via === "tools" ? "tools" : "cli");
       return text(`${task.title}\n\n${task.prompt}`);
     }
     const unknown = () => new ActionError(`Unknown command: ${cmd}. Yours are:\n${SEAT_COMMANDS[role]}`);

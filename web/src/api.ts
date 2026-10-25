@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Game, ModelOption, PlayerRef, PlayerStats, Tournament } from "../../shared/types";
+import type { Game, ModelOption, PlayerRef, PlayerStats, SeatSetup, Tournament } from "../../shared/types";
 import type { Variant } from "../../shared/rules";
 
 export interface GameSummary {
@@ -19,6 +19,8 @@ export interface GameSummary {
   variant: Variant;
   rated: boolean;
   accuracy: { w: number | null; b: number | null } | null;
+  /** Each seat's experiment toggles, on a game where either has any. */
+  seats?: Record<"w" | "b", SeatSetup>;
 }
 
 export interface Lobby {

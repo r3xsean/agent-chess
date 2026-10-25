@@ -8,14 +8,39 @@ import { castlingNote, variantOf } from "../shared/rules";
 import { describePlayer, setOpeningNote } from "./briefing";
 import { fullName, isHuman } from "../shared/naming";
 import { DEFAULT_DIRECTOR } from "../shared/models";
+import { seatSetup } from "../shared/seatSetup";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 
-export function playerPrompt(g: Game, color: Color): string {
+/**
+ * A player's task. `via`: "tools" for an agent playing through the chess MCP tools (cli/chess-mcp.mjs), which
+ * bring its board picture with each turn; else the CLI, which names the picture's file.
+ */
+export function playerPrompt(g: Game, color: Color, via: "cli" | "tools" = "cli"): string {
   const opponent = describePlayer(g, color === "w" ? "b" : "w");
   const key = seatKeysFor(g.id)[color];
   const dir = agentDir(g.id, color);
   const cli = `node "${CLI}"`;
+  const tools = via === "tools";
+  const setup = seatSetup(g, color);
+  const sees =
+    setup.view === "image"
+      ? "the current position as a picture of the board from your side (no FEN, text diagram or piece list)"
+      : `the current position (FEN, a White-at-bottom text diagram, and a piece list when enabled${setup.view === "added" ? ", plus a picture of the board from your side" : ""})`;
+  const picture =
+    setup.view === "text"
+      ? ""
+      : `
+## The board picture
+Every time you're shown the position (YOUR MOVE, POSITION STATUS), it comes with a picture of the board from your side: your pieces at the bottom, files and ranks marked round the edge, the last move's two squares tinted, and a king in check ringed in red. ${tools ? "It is attached to the tool's reply." : "Its file is on the BOARD PICTURE line: open it with your file-reading or image-viewing tool every turn (it's a PNG)."}${setup.view === "image" ? " It is the only board you get: read the position from it." : ""}
+Above the board is a check code that changes every move. Send it as "seen" with your move: a move without the code of this turn's picture is turned down (that isn't an illegal move, and it isn't shown with your moves).
+`;
+  const reread = !setup.reread
+    ? ""
+    : `
+## Write out the position
+Before you choose each move, read the position again square by square and write out every piece on the board, both sides, pawns included, as "position" in your move: { "white": ["Kg1", "Qd1", "Ra1", "Pa2", …], "black": ["Kg8", "Pa7", …] } (a letter K Q R B N P, then the square). It is checked against the board before your move is: if it doesn't match, the move is turned down with "your position doesn't match the board", and you read the board again and resend (that isn't an illegal move, and it isn't shown with your moves).
+`;
   const against = isHuman(color === "w" ? g.black : g.white) ? "a human, who plays their moves on the website" : "another AI agent";
   const variant =
     variantOf(g) === "chess960"
@@ -36,13 +61,26 @@ You play ${colorName(color)}. Play the chess you think is strongest, and talk in
 Your opponent: ${opponent}.
 ${variant}
 ## Fair play (strict)
-- You see the game the way a human sees a chess.com board: the current position (FEN, a White-at-bottom text diagram, and a piece list when enabled), the complete actual move history, the last move, whether you're in check, captured pieces and material count, and draw offers. No legal-move list or engine analysis.
-- Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines. Do not read any project files other than files you write yourself. All chess thinking happens in your own head.
-- Interact with the game only through the CLI below. Never query the game server directly (no HTTP requests, no browser) and never read the project's data folder outside your own scratch folder — those contain engine analysis and your opponent's private thoughts, and using them is cheating.
+- You see the game the way a human sees a chess.com board: ${sees}, the complete actual move history, the last move, whether you're in check, captured pieces and material count, and draw offers. No legal-move list or engine analysis.
+- Do NOT use chess engines, chess libraries (chess.js, python-chess, …), opening databases, websites, or any code to analyze positions, generate legal moves or verify lines${setup.view === "image" ? ", or to read the board picture for you (no image processing; look at it yourself)" : ""}. Do not read any project files other than files you write yourself${setup.view !== "text" && !tools ? " and your board pictures" : ""}. All chess thinking happens in your own head.
+- Interact with the game only through the ${tools ? "chess tools" : "CLI"} below. Never query the game server directly (no HTTP requests, no browser) and never read the project's data folder outside your own scratch folder — those contain engine analysis and your opponent's private thoughts, and using them is cheating.
 - An illegal move is rejected with just "Illegal move." — work out why yourself. Illegal attempts are visible to the audience.
 - Your opponent cannot see your commentary, evaluations or calculations.
-
-## CLI
+${picture}${reread}
+${
+  tools
+    ? `## Chess tools
+You play through the tools of the \`chess\` MCP server; they already know your seat. Every tool that acts (\`move\`, \`interview\`, \`postgame\`, \`accept_draw\`, \`resign\`) goes straight on to wait for whatever needs you next and returns it, so one call is one whole turn: never call \`wait\` after one. A call can take up to 5 minutes.
+Tools:
+- \`wait\` — blocks until something needs you and returns it. Call it to start, and again whenever a reply says WAITING.
+- \`move\` — submit your move: its arguments are the move format below.
+- \`accept_draw\` — accept your opponent's pending draw offer.
+- \`resign\` — resign.
+- \`interview\` — answer the pre-game interview (\`text\`).
+- \`postgame\` — after the game, your post-game interview answer (\`interview\`).
+- \`status\` — the current position again.
+Your scratch folder, for any notes you write: ${dir}`
+    : `## CLI
 Run every command as:  ${cli} <command> --key ${key}
 Every command that acts (\`move\`, \`interview\`, \`postgame\`, \`accept-draw\`, \`resign\`) goes straight on to wait for whatever needs you next and prints it, so one command is one whole turn: never run \`wait\` after one. A command can block for up to 5 minutes, so give every command your shell tool a timeout of at least 360 seconds (6 minutes).
 Commands:
@@ -64,7 +102,8 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false); @'
 Bash:
 ${cli} move - --key ${key} <<'EOF'
 { "move": "Nf3", "commentary": "...", "eval": "+0.3" }
-EOF
+EOF`
+}
 
 ## Move format
 {
@@ -74,7 +113,7 @@ EOF
   "lines": [
     { "moves": "Nf3 Nc6 Bb5 a6 Ba4 Nf6", "note": "Main line: I keep pressure on e5." },
     { "moves": "Nf3 d6 d4 exd4 Nxd4", "note": "If he plays ...d6 I take the center." }
-  ],
+  ],${setup.view !== "text" ? `\n  "seen": "K7Q",` : ""}${setup.reread ? `\n  "position": { "white": ["Kg1", "Qd1", "Pe4", …], "black": ["Kg8", "Pe5", …] },` : ""}
   "offerDraw": false
 }
 - move: SAN (e.g. "Nf3", "exd5", "O-O", "e8=Q") or UCI ("g1f3").
@@ -83,14 +122,22 @@ EOF
   It is a prediction of the result, not a material count. Material is only one input: king safety, piece activity, threats, passed pawns and trapped pieces count just as much, and if your main line wins something by force, the eval already includes it. Scale: 0.0–0.3 equal · 0.3–0.7 slight edge · 0.7–1.5 clear advantage · 1.5–3 winning (a strong player converts it most of the time) · 3–6 decisive · above 6 completely won or lost.
   Don't soften the number when you're worse: saying a position is lost is fine, and you can still fight.
 - lines (optional, but use them whenever you calculate): each line is a sequence of moves starting from the CURRENT position with your move first. The audience can click a line to watch it played out on the board, so include your main line, alternatives you rejected, and the replies you're worried about. Several lines are welcome.
-- offerDraw (optional): offer a draw together with this move.
+- offerDraw (optional): offer a draw together with this move.${setup.view !== "text" ? `\n- seen (required): the check code at the top of this turn's board picture.` : ""}${setup.reread ? `\n- position (required): every piece on the board as you read it, before you chose your move (see "Write out the position").` : ""}
 
-## The loop — keep going until the CLI prints DONE
+${
+  tools
+    ? `## The loop — keep going until a tool returns DONE
+1. Call \`wait\` once, to start.
+2. Find the status heading in each reply: PRE-GAME (answer with \`interview\`), YOUR MOVE (think, then \`move\`), GAME OVER (\`postgame\`), WAITING or POSITION STATUS (call \`wait\`), DONE (you are finished).
+3. Act on it with one call; its reply includes the next status. Repeat.
+Never end your task before a tool returns DONE — the game stalls if you stop. If a call fails, read the error and fix it. If a call says what you sent already went through, call \`wait\`; don't send it again.`
+    : `## The loop — keep going until the CLI prints DONE
 1. Run \`wait\` once, to start.
 2. Find the status heading in each reply: PRE-GAME (answer with \`interview\`), YOUR MOVE (think, then \`move\`), GAME OVER (\`postgame\`), WAITING or POSITION STATUS (run \`wait\`), DONE (you are finished).
 3. Act on it with one command; its reply includes the next status. Repeat.
-Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it. If your shell times out while a command is waiting, what you sent already went through: run \`wait\`, don't send it again.
-If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). Run \`status\`, re-read the board and the piece list square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
+Never end your task before the CLI prints DONE — the game stalls if you stop. If a command fails, read the error and fix it. If your shell times out while a command is waiting, what you sent already went through: run \`wait\`, don't send it again.`
+}
+If your moves keep getting rejected: you always have at least one legal move while the game is running (checkmate and stalemate end the game automatically). ${tools ? "Call" : "Run"} \`status\`, re-read ${setup.view === "image" ? "the board picture" : "the board and the piece list"} square by square, and consider every piece — pawns included — not just the one you were focused on. If the position is hopeless, you may resign; never just stop.
 
 ## Draws and resignation
 You are trying to win. Resign only when the position is clearly lost with no practical chances. Offer or accept a draw when the position is dead equal with nothing left to play for, or when a draw is a good result for you.`;
@@ -170,8 +217,8 @@ const effortOption = (provider: string, effort: string) =>
  * What an agent the server launched itself is told by `start`: its thread's title, then its task. The
  * director's seat does whichever job the game is at: the plan, or (once it's saved) new packaging.
  */
-export function seatTask(g: Game, role: SeatRole): { title: string; prompt: string } {
-  if (role === "w" || role === "b") return { title: `♟ ${colorName(role)}: ${fullName(role === "w" ? g.white : g.black)} — ${g.id}`, prompt: playerPrompt(g, role) };
+export function seatTask(g: Game, role: SeatRole, via: "cli" | "tools" = "cli"): { title: string; prompt: string } {
+  if (role === "w" || role === "b") return { title: `♟ ${colorName(role)}: ${fullName(role === "w" ? g.white : g.black)} — ${g.id}`, prompt: playerPrompt(g, role, via) };
   return g.video ? { title: `🎬 Titles & thumbnails — ${g.id}`, prompt: packagingPrompt(g) } : { title: `🎬 Video director — ${g.id}`, prompt: directorPrompt(g) };
 }
 

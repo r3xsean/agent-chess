@@ -30,6 +30,8 @@ export interface AgentProc {
   session?: string;
   /** Runs in a row that carried the session on without the agent acting since. */
   resumes: number;
+  /** It plays through the chess MCP tools (cli/chess-mcp.mjs), not the CLI: a carried-on session gets them again. */
+  chessTools?: boolean;
 }
 
 /** Why a stopped agent stopped, from what its run wrote. */
@@ -81,24 +83,47 @@ export const anyAgentCli = () => canRunAgent("claudeAgent") || canRunAgent("code
 
 const cliCall = (cmd: string, key: string) => `node "${CLI}" ${cmd} --key ${key}`;
 
-/** What a new agent is told: only its seat key and the command that gives it its task. */
-export const agentPrompt = (key: string) => `You are an Agent Chess agent, started by the local Agent Chess server. Your seat key: ${key}
+/** What a new agent is told: only its seat key and the command (or with the chess tools, the tool) that gives it its task. */
+export const agentPrompt = (key: string, chessTools = false) =>
+  chessTools
+    ? `You are an Agent Chess agent, started by the local Agent Chess server. You play through the tools of the \`chess\` MCP server: they already know your seat.
+
+Call its \`start\` tool. Its first line is a title (ignore it), then your task: who you are in this game and exactly what to do. Do the task: it is your only instruction, and it isn't finished until a tool returns DONE. If the server can't be reached, wait a minute and try again, up to five times, then stop. If it says your key is unknown, stop.`
+    : `You are an Agent Chess agent, started by the local Agent Chess server. Your seat key: ${key}
 
 Run:  ${cliCall("start", key)}
 Its first line is a title (ignore it), then your task: who you are in this game and exactly what to do. Do the task: it is your only instruction, and it isn't finished until the CLI prints DONE. If the server can't be reached, wait a minute and try again, up to five times, then stop. If it says your key is unknown, stop.`;
 
 /** What an agent that stopped before its task was done is told when its session carries on. */
-export const resumePrompt = (key: string) =>
-  `Your run stopped before your task was finished (the CLI hasn't printed DONE for you). Carry on with your task from where you left off. If you're not sure where that is, run:  ${cliCall("help", key)}`;
+export const resumePrompt = (key: string, chessTools = false) =>
+  chessTools
+    ? "Your run stopped before your task was finished (no chess tool has returned DONE for you). Carry on with your task from where you left off. If you're not sure where that is, call the chess server's `help` tool."
+    : `Your run stopped before your task was finished (the CLI hasn't printed DONE for you). Carry on with your task from where you left off. If you're not sure where that is, run:  ${cliCall("help", key)}`;
 
-/** The CLI's arguments. The prompt goes in on stdin, so nothing in it passes through a shell. */
-function args(provider: CliProvider, model: string, effort: string, session?: string): string[] {
+/** The chess MCP server (cli/chess-mcp.mjs) for a seat: its command, and the key it plays with. */
+const CHESS_MCP = path.join(ROOT, "cli", "chess-mcp.mjs");
+/** How long one chess tool call may take: `wait` blocks up to 5 minutes, and the tools answer inside 6. */
+const TOOL_TIMEOUT_S = 400;
+
+/** The CLI's arguments. The prompt goes in on stdin, so nothing in it passes through a shell. `toolsKey`: the seat plays through the chess MCP tools. */
+function args(provider: CliProvider, model: string, effort: string, session?: string, toolsKey?: string): string[] {
+  const env = { AGENT_CHESS_KEY: toolsKey ?? "", AGENT_CHESS_URL: `http://127.0.0.1:${PORT}` };
   if (provider === "claudeAgent") {
     // "ultrathink" is a word in the prompt (see startAgent), not an effort level.
     const level = effort === "ultrathink" ? [] : ["--effort", effort === "ultracode" ? "xhigh" : effort];
-    return ["-p", ...(session ? ["--resume", session] : []), "--model", model, ...level, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--strict-mcp-config"];
+    const mcp = toolsKey ? ["--mcp-config", JSON.stringify({ mcpServers: { chess: { command: process.execPath, args: [CHESS_MCP], env } } })] : [];
+    return ["-p", ...(session ? ["--resume", session] : []), "--model", model, ...level, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", ...mcp, "--strict-mcp-config"];
   }
-  const flags = ["--json", "-m", model, "-c", `model_reasoning_effort="${effort}"`, "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"];
+  const toml = (s: string) => JSON.stringify(s);
+  const mcp = toolsKey
+    ? [
+        ["mcp_servers.chess.command", toml(process.execPath)],
+        ["mcp_servers.chess.args", `[${toml(CHESS_MCP)}]`],
+        ["mcp_servers.chess.env", `{ AGENT_CHESS_KEY = ${toml(env.AGENT_CHESS_KEY)}, AGENT_CHESS_URL = ${toml(env.AGENT_CHESS_URL)} }`],
+        ["mcp_servers.chess.tool_timeout_sec", String(TOOL_TIMEOUT_S)],
+      ].flatMap(([k, v]) => ["-c", `${k}=${v}`])
+    : [];
+  const flags = ["--json", "-m", model, "-c", `model_reasoning_effort="${effort}"`, ...mcp, "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"];
   return session ? ["exec", "resume", session, ...flags, "-"] : ["exec", ...flags, "-C", ROOT, "-"];
 }
 
@@ -157,13 +182,23 @@ const confirmed = new Map<number, string>();
  * Start an agent's CLI in the background, carrying `session` on if given. Rejects if it can't be started.
  * Its OS start time is filled in on the returned record (and saved) a moment later.
  */
-export async function startAgent(o: { provider: string; model: string; effort: string; prompt: string; logName: string; session?: string; resumes?: number }): Promise<AgentProc> {
+export async function startAgent(o: {
+  provider: string;
+  model: string;
+  effort: string;
+  prompt: string;
+  logName: string;
+  session?: string;
+  resumes?: number;
+  /** The seat key, for an agent that plays through the chess MCP tools. */
+  chessTools?: string;
+}): Promise<AgentProc> {
   if (!isCli(o.provider)) throw new Error(`No CLI for provider ${o.provider}`);
   const c = command(o.provider);
   if (!c) throw new Error(`The ${o.provider === "codex" ? "Codex" : "Claude"} CLI isn't installed (or is turned off)`);
   // On Windows it runs under a small host that gives it a console with no window (see agentHost.mjs).
   const hosted = process.platform === "win32";
-  const argv = [...c.pre, ...args(o.provider, o.model, o.effort, o.session)];
+  const argv = [...c.pre, ...args(o.provider, o.model, o.effort, o.session, o.chessTools)];
   const dir = path.join(DATA, "agent-logs");
   mkdirSync(dir, { recursive: true });
   const log = path.join(dir, `${o.logName}.jsonl`);
@@ -173,6 +208,8 @@ export async function startAgent(o: { provider: string; model: string; effort: s
   // Started from inside a Claude Code session, the server would otherwise pass on that session's markers.
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
+  // A chess tool call blocks up to 5 minutes (`wait`): Claude must not give up on it sooner.
+  if (o.chessTools) env.MCP_TOOL_TIMEOUT = String(TOOL_TIMEOUT_S * 1000);
   const prompt = o.provider === "claudeAgent" && o.effort === "ultrathink" ? `ultrathink\n\n${o.prompt}` : o.prompt;
   let child: ChildProcess;
   try {
@@ -204,7 +241,7 @@ export async function startAgent(o: { provider: string; model: string; effort: s
       throw new Error(`The ${name} CLI didn't start${said ? `: ${said.replace(/^error: /, "")}` : ""}`);
     }
   }
-  const agent: AgentProc = { provider: o.provider, pid, log, offset, startedAt, ...(o.session && { session: o.session }), resumes: o.resumes ?? 0 };
+  const agent: AgentProc = { provider: o.provider, pid, log, offset, startedAt, ...(o.session && { session: o.session }), resumes: o.resumes ?? 0, ...(o.chessTools && { chessTools: true }) };
   processCreatedLater(pid, (created) => {
     agent.created = created;
     saveSeatsNow();

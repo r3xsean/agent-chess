@@ -4,6 +4,7 @@ import { Lobby } from "./pages/Lobby";
 import { PlayerPage } from "./pages/PlayerPage";
 import { TournamentPage } from "./pages/TournamentPage";
 import { AgentsPage } from "./pages/AgentsPage";
+import { ExperimentsPage } from "./pages/ExperimentsPage";
 import { NewGameModal, NewTournamentModal, PlayAgentModal } from "./components/NewGame";
 import { VideoPage } from "./video/VideoPage";
 import { useMeta } from "./api";
@@ -52,6 +53,7 @@ export function App() {
   else if (section === "player" && id) page = <PlayerPage id={id} />;
   else if (section === "tournament" && id) page = <TournamentPage id={id} />;
   else if (section === "agents") page = <AgentsPage model={id} query={new URLSearchParams(search)} />;
+  else if (section === "experiments") page = <ExperimentsPage query={new URLSearchParams(search)} />;
   else page = <Lobby local={local} onNewGame={() => setModal("game")} onPlay={() => setModal("play")} onNewTournament={() => setModal("tournament")} />;
 
   return (
@@ -69,6 +71,9 @@ export function App() {
           </a>
           <a className={`nav-item ${section === "agents" ? "active" : ""}`} href="#/agents" title="Agents">
             <span className="ico">🤖</span> <span className="lbl">Agents</span>
+          </a>
+          <a className={`nav-item ${section === "experiments" ? "active" : ""}`} href="#/experiments" title="Experiments">
+            <span className="ico">🔬</span> <span className="lbl">Experiments</span>
           </a>
           {extra && (
             <button

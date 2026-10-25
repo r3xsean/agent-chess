@@ -18,6 +18,8 @@ import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
 import { PlayerBar } from "../components/PlayerBar";
 import { PauseNotice } from "../components/PauseNotice";
+import { ExperimentNote } from "../components/SetupChip";
+import { isExperiment, seatSetup } from "../../../shared/seatSetup";
 import { MoveList } from "../components/MoveList";
 import { ThinkingFeed } from "../components/ThinkingFeed";
 import { Interviews } from "../components/Interviews";
@@ -602,6 +604,7 @@ export function GamePage({ id }: { id: string }) {
       belief={beliefPill(c)}
       clockMs={thinkMs(c)}
       active={playing && turn === c && !game.clockPause}
+      setup={isExperiment(game) ? seatSetup(game, c) : undefined}
     />
   );
   const agentName = agentSide ? sideName(game, agentSide) : "";
@@ -662,6 +665,7 @@ export function GamePage({ id }: { id: string }) {
 
       <div className="side-panel">
         {game.clockPause && <PauseNotice pause={game.clockPause} game={game} />}
+        {isExperiment(game) && <ExperimentNote game={game} />}
         <div className="tabs">
           {(
             [

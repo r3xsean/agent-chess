@@ -7,6 +7,7 @@ import { VARIANT_NAME, VARIANTS, type Variant } from "../../../shared/rules";
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName, Var960 } from "../components/PlayerName";
 import { PauseNotice } from "../components/PauseNotice";
+import { SetupChip } from "../components/SetupChip";
 
 
 export function PlayerCell({ p, rating, look, variant = "standard" }: { p: PlayerRef; rating?: number; look?: ModelLook; variant?: Variant }) {
@@ -64,9 +65,11 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
             <tr key={g.id} className="click" onClick={() => (location.hash = `#/game/${g.id}`)}>
               <td className="g-w">
                 <PlayerCell p={g.white} rating={ratings?.[g.variant][g.white.id]} variant={g.variant} />
+                <SetupChip setup={g.seats?.w} compact />
               </td>
               <td className="g-b">
                 <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings?.[g.variant][g.black.id]} variant={g.variant} />
+                <SetupChip setup={g.seats?.b} compact />
               </td>
               <td className="res g-res">
                 {g.clockPause ? <span className="pause-label">{phaseLabel(g)}</span> : g.result ?? <span style={{ color: "var(--green)" }}>{phaseLabel(g)}</span>}
@@ -299,8 +302,10 @@ export function Lobby({ local, onNewGame, onPlay, onNewTournament }: { local: bo
             {live.map((g) => (
               <a key={g.id} className={`live-card${g.clockPause ? " is-paused" : ""}`} href={`#/game/${g.id}`}>
                 <PlayerCell p={g.white} rating={ratings[g.variant][g.white.id]} variant={g.variant} />
+                <SetupChip setup={g.seats?.w} compact />
                 <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>vs{g.variant === "chess960" ? " · Chess960" : g.setOpening ? ` · Set: ${g.setOpening}` : ""}</div>
                 <PlayerCell p={g.black} look={sideLooks(g).b} rating={ratings[g.variant][g.black.id]} variant={g.variant} />
+                <SetupChip setup={g.seats?.b} compact />
                 <div style={{ fontSize: 13, color: g.clockPause ? "var(--pause-color)" : "var(--green)", fontWeight: 700 }}>
                   {phaseLabel(g)}
                   {!g.rated && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · unrated</span>}

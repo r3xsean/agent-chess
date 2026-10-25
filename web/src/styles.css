@@ -3000,3 +3000,41 @@ input[type="number"] {
 .compare .sort-btn { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
 .compare .sort-btn:hover, .compare .sort-btn:focus-visible { color: white; }
 .compare a.nm { color: var(--text); font-weight: 700; }
+
+/* Board-view experiment (shared/seatSetup.ts): seat badges, the game page's note, the set-up pickers, the Experiments page. */
+.setup-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
+.setup-chips.compact { display: flex; margin-top: 3px; }
+.setup-chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(120, 170, 255, 0.16);
+  color: #a9c8ff;
+  white-space: nowrap;
+}
+.setup-chip.plain { background: rgba(255, 255, 255, 0.08); color: var(--text-2); }
+.experiment-note {
+  margin: 10px 12px 2px;
+  padding: 10px 12px;
+  border: 1px solid #4a6aa0;
+  border-radius: 8px;
+  background: rgba(70, 110, 180, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.page > .experiment-note { margin: 0 0 14px; }
+.experiment-note .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.experiment-note .head a { font-size: 13px; color: #a9c8ff; }
+.experiment-note .row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; }
+.experiment-note .who { font-weight: 700; min-width: 0; }
+.experiment-note .small, .exp-table small { font-size: 12px; }
+.setup-pick { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+.setup-reread { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.exp-table td.num { white-space: nowrap; }
+.exp-table .delta { display: block; font-size: 11px; font-weight: 700; color: var(--muted); }
+.exp-table .delta.good { color: var(--green-hover); }
+.exp-table .delta.bad { color: #ff8a7a; }
+.exp-model { padding: 10px 14px; margin-bottom: 12px; }
+.exp-model h3 { margin: 0 0 6px; }

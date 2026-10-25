@@ -6,6 +6,8 @@ import { formatScore } from "../shared/evalmath";
 import { materialInfo } from "../shared/material";
 import { board, isRated, playerOf, ratingOf, startFenOf } from "./game";
 import { rivalry, seriesLine } from "./rivalry";
+import { seatSetup } from "../shared/seatSetup";
+import { writeBoardImage } from "./boardImage";
 
 const colorName = (c: Color) => (c === "w" ? "White" : "Black");
 const other = (c: Color): Color => (c === "w" ? "b" : "w");
@@ -112,6 +114,8 @@ export function turnBrief(g: Game, color: Color): string {
   const last = g.moves[g.moves.length - 1];
   const moveNo = fen.split(" ")[5];
   const chess960 = variantOf(g) === "chess960";
+  const setup = seatSetup(g, color);
+  const view = setup.view;
   const out = [
     toMove === color ? "=== YOUR MOVE ===" : "=== POSITION STATUS ===",
     `Game: ${g.id}`,
@@ -124,7 +128,7 @@ export function turnBrief(g: Game, color: Color): string {
     "The CURRENT POSITION below is authoritative and supersedes earlier board snapshots. Your earlier plans and calculated variations are hypothetical unless that continuation was actually played, as recorded in ACTUAL GAME HISTORY.",
     "",
     "=== ACTUAL GAME HISTORY ===",
-    ...(chess960 ? [`Starting FEN: ${startFenOf(g)}`] : []),
+    ...(chess960 && view !== "image" ? [`Starting FEN: ${startFenOf(g)}`] : []),
     "These are all moves actually played, from the starting position (SAN):",
     moveList(g.moves),
     ...(g.setOpening ? [`(The first ${g.setOpening.plies} of them were set by the arena before either player had a turn.)`] : []),
@@ -134,15 +138,27 @@ export function turnBrief(g: Game, color: Color): string {
       : "Last move: none — the game begins.",
     "",
     "=== CURRENT POSITION ===",
-    `The ${g.options?.pieceList ? "FEN, piece list, and diagram" : "FEN and diagram"} describe the same current position.`,
-    `FEN: ${fen}`,
-    "",
-    ...(g.options?.pieceList ? [pieceList(fen), ""] : []),
-    "Board orientation: White at the bottom, regardless of your color.",
-    `You are ${colorName(color)}; your pieces are ${color === "w" ? "UPPERCASE" : "lowercase"}.`,
-    "K/k = king; Q/q = queen; R/r = rook; B/b = bishop; N/n = knight; P/p = pawn.",
-    "White = UPPERCASE; Black = lowercase; '.' = empty.",
-    asciiBoard(fen, "w"),
+    ...(view === "image"
+      ? [`The board picture is the current position, from your side: your ${colorName(color)} pieces at the bottom.`]
+      : [
+          `The ${g.options?.pieceList ? "FEN, piece list, and diagram" : "FEN and diagram"}${view === "added" ? ", and the board picture," : ""} describe the same current position.`,
+          `FEN: ${fen}`,
+          "",
+          ...(g.options?.pieceList ? [pieceList(fen), ""] : []),
+          "Board orientation: White at the bottom, regardless of your color.",
+          `You are ${colorName(color)}; your pieces are ${color === "w" ? "UPPERCASE" : "lowercase"}.`,
+          "K/k = king; Q/q = queen; R/r = rook; B/b = bishop; N/n = knight; P/p = pawn.",
+          "White = UPPERCASE; Black = lowercase; '.' = empty.",
+          asciiBoard(fen, "w"),
+        ]),
+    ...(view !== "text"
+      ? [
+          "",
+          `The board picture shows it from your side (your ${colorName(color)} pieces at the bottom), with the last move's two squares tinted. Send the check code at its top as "seen" with your move.`,
+          `BOARD PICTURE: ${writeBoardImage(g, color)}`,
+        ]
+      : []),
+    ...(setup.reread && toMove === color ? ["", 'Before you choose your move, read the position again square by square and write out every piece of both sides as "position" with your move. It is checked against the board first.'] : []),
     "",
     "=== GAME NOTICES ===",
     ...(chess960 ? [`Chess960 castling rules (from the starting setup): ${castlingNote(startFenOf(g))}`] : []),
@@ -177,14 +193,18 @@ function seriesNow(g: Game, color: Color): string {
  * or replay headline), so each game stands on its own.
  */
 export function pregameBrief(g: Game, color: Color): string {
+  // A seat shown only the picture sees no text board before the game either.
+  const imageOnly = seatSetup(g, color).view === "image";
   const out = [
     "=== PRE-GAME ===",
     `You are ${colorName(color)}: ${describePlayer(g, color)}`,
     `Opponent (${colorName(other(color))}): ${describePlayer(g, other(color))}`,
     ...(isHuman(playerOf(g, other(color))) ? ["Your opponent is a human, playing their own moves on the website."] : []),
     ...(isRated(g) ? [] : ["This game is unrated: the result won't change either player's rating."]),
-    ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g)] : []),
-    ...(g.setOpening ? ["", setOpeningNote(g), "The position you take over from (White at the bottom):", asciiBoard(g.moves[g.moves.length - 1].fenAfter, "w")] : []),
+    ...(variantOf(g) === "chess960" ? ["", ...chess960Intro(g, imageOnly)] : []),
+    ...(g.setOpening
+      ? ["", setOpeningNote(g), ...(imageOnly ? ["You'll see the position you take over from in your board picture."] : ["The position you take over from (White at the bottom):", asciiBoard(g.moves[g.moves.length - 1].fenAfter, "w")])]
+      : []),
     "",
     'INTERVIEWER: "Welcome to the board. How are you feeling about this matchup, and what\'s your plan for the game?"',
     "Answer in your own voice, under 800 characters, with: interview -  (text on standard input)",
@@ -193,12 +213,11 @@ export function pregameBrief(g: Game, color: Color): string {
 }
 
 /** What a player needs to know before a Chess960 game: the shuffled back rank, and how castling works. */
-export function chess960Intro(g: Game): string[] {
+export function chess960Intro(g: Game, imageOnly = false): string[] {
   const fen = startFenOf(g);
   return [
     `This game is CHESS960 (Fischer Random), start position #${g.chess960}. Both sides use the same back-rank arrangement on their respective home ranks. Ordinary opening sequences may not apply to this setup. All other rules are normal.`,
-    "Starting position (White at the bottom):",
-    asciiBoard(fen, "w"),
+    ...(imageOnly ? ["You'll see the starting position in your board picture."] : ["Starting position (White at the bottom):", asciiBoard(fen, "w")]),
     castlingNote(fen),
     'To castle, send "O-O" or "O-O-O".',
   ];

@@ -122,9 +122,23 @@ export interface MoveRecord {
   offeredDraw: boolean;
   thinkMs: number;
   ts: number;
+  /** Submissions turned down before this move for its seat's setup (shared/seatSetup.ts): no picture code, or a misread position. */
+  checks?: TurnChecks;
   analysis?: MoveAnalysis;
   /** Played by the arena from a set opening (Game.setOpening), not chosen by either player: no player stat counts it. */
   supplied?: true;
+}
+
+/** How a seat is shown the board, and whether it must write the position out each move (shared/seatSetup.ts). */
+export interface SeatSetup {
+  view: "text" | "added" | "image";
+  reread: boolean;
+}
+
+/** Turns refused before the move went in: `code` without the board picture's check code, `position` with a position that didn't match the board. */
+export interface TurnChecks {
+  code: number;
+  position: number;
 }
 
 /** A turn submitted with an illegal move: the move was rejected, but the thinking behind it stays. */
@@ -185,6 +199,8 @@ export interface Game {
   pendingIllegal: Record<Color, string[]>;
   /** The full illegal attempts this turn, alongside `pendingIllegal` (missing on older games). */
   pendingTries?: Record<Color, IllegalTry[]>;
+  /** This turn's refused submissions so far (MoveRecord.checks), until the move goes in. */
+  pendingChecks?: Partial<Record<Color, TurnChecks>>;
   turnStartedAt: number | null;
   /** Freeze thinking time during a provider outage; persisted across restarts. */
   clockPause?: GamePause;
@@ -205,7 +221,13 @@ export interface Game {
   /** All post-game duties completed; used for tournament breaks. */
   finishedAt?: number;
   /** What the agents' briefing includes. Fixed at creation so a running game's conditions never change. */
-  options?: { pieceList?: boolean; /** false: the result moves no rating and no leaderboard record. */ rated?: boolean };
+  options?: {
+    pieceList?: boolean;
+    /** false: the result moves no rating and no leaderboard record. */
+    rated?: boolean;
+    /** Each seat's experiment toggles (shared/seatSetup.ts); a seat without one sees the text briefing as always. */
+    seats?: Partial<Record<Color, SeatSetup>>;
+  };
   /** When the orchestrator delegated each seat (so a second orchestrator run never double-launches). */
   launched?: Partial<Record<SeatRole, number>>;
   /** Seats the server launched itself, each in its own T3 thread (the server watches these; an orchestrator watches the rest). */
@@ -535,7 +557,13 @@ export interface Tournament {
    * double round-robin's return game); an opening id plays that one in every game.
    */
   openings?: string;
-  pairings: { white: string; black: string; gameId?: string; chess960?: number; opening?: string }[];
+  /**
+   * The experiment's toggles (shared/seatSetup.ts): `a` for every player, or with `b` too, a split: in each
+   * pairing one side plays `a` and the other `b` (the pairing's `aSide`). A double round-robin's return game
+   * gives `a` to the other player, so each model plays every opponent once under each.
+   */
+  setups?: { a: SeatSetup; b?: SeatSetup };
+  pairings: { white: string; black: string; gameId?: string; chess960?: number; opening?: string; aSide?: Color }[];
   status: "running" | "finished";
   /** When it was cancelled (finished early: the pairings without a game never start). */
   cancelledAt?: number;

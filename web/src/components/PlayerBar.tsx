@@ -1,4 +1,5 @@
-import type { Color, PlayerRef } from "../../../shared/types";
+import type { Color, PlayerRef, SeatSetup } from "../../../shared/types";
+import { SetupChip } from "./SetupChip";
 import type { MaterialInfo } from "../../../shared/material";
 import type { ModelLook } from "../../../shared/looks";
 import { PlayerAvatar, PlayerName, Var960 } from "./PlayerName";
@@ -50,6 +51,8 @@ export function PlayerBar(props: {
   belief?: { text: string; kind: "off" | "real" | "plain"; color: string; title: string } | null;
   clockMs: number;
   active: boolean;
+  /** The seat's experiment toggles, shown as badges by its name. */
+  setup?: SeatSetup;
   onClick?: () => void;
 }) {
   return (
@@ -69,6 +72,7 @@ export function PlayerBar(props: {
             </span>
           )}
           {props.status && <span className={`status-pill ${props.status.kind}`}>{props.status.text}</span>}
+          <SetupChip setup={props.setup} />
         </div>
         <div className="player-sub">
           <Captured info={props.material} color={props.color} />

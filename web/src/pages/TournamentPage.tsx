@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { api, ratingsOf, useFetch, useMeta, useStream, type Lobby, type TournamentPage as Data } from "../api";
-import type { PlayerRef, Tournament } from "../../../shared/types";
+import type { PlayerRef, SeatSetup, Tournament } from "../../../shared/types";
 import { sideLooks } from "../../../shared/looks";
 import { openingById } from "../../../shared/openingSuite";
 import { GamesTable, PlayerCell } from "./Lobby";
 import { SummonInfo } from "../components/NewGame";
+import { SetupText } from "../components/SetupChip";
+import { pairingSetups } from "../../../shared/seatSetup";
 
 export function TournamentPage({ id }: { id: string }) {
   const lobby = useStream<Lobby>("/api/lobby/stream");
@@ -44,6 +46,24 @@ export function TournamentPage({ id }: { id: string }) {
         {t.openings ? (t.openings === "each" ? " · set openings (each pairing its own)" : ` · set opening: ${openingById(t.openings)?.name ?? t.openings}`) : ""}
         {t.rated === false ? " · unrated" : ""} · {t.status}
       </p>
+      {t.setups && (
+        <div className="experiment-note">
+          <div className="head">
+            <b>🔬 Experiment</b>
+            <a href={`#/experiments?scope=${encodeURIComponent(`t:${t.id}`)}`}>Compare results →</a>
+          </div>
+          {t.setups.b ? (
+            <p className="muted small" style={{ margin: 0 }}>
+              Split: in every game one side plays <SetupText setup={t.setups.a} /> and the other <SetupText setup={t.setups.b} />.
+              {t.doubleRound ? " Each player gets each once against every opponent." : ""}
+            </p>
+          ) : (
+            <p className="muted small" style={{ margin: 0 }}>
+              Every player: <SetupText setup={t.setups.a} />
+            </p>
+          )}
+        </div>
+      )}
       {meta && !meta.publicMode && <TournamentSettings key={`${t.id}:${t.boards}:${t.breakHours}`} tournament={t} />}
       {t.status === "running" && (
         <div className="card" style={{ padding: 14 }}>
@@ -53,7 +73,7 @@ export function TournamentPage({ id }: { id: string }) {
       {!!data.next?.length && (
         <NextUp
           tournamentId={t.id}
-          matchups={data.next.map((i) => t.pairings[i]).map((p) => [byId.get(p.white)!, byId.get(p.black)!] as const)}
+          matchups={data.next.map((i) => t.pairings[i]).map((p) => [byId.get(p.white)!, byId.get(p.black)!, t.setups?.b ? pairingSetups(t, p) : undefined] as const)}
           breakUntil={data.breakUntil}
           canSkip={!!meta && !meta.publicMode}
         />
@@ -93,14 +113,17 @@ export function TournamentPage({ id }: { id: string }) {
           <tbody>
             {t.pairings.map((p, i) => {
               const g = games[i];
+              const setups = t.setups?.b ? pairingSetups(t, p) : undefined;
               return (
                 <tr key={i} className={g ? "click" : ""} onClick={() => g && (location.hash = `#/game/${g.id}`)}>
                   <td style={{ color: "var(--muted)" }}>{i + 1}</td>
                   <td>
                     <PlayerCell p={byId.get(p.white)!} />
+                    {setups && <SetupText setup={setups.w} block />}
                   </td>
                   <td>
                     <PlayerCell p={byId.get(p.black)!} look={sideLooks({ white: byId.get(p.white)!, black: byId.get(p.black)! }).b} />
+                    {setups && <SetupText setup={setups.b} block />}
                   </td>
                   <td className="res">
                     {g ? g.result ?? <span style={{ color: "var(--green)" }}>{g.phase}</span> : data.next?.includes(i) ? <span style={{ color: "#f7c631" }}>next</span> : <span style={{ color: "var(--muted)" }}>upcoming</span>}
@@ -118,7 +141,17 @@ export function TournamentPage({ id }: { id: string }) {
 }
 
 /** The game(s) that start next, and during a break, when it ends and a button to end it now. */
-function NextUp({ tournamentId, matchups, breakUntil, canSkip }: { tournamentId: string; matchups: (readonly [PlayerRef, PlayerRef])[]; breakUntil?: number; canSkip: boolean }) {
+function NextUp({
+  tournamentId,
+  matchups,
+  breakUntil,
+  canSkip,
+}: {
+  tournamentId: string;
+  matchups: (readonly [PlayerRef, PlayerRef, Record<"w" | "b", SeatSetup> | undefined])[];
+  breakUntil?: number;
+  canSkip: boolean;
+}) {
   const [state, setState] = useState<"idle" | "sending" | "error">("idle");
   const [err, setErr] = useState("");
   const left = breakUntil ? Math.max(0, breakUntil - Date.now()) : 0;
@@ -129,11 +162,17 @@ function NextUp({ tournamentId, matchups, breakUntil, canSkip }: { tournamentId:
       <h2 style={{ margin: "0 0 8px" }}>Next {matchups.length > 1 ? `${matchups.length} games` : "game"}</h2>
       <table className="table">
         <tbody>
-          {matchups.map(([w, b], i) => (
+          {matchups.map(([w, b, setups], i) => (
             <tr key={i}>
-              <td><PlayerCell p={w} /></td>
+              <td>
+                <PlayerCell p={w} />
+                {setups && <SetupText setup={setups.w} block />}
+              </td>
               <td style={{ color: "var(--muted)" }}>vs</td>
-              <td><PlayerCell p={b} look={sideLooks({ white: w, black: b }).b} /></td>
+              <td>
+                <PlayerCell p={b} look={sideLooks({ white: w, black: b }).b} />
+                {setups && <SetupText setup={setups.b} block />}
+              </td>
             </tr>
           ))}
         </tbody>

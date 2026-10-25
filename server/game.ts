@@ -2,7 +2,10 @@ import { randomBytes } from "node:crypto";
 import { currentThinkMs } from "../shared/thinkingClock";
 import { playerActed } from "./pauses";
 import { EventEmitter } from "node:events";
-import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, Tournament } from "../shared/types";
+import type { CalcLine, Color, Game, MoveRecord, PlayerRef, Result, SeatRole, SeatSetup, Tournament } from "../shared/types";
+import { isNormalSetup, seatSetup } from "../shared/seatSetup";
+import { boardCode } from "./boardImage";
+import { codeMatches, positionMatches, positionShapeError } from "./turnChecks";
 import { EnginePool } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { lookupOpening } from "./openings";
@@ -72,7 +75,15 @@ export function createGame(opts: {
   chess960?: number;
   /** A set opening (shared/openingSuite.ts) the arena plays before the players take over. */
   opening?: string;
+  /** Each seat's experiment toggles (shared/seatSetup.ts); a human seat always sees the website's board. */
+  seats?: Partial<Record<Color, SeatSetup>>;
 }): Game {
+  const seats = Object.fromEntries(
+    (["w", "b"] as Color[]).flatMap((c) => {
+      const s = opts.seats?.[c];
+      return s && !isNormalSetup(s) && !isHuman(c === "w" ? opts.white : opts.black) ? [[c, { view: s.view, reread: s.reread }]] : [];
+    }),
+  ) as Partial<Record<Color, SeatSetup>>;
   const set = opts.opening ? openingById(opts.opening) : undefined;
   if (opts.opening && !set) throw new ActionError(`No such set opening: ${opts.opening}`);
   if (set && opts.chess960 !== undefined) throw new ActionError("A set opening is for standard chess, not Chess960.");
@@ -98,7 +109,7 @@ export function createGame(opts: {
     playStartedAt: null,
     interviewsCompleteAt: null,
     ...(opts.chess960 !== undefined ? { opening: { eco: "960", name: `Chess960 #${opts.chess960}` } } : {}),
-    options: { pieceList: true, rated: opts.rated ?? true },
+    options: { pieceList: true, rated: opts.rated ?? true, ...(Object.keys(seats).length ? { seats } : {}) },
     classifierVersion: CLASSIFIER_VERSION,
   };
   if (set) playSetOpening(g, set);
@@ -456,6 +467,33 @@ export interface TurnInput {
   eval: string | number;
   lines?: { moves: string; note?: string }[];
   offerDraw?: boolean;
+  /** The board picture's check code, from a seat shown one (shared/seatSetup.ts). */
+  seen?: string;
+  /** Every piece on the board as the player reads it, from a seat that must write it out. */
+  position?: unknown;
+}
+
+/**
+ * A seat's experiment toggles, checked before its move is: the code of the picture it was shown, then its own
+ * list of the pieces. A refusal isn't an illegal move: it's counted for the experiment (the Experiments page's rates), never shown with the game.
+ */
+function checkSetup(g: Game, color: Color, input: TurnInput) {
+  const setup = seatSetup(g, color);
+  const refuse = (kind: "code" | "position", why: string) => {
+    const now = g.pendingChecks?.[color] ?? { code: 0, position: 0 };
+    g.pendingChecks = { ...g.pendingChecks, [color]: { ...now, [kind]: now[kind] + 1 } };
+    playerActed(g, color);
+    saveGameNow(g);
+    throw new ActionError(why);
+  };
+  if (setup.view !== "text" && !codeMatches(input.seen, boardCode(g, color)))
+    refuse("code", `Not taken: "seen" must be the check code at the top of this turn's board picture (it changes every move). Look at the picture that came with your position${input.seen ? ", not an earlier one," : ""} and send the move again with its code.`);
+  if (setup.reread) {
+    const shape = positionShapeError(input.position);
+    if (shape) throw new ActionError(`Not taken: ${shape}`);
+    if (!positionMatches(board(g).fen(), input.position))
+      refuse("position", "Not taken: your position doesn't match the board. Read the board again square by square, every piece and pawn of both sides, then send the move again with the corrected position.");
+  }
 }
 
 /** Strip move numbers and annotation glyphs a model might add. */
@@ -531,6 +569,7 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
   const selfEval = human ? null : parseEval(input.eval ?? "");
   if (selfEval === null && !human) throw new ActionError('`eval` is required: your evaluation from White\'s point of view, e.g. "+0.8", "-1.5", "0.0", "#3", "-#2".');
   if (!input.move || typeof input.move !== "string") throw new ActionError("`move` is required.");
+  if (!human) checkSetup(g, color, input);
 
   const fenBefore = c.fen();
   const mv = tryMove(c, input.move);
@@ -582,9 +621,11 @@ export function submitTurn(g: Game, color: Color, input: TurnInput): MoveRecord 
     offeredDraw: !!input.offerDraw,
     thinkMs,
     ts: now,
+    ...(g.pendingChecks?.[color] && { checks: g.pendingChecks[color] }),
   };
   g.pendingIllegal[color] = [];
   if (g.pendingTries) g.pendingTries[color] = [];
+  if (g.pendingChecks) delete g.pendingChecks[color];
   g.moves.push(rec);
   g.drawOffer = input.offerDraw ? color : null;
   g.turnStartedAt = now;

@@ -10,6 +10,7 @@ import { agentWebhook, orchestratorAvailable, summonAvailable, triggerAgent, tri
 import { bootAt } from "./heartbeat";
 import { agentAlive, agentOutcome, agentPrompt, anyAgentCli, canRunAgent, limitWhileRunning, resumePrompt, startAgent, stopAgent, type AgentOutcome, type AgentProc } from "./agents";
 import { applyUsageLimit, lastActionAt, usageLimitPauses } from "./usageLimits";
+import { isExperiment } from "../shared/seatSetup";
 
 /*
  * Launching agents. The server starts a player's agent itself, in the background through
@@ -57,7 +58,9 @@ async function launchDirect(g: Game, seat: SeatRole): Promise<boolean> {
   saveGameNow(g);
   try {
     if (local) {
-      const agent = await startAgent({ ...who, prompt: agentPrompt(key), logName: `${g.id}-${seat}-${relaunches}` });
+      // An experiment game's players play through the chess tools, which bring the board picture with each turn.
+      const tools = seat !== "d" && isExperiment(g);
+      const agent = await startAgent({ ...who, prompt: agentPrompt(key, tools), logName: `${g.id}-${seat}-${relaunches}`, ...(tools && { chessTools: key }) });
       // The seat went, or was done with, while its agent started (the game aborted): nothing to hand on.
       if (!seatKeys[key] || !needsAgent(g, seat)) {
         stopAgent(agent);
@@ -301,7 +304,15 @@ function agentStopped(g: Game, seat: SeatRole, l: { at: number; relaunches: numb
     outcomes.delete(id);
     resuming.add(id);
     const who = whoFor(g, seat);
-    startAgent({ ...who, provider: agent.provider, prompt: resumePrompt(key), logName: path.basename(agent.log, ".jsonl"), session: out.session, resumes: resumes + 1 })
+    startAgent({
+      ...who,
+      provider: agent.provider,
+      prompt: resumePrompt(key, agent.chessTools),
+      logName: path.basename(agent.log, ".jsonl"),
+      session: out.session,
+      resumes: resumes + 1,
+      ...(agent.chessTools && { chessTools: key }),
+    })
       .then((next) => {
         // Only if the seat is still this run's and still needs it (nothing replaced it, the game didn't end).
         if (seatKeys[key]?.agent !== agent || !needsAgent(g, seat)) return stopAgent(next);

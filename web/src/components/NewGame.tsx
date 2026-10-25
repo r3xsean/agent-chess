@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { Game, ModelOption, PlayerRef, Tournament } from "../../../shared/types";
+import type { Game, ModelOption, PlayerRef, SeatSetup, Tournament } from "../../../shared/types";
+import { isNormalSetup, NORMAL_SETUP, setupKey } from "../../../shared/seatSetup";
 import { api, useMeta, type LaunchSpec } from "../api";
 import { SeatPicker, useRatings, type Ratings, type SeatChoice } from "./ModelPicker";
 import { PlayerAvatar } from "./PlayerName";
@@ -101,6 +102,93 @@ export function RatedOption({ value, onChange, tournament }: { value: boolean; o
     />
   );
 }
+
+/** One seat's experiment toggles: how it sees the board, and whether it writes the position out each move. */
+function SetupPicker({ label, value, onChange }: { label: React.ReactNode; value: SeatSetup; onChange: (v: SeatSetup) => void }) {
+  return (
+    <div className="setup-pick">
+      <span className="mp-label">{label}</span>
+      <div className="segmented" role="radiogroup" aria-label="How it sees the board">
+        {(
+          [
+            ["text", "📝 Text"],
+            ["added", "📷 Text + image"],
+            ["image", "🖼️ Image only"],
+          ] as const
+        ).map(([k, l]) => (
+          <button key={k} type="button" role="radio" aria-checked={value.view === k} className={value.view === k ? "on" : ""} onClick={() => onChange({ ...value, view: k })}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <label className="setup-reread">
+        <Switch on={value.reread} onChange={(reread) => onChange({ ...value, reread })} label="Re-read the board" />
+        <span>🔁 Re-read: write out every piece before each move (checked against the board)</span>
+      </label>
+    </div>
+  );
+}
+
+const SETUP_NOTE =
+  "📷 adds a picture of the board from the player's side each turn; 🖼️ gives only the picture. Either way the player must send the picture's check code with each move, so it has to look. Experiment games' agents play through chess tools that bring the picture with each turn.";
+
+/** A game's experiment: each seat's toggles. Off: both see the text briefing as always. */
+export interface GameSetupChoice {
+  on: boolean;
+  w: SeatSetup;
+  b: SeatSetup;
+}
+
+export function GameSetupOption({ value, onChange, names }: { value: GameSetupChoice; onChange: (v: GameSetupChoice) => void; names: { w: string; b: string } }) {
+  return (
+    <OptionRow icon="🔬" title="Board-view experiment" on={value.on} onChange={(on) => onChange({ ...value, on })} note={value.on ? SETUP_NOTE : "Both players see the board as text (FEN, piece list and diagram), as always."}>
+      <SetupPicker label={<>♔ White · {names.w}</>} value={value.w} onChange={(w) => onChange({ ...value, w })} />
+      <SetupPicker label={<>♚ Black · {names.b}</>} value={value.b} onChange={(b) => onChange({ ...value, b })} />
+    </OptionRow>
+  );
+}
+
+const gameSetupBody = (v: GameSetupChoice) => (v.on ? { w: v.w, b: v.b } : undefined);
+
+/** A tournament's experiment: one setup for everyone, or a split, `a` against `b` in every pairing. */
+export interface TournamentSetupChoice {
+  on: boolean;
+  split: boolean;
+  a: SeatSetup;
+  b: SeatSetup;
+}
+
+export function TournamentSetupOption({ value, onChange, double }: { value: TournamentSetupChoice; onChange: (v: TournamentSetupChoice) => void; double: boolean }) {
+  return (
+    <OptionRow icon="🔬" title="Board-view experiment" on={value.on} onChange={(on) => onChange({ ...value, on })} note={value.on ? SETUP_NOTE : "Every player sees the board as text (FEN, piece list and diagram), as always."}>
+      <div className="mp">
+        <span className="mp-label">Who gets it</span>
+        <div className="segmented">
+          <button type="button" className={value.split ? "on" : ""} onClick={() => onChange({ ...value, split: true })}>
+            Split: A vs B
+          </button>
+          <button type="button" className={!value.split ? "on" : ""} onClick={() => onChange({ ...value, split: false })}>
+            Everyone the same
+          </button>
+        </div>
+        <small className="hint">
+          {value.split
+            ? double
+              ? "In every game one side plays A and the other B. Each pair plays once each way, so every model plays each opponent once under A and once under B, and plays A as White as often as Black (as near as the numbers allow)."
+              : "In every game one side plays A and the other B, each model about half its games under each. A double round-robin balances it exactly per opponent."
+            : "Every player plays every game under A."}
+        </small>
+      </div>
+      <SetupPicker label={value.split ? "Setup A" : "Setup"} value={value.a} onChange={(a) => onChange({ ...value, a })} />
+      {value.split && <SetupPicker label="Setup B" value={value.b} onChange={(b) => onChange({ ...value, b })} />}
+    </OptionRow>
+  );
+}
+
+const tournamentSetupBody = (v: TournamentSetupChoice) => (v.on ? { a: v.a, ...(v.split ? { b: v.b } : {}) } : undefined);
+/** On, but nothing to compare: every side would play the normal text briefing anyway. */
+const tournamentSetupEmpty = (v: TournamentSetupChoice) => v.on && isNormalSetup(v.a) && (!v.split || isNormalSetup(v.b));
+const tournamentSetupSame = (v: TournamentSetupChoice) => v.on && v.split && setupKey(v.a) === setupKey(v.b);
 
 /** Chess960 on or off; empty position = a random one (0–959) for each game. */
 export interface Chess960Choice {
@@ -416,8 +504,8 @@ function SeatCard({ title, children, className = "" }: { title: React.ReactNode;
 }
 
 /** The settings at a glance, for the footer. */
-const summary = (rated: boolean, c960: Chess960Choice, opening: OpeningChoice) =>
-  [rated ? "Rated" : "Unrated", c960.on ? "Chess960" : opening.on ? "Set opening" : "Standard chess"].join(" · ");
+const summary = (rated: boolean, c960: Chess960Choice, opening: OpeningChoice, experiment = false) =>
+  [rated ? "Rated" : "Unrated", c960.on ? "Chess960" : opening.on ? "Set opening" : "Standard chess", ...(experiment ? ["🔬 Experiment"] : [])].join(" · ");
 
 const Err = ({ text }: { text: string }) => (text ? <p className="form-err" role="alert">{text}</p> : null);
 
@@ -428,6 +516,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
+  const [setup, setSetup] = useState<GameSetupChoice>({ on: false, w: { view: "added", reread: false }, b: NORMAL_SETUP });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
@@ -435,6 +524,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState("");
   if (!meta) return null;
   const same = idOf(white) === idOf(black);
+  const experiment = setup.on && !(isNormalSetup(setup.w) && isNormalSetup(setup.b));
   const ok = !same && chess960Valid(c960);
   const swap = () => (setWhite(black), setBlack(white));
   const random = () => {
@@ -446,7 +536,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr("");
     try {
-      const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, rated, chess960: chess960Body(c960), opening: openingBody(opening, c960) });
+      const r = await api<{ game: Game; launch: LaunchSpec }>("/api/games", { white, black, rated, chess960: chess960Body(c960), opening: openingBody(opening, c960), seats: gameSetupBody(setup) });
       setCreated(r.game.id);
     } catch (e) {
       setErr(errText(e));
@@ -467,7 +557,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <span className="foot-note">{same ? <span className="warn">Both seats are the same player — change the model or effort.</span> : summary(rated, c960, opening)}</span>
+          <span className="foot-note">{same ? <span className="warn">Both seats are the same player — change the model or effort.</span> : summary(rated, c960, opening, experiment)}</span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
@@ -506,6 +596,7 @@ export function NewGameModal({ onClose }: { onClose: () => void }) {
             names={same ? null : { w: refOf(meta.models, white).modelLabel, b: refOf(meta.models, black).modelLabel }}
           />
         )}
+        <GameSetupOption value={setup} onChange={setSetup} names={{ w: refOf(meta.models, white).modelLabel, b: refOf(meta.models, black).modelLabel }} />
         <RatedOption value={rated} onChange={setRated} />
       </div>
       <Err text={err} />
@@ -672,6 +763,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
+  const [setup, setSetup] = useState<TournamentSetupChoice>({ on: false, split: true, a: { view: "added", reread: false }, b: NORMAL_SETUP });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
@@ -679,6 +771,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState("");
   if (!meta) return null;
   const n = seats.length;
+  const setupBad = tournamentSetupEmpty(setup) || tournamentSetupSame(setup);
   const games = ((n * (n - 1)) / 2) * (double ? 2 : 1);
   const maxBoards = Math.max(1, Math.floor(n / 2));
   const board = Math.min(boards, maxBoards);
@@ -688,7 +781,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
   seats.forEach((s, i) => !firstOf.has(idOf(s)) && firstOf.set(idOf(s), i));
   const dupes = seats.filter((s, i) => firstOf.get(idOf(s)) !== i).length;
   const breakBad = !(breakHours >= 0 && breakHours <= 8760);
-  const ok = dupes === 0 && n >= 2 && !breakBad && name.trim() !== "";
+  const ok = dupes === 0 && n >= 2 && !breakBad && !setupBad && name.trim() !== "";
   // A player is a model and effort, so the new seat takes a model not seated yet.
   const addSeat = () => {
     const m = meta.models.find((x) => !seats.some((s) => s.model === x.model)) ?? meta.models[0];
@@ -700,7 +793,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
     setErr("");
     try {
       const openings = !c960.on && opening.on ? opening.pick || "each" : undefined;
-      const t = await api<Tournament>("/api/tournaments", { name: name.trim(), players: seats, doubleRound: double, rated, chess960: c960.on, openings, boards: board || undefined, breakHours });
+      const t = await api<Tournament>("/api/tournaments", { name: name.trim(), players: seats, doubleRound: double, rated, chess960: c960.on, openings, boards: board || undefined, breakHours, setups: tournamentSetupBody(setup) });
       setCreated(t.id);
     } catch (e) {
       setErr(errText(e));
@@ -724,9 +817,11 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
           <span className="foot-note">
             {dupes ? (
               <span className="warn">Two seats are the same player — change the model or effort.</span>
+            ) : setupBad ? (
+              <span className="warn">{tournamentSetupSame(setup) ? "Setups A and B are the same: change one, or play everyone the same." : "Pick a setup other than plain text, or turn the experiment off."}</span>
             ) : (
               <>
-                <b>{n}</b> players · <b>{games}</b> games · <b>{rounds}</b> rounds · {summary(rated, c960, opening)}
+                <b>{n}</b> players · <b>{games}</b> games · <b>{rounds}</b> rounds · {summary(rated, c960, opening, setup.on)}
               </>
             )}
           </span>
@@ -830,6 +925,7 @@ export function NewTournamentModal({ onClose }: { onClose: () => void }) {
       <div className="opt-list">
         <Chess960Option value={c960} onChange={setC960} tournament />
         {!c960.on && <SetOpeningOption value={opening} onChange={setOpening} tournament />}
+        <TournamentSetupOption value={setup} onChange={setSetup} double={double} />
         <RatedOption value={rated} onChange={setRated} tournament />
       </div>
       <Err text={err} />
