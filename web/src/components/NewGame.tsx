@@ -150,6 +150,20 @@ export function GameSetupOption({ value, onChange, names }: { value: GameSetupCh
 
 const gameSetupBody = (v: GameSetupChoice) => (v.on ? { w: v.w, b: v.b } : undefined);
 
+/** Against a person: only the agent's toggles (you always see the website's board). */
+export interface AgentSetupChoice {
+  on: boolean;
+  setup: SeatSetup;
+}
+
+export function AgentSetupOption({ value, onChange, name }: { value: AgentSetupChoice; onChange: (v: AgentSetupChoice) => void; name: string }) {
+  return (
+    <OptionRow icon="🔬" title="Board-view experiment" on={value.on} onChange={(on) => onChange({ ...value, on })} note={value.on ? SETUP_NOTE : "The agent sees the board as text (FEN, piece list and diagram), as always."}>
+      <SetupPicker label={<>🤖 {name}</>} value={value.setup} onChange={(setup) => onChange({ ...value, setup })} />
+    </OptionRow>
+  );
+}
+
 /** A tournament's experiment: one setup for everyone, or a split, `a` against `b` in every pairing. */
 export interface TournamentSetupChoice {
   on: boolean;
@@ -613,12 +627,14 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
   const [rated, setRated] = useState(true);
   const [c960, setC960] = useState<Chess960Choice>({ on: false, position: "" });
   const [opening, setOpening] = useState<OpeningChoice>({ on: false, pick: "" });
+  const [setup, setSetup] = useState<AgentSetupChoice>({ on: false, setup: { view: "added", reread: false } });
   // Chess960 is rated apart: with it on, every rating shown is the Chess960 one.
   const ratings = useRatings(c960.on ? "chess960" : "standard");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
   if (!meta) return null;
+  const experiment = setup.on && !isNormalSetup(setup.setup);
   const myName = name.trim() || "Human";
   const human = { human: true, name: myName };
   const me = { provider: "human", modelLabel: myName };
@@ -636,6 +652,8 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
         rated,
         chess960: chess960Body(c960),
         opening: openingBody(opening, c960),
+        // The human seat's is dropped by the server, so the agent's can go on both.
+        seats: setup.on ? { w: setup.setup, b: setup.setup } : undefined,
       });
       saveSeat(r.game.id, r.humanKey);
       if (!meta.summonAvailable) return setCreated(r.game.id);
@@ -669,7 +687,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <span className="foot-note">{summary(rated, c960, opening)}</span>
+          <span className="foot-note">{summary(rated, c960, opening, experiment)}</span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
@@ -734,6 +752,7 @@ export function PlayAgentModal({ onClose }: { onClose: () => void }) {
             coloursKnown={side !== "random"}
           />
         )}
+        <AgentSetupOption value={setup} onChange={setSetup} name={agentRef.modelLabel} />
         <RatedOption value={rated} onChange={setRated} />
       </div>
       <Err text={err} />
