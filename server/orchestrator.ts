@@ -24,6 +24,8 @@ export type BriefSource = "webhook" | "chat";
  * every pairing a free board and free models allow; games already running are listed by id, for other runs.
  */
 export function tournamentNext(t: Tournament): { finished: true } | { games: Game[]; running: string[]; alreadyRunning?: boolean } {
+  // Cancelled: its pairings without a game never start.
+  if (t.cancelledAt) return { finished: true };
   const live = t.pairings.filter((p) => p.gameId && games.get(p.gameId)?.phase !== "finished");
   if (!live.length && !t.pairings.some((p) => !p.gameId)) {
     t.status = "finished";

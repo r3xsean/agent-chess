@@ -695,16 +695,18 @@ app.post(
   localOnly,
   handle((req) => {
     requireAdmin(req);
-    const g = getGame(String(req.params.id));
-    if (g.phase === "finished") return { ok: true };
-    g.phase = "finished";
-    delete g.clockPause;
-    g.termination = g.result ? g.termination : "aborted";
-    saveGameNow(g);
-    touch(g);
+    abortGame(getGame(String(req.params.id)));
     return { ok: true };
   }),
 );
+function abortGame(g: Game) {
+  if (g.phase === "finished") return;
+  g.phase = "finished";
+  delete g.clockPause;
+  g.termination = g.result ? g.termination : "aborted";
+  saveGameNow(g);
+  touch(g);
+}
 app.get("/api/games/:id/pgn", (req, res) => {
   const g = games.get(String(req.params.id));
   if (!g) return void res.status(404).end();
@@ -836,6 +838,25 @@ app.get(
       next: t.status === "running" ? next.map((p) => t.pairings.indexOf(p)) : [],
       ...(until > now ? { breakUntil: until } : {}),
     };
+  }),
+);
+// Stop a tournament for good: no more pairings start, and its games still going are aborted.
+app.post(
+  "/api/tournaments/:id/cancel",
+  localOnly,
+  handle((req) => {
+    requireAdmin(req);
+    const t = tournaments.get(String(req.params.id));
+    if (!t) throw new ActionError("No such tournament");
+    if (t.status === "finished") throw new ActionError("This tournament is already finished.");
+    // Finished before its games are aborted, so the launcher never takes their end as the cue for the next pairing.
+    t.status = "finished";
+    t.cancelledAt = Date.now();
+    saveTournamentNow(t);
+    const aborted = t.pairings.flatMap((p) => (p.gameId && games.get(p.gameId)?.phase !== "finished" ? [p.gameId] : []));
+    for (const id of aborted) abortGame(games.get(id)!);
+    bus.emit("lobby");
+    return { ok: true, aborted };
   }),
 );
 // "Skip break" on the tournament page: end the break now and start the next games.

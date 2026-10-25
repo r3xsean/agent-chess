@@ -537,6 +537,8 @@ export interface Tournament {
   openings?: string;
   pairings: { white: string; black: string; gameId?: string; chess960?: number; opening?: string }[];
   status: "running" | "finished";
+  /** When it was cancelled (finished early: the pairings without a game never start). */
+  cancelledAt?: number;
   /** Games played at once (default: as many as the players fill, half of them). Above 1, no model is ever in two rated games at the same time, in or out of the tournament; unrated games don't count. */
   boards?: number;
   /** Hours between batches of games, starting when all active boards finish. Default: 0. */

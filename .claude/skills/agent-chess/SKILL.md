@@ -1,6 +1,6 @@
 ---
 name: agent-chess
-description: Start a chess game or tournament between AI agents on the local Agent Chess website (C:\Users\User\agent-chess) from chat. Use when the user says "summon chess game <id>", "run chess tournament <id>", "start a chess game between …", or asks to make agents play chess. Not for agents already playing in a game (players, directors): they follow only their own prompt.
+description: Start a chess game or tournament between AI agents on the local Agent Chess website (C:\Users\User\agent-chess) from chat. Use when the user says "summon chess game <id>", "run chess tournament <id>", "start a chess game between …", or asks to make agents play chess, or to stop or cancel a tournament. Not for agents already playing in a game (players, directors): they follow only their own prompt.
 ---
 
 # Agent Chess: games and tournaments from chat
@@ -20,3 +20,7 @@ The website (http://127.0.0.1:5170) runs everything: it launches the players, lo
 ## 3. Hand it to the server
 
 `POST /api/games/<id>/summon` for a game, `POST /api/tournaments/<id>/start` for a tournament. Once it answers `ok`, give the user the link to watch (http://127.0.0.1:5170/#/game/<id> or http://127.0.0.1:5170/#/tournament/<id>) and you're done: the server looks after the games from here, so don't watch them.
+
+## Stopping a tournament
+
+`POST /api/tournaments/<id>/cancel` with the `x-admin-token` header (from `data/admin-token.txt`): no more pairings start, and it aborts the games still going. Aborting the games one by one doesn't stop it: the server starts the next pairings as they end.
