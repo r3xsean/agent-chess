@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Color, Game, Score } from "../../../shared/types";
 import { winPercentWhite } from "../../../shared/evalmath";
 import { engineAfter } from "../../../shared/belief";
@@ -75,7 +76,7 @@ export function EvalGraph({ game, ply, onSelect, height = 110 }: { game: Game; p
   );
 }
 
-export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: number; onSelect: (p: number) => void; ratings: Record<Color, number | undefined> }) {
+export const Review = memo(function Review({ game, ply, onSelect, ratings }: { game: Game; ply: number; onSelect: (p: number) => void; ratings: Record<Color, number | undefined> }) {
   const rv = game.review;
   // A set opening's moves were nobody's choice, so they count for neither side.
   const counts = (c: Color, k: string) => game.moves.filter((m) => m.color === c && !m.supplied && m.analysis?.classification === k).length;
@@ -170,4 +171,4 @@ export function Review({ game, ply, onSelect, ratings }: { game: Game; ply: numb
       </div>
     </div>
   );
-}
+});

@@ -518,14 +518,19 @@ app.post(
   }),
 );
 
-const lobby = () => ({
-  games: [...games.values()].sort((a, b) => b.createdAt - a.createdAt).map(gameSummary),
+const leaderboards = () => ({
   players: Object.values(players).sort((a, b) => b.rating - a.rating),
   /** The Chess960 leaderboard: ratings from Chess960 games only. */
   players960: Object.values(players960).sort((a, b) => b.rating - a.rating),
+});
+const lobby = () => ({
+  games: [...games.values()].sort((a, b) => b.createdAt - a.createdAt).map(gameSummary),
+  ...leaderboards(),
   tournaments: [...tournaments.values()].sort((a, b) => b.createdAt - a.createdAt),
 });
 app.get("/api/lobby", handle(lobby));
+/** The lobby's leaderboards alone, for pages that only show players' ratings. */
+app.get("/api/ratings", handle(leaderboards));
 app.get("/api/lobby/stream", (req, res) => sse(req, res, "lobby", lobby));
 
 app.post(
@@ -1525,10 +1530,17 @@ app.post(
   }),
 );
 
-const dist = path.join(ROOT, "dist");
+// AGENT_CHESS_DIST: a site built somewhere else (a test's own build), instead of dist/.
+const dist = process.env.AGENT_CHESS_DIST || path.join(ROOT, "dist");
 if (existsSync(dist)) {
-  app.use(express.static(dist));
-  app.get(/^\/(?!api).*/, (_req, res) => res.send(readFileSync(path.join(dist, "index.html"), "utf8")));
+  // Built files are named by their content, so a browser keeps them for good; the page that names them is
+  // checked every time, so a new build is picked up at once.
+  app.use("/assets", express.static(path.join(dist, "assets"), { immutable: true, maxAge: "1y", fallthrough: false }));
+  app.use(express.static(dist, { setHeaders: (res, file) => path.basename(file) === "index.html" && res.setHeader("cache-control", "no-cache") }));
+  app.get(/^\/(?!api).*/, (_req, res) => {
+    res.setHeader("cache-control", "no-cache");
+    res.send(readFileSync(path.join(dist, "index.html"), "utf8"));
+  });
 }
 
 // Locally the agent API must never be reachable from the network; the public mirror has to be.

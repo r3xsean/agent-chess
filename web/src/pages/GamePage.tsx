@@ -8,12 +8,12 @@ import { humanSide, selfEvalColors, sideName } from "../../../shared/naming";
 import { sideLooks } from "../../../shared/looks";
 import { beliefs, judge, selfScore, standing } from "../../../shared/belief";
 import { seatKey } from "../seat";
-import { materialTimeline } from "../../../shared/material";
+import { gameMaterialTimeline, materialTimeline } from "../../../shared/material";
 import { explainIllegal, illegalMovePath, lineBreakReason, triesOf } from "../../../shared/explain";
-import { api, useFetch, useMeta, useStream, type Lobby } from "../api";
+import { api, useFetch, useMeta, useStream, type Leaderboards } from "../api";
 import { CrowdPanel, useCrowd } from "../components/Crowd";
 import { crowdApi, useViewer } from "../viewer";
-import { RematchButton, SummonButton } from "../components/NewGame";
+import { RematchButton, SummonButton } from "../components/GameActions";
 import { Board, type BoardProps } from "../components/Board";
 import { EvalBar } from "../components/EvalBar";
 import { PlayerBar } from "../components/PlayerBar";
@@ -101,7 +101,7 @@ export function GamePage({ id }: { id: string }) {
   );
   const variant = variantOf(game);
   const startFen = game?.startFen ?? START_FEN;
-  const lobby = useFetch<Lobby>("/api/lobby", [game?.result]);
+  const lobby = useFetch<Leaderboards>("/api/ratings", [game?.result]);
   const meta = useMeta();
   // Predictions live on the public mirror when there is one (so everyone shares a crowd), else here.
   const crowdBase = meta ? meta.crowdBase : null;
@@ -113,7 +113,7 @@ export function GamePage({ id }: { id: string }) {
   /** On an illegal attempt made from the position after `ply` moves: which one (else the position itself). */
   const [viewTry, setViewTry] = useState<number | null>(null);
   const [orientation, setOrientation] = useState<Color>("w");
-  const [tab, setTab] = useState<Tab>("thinking");
+  const [tabState, setTab] = useState<Tab | null>(null);
   const [calc, setCalc] = useState<CalcState | null>(null);
   const [explore, setExplore] = useState<ExploreState | null>(null);
   const [exploreAn, setExploreAn] = useState<Record<string, PositionAnalysis>>({});
@@ -127,6 +127,11 @@ export function GamePage({ id }: { id: string }) {
   const mine: Color | null = human && myKey ? human : null;
   // While you play, the engine and the agent's thinking stay hidden; all of it unlocks at the end.
   const hidden = !!mine && !!game && !game.result && game.termination !== "aborted";
+  // The tab a game opens on, picked as soon as it arrives (before anything is drawn, so a finished game never
+  // draws its whole thinking feed only to switch to the review): your own game on its moves, a reviewed
+  // finished one on its review, any other on the thinking.
+  if (game && tabState === null) setTab(hidden ? "moves" : game.phase === "finished" && game.review ? "review" : "thinking");
+  const tab: Tab = tabState ?? "thinking";
   const sfx = useSfxToggle();
   const [offerDraw, setOfferDraw] = useState(false);
   const [promo, setPromo] = useState<{ from: string; to: string } | null>(null);
@@ -136,10 +141,15 @@ export function GamePage({ id }: { id: string }) {
   /** An illegal attempt that just came in live, shown on the board for a moment (from the position it was tried in). */
   const [flash, setFlash] = useState<{ fen: string; move: NonNullable<BoardProps["illegal"]> } | null>(null);
 
+  // The clock only moves what's shown before and during play (thinking time, "Agent idle", "Summoned … ago"):
+  // after that, nothing ticks, so a finished game's page sits still.
+  const ticking = game?.phase === "pregame" || game?.phase === "playing";
   useEffect(() => {
+    if (!ticking) return;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [ticking]);
   useEffect(() => {
     if (game?.phase === "finished" && game.review && (tab === "thinking" || (mine && tab === "moves")) && viewPly === null) setTab("review");
   }, [game?.phase]);
@@ -402,7 +412,12 @@ export function GamePage({ id }: { id: string }) {
     : calc && calcLine ? [...(game?.moves.slice(0, calc.ply - 1).map(m => m.san) ?? []), ...calcLine.san]
     : game?.moves.map(m => m.san) ?? [];
   const materialKey = materialSans.join(" ");
-  const materials = useMemo(() => materialTimeline(materialStart, materialSans, variant), [materialStart, materialKey, variant]);
+  // The game's own moves are read off the positions they record; a line off the game is replayed.
+  const offGame = !!explore || !!(calc && calcLine);
+  const materials = useMemo(
+    () => (offGame || !game ? materialTimeline(materialStart, materialSans, variant) : gameMaterialTimeline(materialStart, game.moves)),
+    [materialStart, materialKey, variant, offGame],
+  );
   const materialPly = explore ? explore.preSans.length + explore.step
     : calc && calcLine ? calc.ply - 1 + Math.min(calc.step, calcLine.san.length) : ply;
   const material = materials[materialPly];
@@ -457,6 +472,11 @@ export function GamePage({ id }: { id: string }) {
       clearTimeout(t);
     };
   }, [exploreFen, !!exploreA, lastExplored?.key, !!lastCls]);
+
+  // A Chess960 game shows its players' Chess960 ratings: the two are rated apart.
+  const rating = (c: Color) => (variantOf(game) === "chess960" ? lobby?.players960 : lobby?.players)?.find((p) => p.id === (c === "w" ? game?.white : game?.black)?.id)?.rating;
+  const [rw, rb] = [rating("w"), rating("b")];
+  const ratings = useMemo(() => ({ w: rw, b: rb }), [rw, rb]);
 
   if (!game || !view || !material) return <div className="empty">Loading game…</div>;
 
@@ -542,8 +562,6 @@ export function GamePage({ id }: { id: string }) {
 
   const thinkMs = (c: Color) =>
     game.moves.filter((m) => m.color === c).reduce((a, m) => a + m.thinkMs, 0) + (playing && turn === c ? currentThinkMs(game, now) : 0);
-  // A Chess960 game shows its players' Chess960 ratings: the two are rated apart.
-  const rating = (c: Color) => (variantOf(game) === "chess960" ? lobby?.players960 : lobby?.players)?.find((p) => p.id === (c === "w" ? game.white : game.black).id)?.rating;
   const status = (c: Color) => {
     if (game.clockPause) return { text: "⏸ Paused", kind: "idle" as const };
     if (game.phase === "pregame") return game.interviews.pre[c] || c === human ? { text: "Ready", kind: "plain" as const } : { text: "In the interview", kind: "plain" as const };
@@ -913,7 +931,7 @@ export function GamePage({ id }: { id: string }) {
                 calc={calc} onSelect={go} onSelectTry={showTry} onPlayLine={playLine} />
             ))}
           {tab === "interviews" && <Interviews game={game} />}
-          {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={{ w: rating("w"), b: rating("b") }} />)}
+          {tab === "review" && (hidden ? hiddenNote("The engine review is") : <Review game={game} ply={ply} onSelect={go} ratings={ratings} />)}
           {tab === "predict" && crowdBase !== null && (
             <CrowdPanel
               game={game}

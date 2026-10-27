@@ -1,11 +1,11 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { Game, MoveRecord } from "../../../shared/types";
 import { ClassIcon } from "./ClassIcon";
 import { scrollIntoPanel } from "../scroll";
 
 const SHOW_ICON = new Set(["brilliant", "great", "best", "book", "inaccuracy", "mistake", "miss", "blunder", "excellent", "good", "forced"]);
 
-export function MoveList({
+export const MoveList = memo(function MoveList({
   game,
   ply,
   tryAt = null,
@@ -95,4 +95,4 @@ export function MoveList({
       )}
     </div>
   );
-}
+});

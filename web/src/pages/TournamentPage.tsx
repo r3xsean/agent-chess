@@ -4,7 +4,7 @@ import type { PlayerRef, SeatSetup, Tournament } from "../../../shared/types";
 import { sideLooks } from "../../../shared/looks";
 import { openingById } from "../../../shared/openingSuite";
 import { GamesTable, PlayerCell } from "./Lobby";
-import { SummonInfo } from "../components/NewGame";
+import { SummonInfo } from "../components/GameActions";
 import { SetupText } from "../components/SetupChip";
 import { pairingSetups } from "../../../shared/seatSetup";
 

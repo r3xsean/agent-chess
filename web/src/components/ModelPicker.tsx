@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import type { ModelOption, PlayerStats } from "../../../shared/types";
 import { lookOf, makerKey, MAKER_LOOKS } from "../../../shared/looks";
-import { useFetch, type Lobby } from "../api";
+import { useFetch, type Leaderboards } from "../api";
 import { PlayerAvatar, Var960 } from "./PlayerName";
 import type { Variant } from "../../../shared/rules";
 
@@ -14,7 +14,7 @@ export interface SeatChoice {
 /** Every rated player's rating by id ("model@effort") in one variant's ratings, for showing beside the choices. */
 export type Ratings = Map<string, PlayerStats> & { variant: Variant };
 export function useRatings(variant: Variant = "standard"): Ratings {
-  const lobby = useFetch<Lobby>("/api/lobby");
+  const lobby = useFetch<Leaderboards>("/api/ratings");
   // Chess960 is rated apart: a Chess960 game is set up against its players' Chess960 ratings. A player who
   // has only played unrated games still sits at the starting rating: leave them out.
   return useMemo(() => {

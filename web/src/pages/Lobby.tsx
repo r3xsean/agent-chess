@@ -1,9 +1,9 @@
 import type { PlayerRef, PlayerStats } from "../../../shared/types";
 import { PROVISIONAL_RD } from "../../../shared/rating";
 import { sideLooks, type ModelLook } from "../../../shared/looks";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ratingsOf, useMeta, useStream, type GameSummary, type Lobby as LobbyData, type VariantRatings } from "../api";
-import { VARIANT_NAME, VARIANTS, type Variant } from "../../../shared/rules";
+import { VARIANT_NAME, VARIANTS, type Variant } from "../../../shared/variant";
 import { crowdApi, useViewer } from "../viewer";
 import { PlayerAvatar, PlayerName, Var960 } from "../components/PlayerName";
 import { PauseNotice } from "../components/PauseNotice";
@@ -45,7 +45,19 @@ export function RatingText({ p }: { p: Pick<PlayerStats, "rating" | "rd"> }) {
 const phaseLabel =(g: GameSummary) =>
   g.clockPause ? `⏸ Paused · ${g.phase === "playing" ? `move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "pregame" ? "pre-game" : "post-game"}` : g.phase === "pregame" ? "Pre-game" : g.phase === "playing" ? `Live · move ${Math.ceil((g.plies + 1) / 2)}` : g.phase === "postgame" ? "Post-game" : g.result ?? "Aborted";
 
+/** Rows drawn at first, and added each time the reader scrolls near the end: each row's avatars are costly to paint. */
+const ROWS_STEP = 40;
+
 export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?: VariantRatings }) {
+  const [rows, setRows] = useState(ROWS_STEP);
+  const more = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    const el = more.current;
+    if (!el) return;
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && setRows((n) => n + ROWS_STEP), { root: el.closest(".main"), rootMargin: "1500px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [rows, games.length]);
   return (
     <div className="card">
       <table className="table games-table">
@@ -61,7 +73,7 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
           </tr>
         </thead>
         <tbody>
-          {games.map((g) => (
+          {games.slice(0, rows).map((g) => (
             <tr key={g.id} className="click" onClick={() => (location.hash = `#/game/${g.id}`)}>
               <td className="g-w">
                 <PlayerCell p={g.white} rating={ratings?.[g.variant][g.white.id]} variant={g.variant} />
@@ -85,6 +97,15 @@ export function GamesTable({ games, ratings }: { games: GameSummary[]; ratings?:
               <td className="g-date" style={{ color: "var(--muted)" }}>{new Date(g.createdAt).toLocaleDateString()}</td>
             </tr>
           ))}
+          {rows < games.length && (
+            <tr ref={more}>
+              <td colSpan={7} className="empty">
+                <button className="btn" onClick={() => setRows(games.length)}>
+                  Show all {games.length} games
+                </button>
+              </td>
+            </tr>
+          )}
           {games.length === 0 && (
             <tr>
               <td colSpan={7} className="empty">

@@ -1,13 +1,23 @@
-import { useEffect, useRef, useState } from "react";
-import { GamePage } from "./pages/GamePage";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Lobby } from "./pages/Lobby";
-import { PlayerPage } from "./pages/PlayerPage";
-import { TournamentPage } from "./pages/TournamentPage";
-import { AgentsPage } from "./pages/AgentsPage";
-import { ExperimentsPage } from "./pages/ExperimentsPage";
-import { NewGameModal, NewTournamentModal, PlayAgentModal } from "./components/NewGame";
-import { VideoPage } from "./video/VideoPage";
 import { useMeta } from "./api";
+
+// Every page but the lobby loads when it's first opened, so the site's first load carries only what it shows.
+const loadGamePage = () => import("./pages/GamePage");
+const GamePage = lazy(() => loadGamePage().then((m) => ({ default: m.GamePage })));
+const PlayerPage = lazy(() => import("./pages/PlayerPage").then((m) => ({ default: m.PlayerPage })));
+const TournamentPage = lazy(() => import("./pages/TournamentPage").then((m) => ({ default: m.TournamentPage })));
+const AgentsPage = lazy(() => import("./pages/AgentsPage").then((m) => ({ default: m.AgentsPage })));
+const ExperimentsPage = lazy(() => import("./pages/ExperimentsPage").then((m) => ({ default: m.ExperimentsPage })));
+const VideoPage = lazy(() => import("./video/VideoPage").then((m) => ({ default: m.VideoPage })));
+const NewGameModal = lazy(() => import("./components/NewGame").then((m) => ({ default: m.NewGameModal })));
+const PlayAgentModal = lazy(() => import("./components/NewGame").then((m) => ({ default: m.PlayAgentModal })));
+const NewTournamentModal = lazy(() => import("./components/NewGame").then((m) => ({ default: m.NewTournamentModal })));
+// The game page is where most visits go next: fetched once the browser is idle, so opening one doesn't wait for it.
+const idle = window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 1500));
+idle(() => void loadGamePage().catch(() => {}));
+
+const loading = <div className="empty">Loading…</div>;
 
 function useHash() {
   const [hash, setHash] = useState(location.hash);
@@ -46,7 +56,12 @@ export function App() {
   const extra = local || !!meta?.publicUrl;
 
   // Video frames render bare, without the site chrome.
-  if (section === "video" && id) return <VideoPage key={id} id={id} query={new URLSearchParams(search)} />;
+  if (section === "video" && id)
+    return (
+      <Suspense fallback={null}>
+        <VideoPage key={id} id={id} query={new URLSearchParams(search)} />
+      </Suspense>
+    );
 
   let page: React.ReactNode;
   if (section === "game" && id) page = <GamePage key={id} id={id} />;
@@ -115,10 +130,14 @@ export function App() {
         )}
         {menu && <div className="nav-scrim" onClick={() => setMenu(false)} />}
       </nav>
-      <main className="main">{page}</main>
-      {modal === "game" && <NewGameModal onClose={() => setModal(null)} />}
-      {modal === "play" && <PlayAgentModal onClose={() => setModal(null)} />}
-      {modal === "tournament" && <NewTournamentModal onClose={() => setModal(null)} />}
+      <main className="main">
+        <Suspense fallback={loading}>{page}</Suspense>
+      </main>
+      <Suspense fallback={null}>
+        {modal === "game" && <NewGameModal onClose={() => setModal(null)} />}
+        {modal === "play" && <PlayAgentModal onClose={() => setModal(null)} />}
+        {modal === "tournament" && <NewTournamentModal onClose={() => setModal(null)} />}
+      </Suspense>
     </div>
   );
 }

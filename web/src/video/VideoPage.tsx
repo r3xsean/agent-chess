@@ -7,7 +7,7 @@ import type { VoiceManifest } from "../../../shared/voices";
 import { formatScore, winPercentWhite } from "../../../shared/evalmath";
 import { beliefs, judge, selfScore, standing, type Belief } from "../../../shared/belief";
 import { sideLooks } from "../../../shared/looks";
-import { materialInfo, type MaterialInfo } from "../../../shared/material";
+import { gameMaterialTimeline, materialTimeline, type MaterialInfo } from "../../../shared/material";
 import { illegalMovePath, triesOf } from "../../../shared/explain";
 import { fenAt, lineVerdicts, planBranch, planLine, resolveLineRefs, shownLine, type LineKind, type ShownBranch, type ShownLine } from "../../../shared/engineLine";
 import { boardOf, pointsAt, quoteWords } from "../../../shared/thoughtMarks";
@@ -135,12 +135,10 @@ function scoreAt(g: Game, fen: string, fallback?: Score): Score | undefined {
 }
 
 function prepare(g: Game): Prep {
-  const sans = g.moves.map((m) => m.san);
   const variant = variantOf(g);
   const start = g.startFen ?? START_FEN;
   const check = g.moves.map((m) => checkSquare(m.fenAfter));
-  const material = sans.map((_, i) => materialInfo(start, sans.slice(0, i + 1), variant));
-  material.unshift(materialInfo(start, [], variant));
+  const material = gameMaterialTimeline(start, g.moves);
   const line = g.moves.map((m) => pvText(m.fenAfter, g.analysis[m.fenAfter]?.pv, variant));
   const bestLine = g.moves.map((m) => pvText(m.fenBefore, g.analysis[m.fenBefore]?.pv, variant));
   let last = 50;
@@ -421,7 +419,7 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
         : undefined;
     out = {
       sl,
-      material: ks.map((k) => materialInfo(start, [...played, ...sans.slice(0, k)], variant)),
+      material: materialTimeline(start, [...played, ...sans], variant).slice(played.length),
       check: ks.map((k) => checkSquare(k ? sl.moves[k - 1].after : sl.fen)),
       labels: variation(marked, first),
       // The line's own fact, when the director wrote no caption, lights and draws nothing.
@@ -434,7 +432,7 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
       out.punish = {
         moves: pm,
         // Index k: k of the punishment's moves after the one played on the board.
-        material: pm.map((_, k) => materialInfo(start, [...before, ...pm.slice(0, k + 1).map((mv) => mv.san)], variant)),
+        material: materialTimeline(start, [...before, ...pm.map((mv) => mv.san)], variant).slice(before.length + 1),
         labels: variation(pm.slice(1).map((mv) => mv.san), m.ply + 1),
         note: lineNote(ask.punish.caption, ask.punish, m.fenBefore, pm, ask.punish.at, sl.for),
       };
@@ -456,7 +454,7 @@ function linePrep(g: Game, prep: Prep, i: number, kind: LineKind): LinePrep | nu
         return {
           br,
           path,
-          material: ks.map((k) => materialInfo(start, [...played, ...pathSans.slice(0, k)], variant)),
+          material: materialTimeline(start, [...played, ...pathSans], variant).slice(played.length),
           check: ks.map((k) => checkSquare(k ? path[k - 1].after : sl.fen)),
           labels: variation(marks, first),
           verdicts: own,

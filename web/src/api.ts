@@ -31,6 +31,9 @@ export interface Lobby {
   tournaments: Tournament[];
 }
 
+/** The lobby's leaderboards alone (/api/ratings). */
+export type Leaderboards = Pick<Lobby, "players" | "players960">;
+
 export interface Meta {
   models: ModelOption[];
   /** A T3 webhook is configured, so the site can summon agents itself. */
