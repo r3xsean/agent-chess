@@ -54,12 +54,15 @@ const handovers = new Map(
 export function openingOf(g: Game): string | undefined {
   if (g.setOpening) return g.setOpening.id;
   if (variantOf(g) !== "standard") return undefined;
-  for (const m of g.moves) {
-    const id = handovers.get(posKey(m.fenAfter));
-    if (id) return id;
-  }
-  return undefined;
+  // Moves are only ever added, so a game is searched once up to where it was last time.
+  const seen = searched.get(g);
+  if (seen && (seen.id || seen.upTo === g.moves.length)) return seen.id;
+  let id: string | undefined;
+  for (let i = seen?.upTo ?? 0; i < g.moves.length && !id; i++) id = handovers.get(posKey(g.moves[i].fenAfter));
+  searched.set(g, { upTo: g.moves.length, id });
+  return id;
 }
+const searched = new WeakMap<Game, { upTo: number; id: string | undefined }>();
 
 const emptyRecord = (): OpeningRecord => ({ games: 0, wins: 0, draws: 0, losses: 0, accuracy: null });
 

@@ -101,23 +101,38 @@ async function run(g: Game, state: { done: number; total: number; failed: number
   // Then the branches of the lines most worth a video's time (see branchCandidates), once the lines themselves
   // are followed: their branch points get the engine's second choice, and each candidate its own walk.
   state.total = starts.size + BRANCH_LINES;
-  for (const fen of starts) {
-    state.failed += await follow(g, fen);
+  // Each line is a chain (every step needs the one before), but the lines are independent of each other: a few are
+  // followed at once, so both line engines stay busy.
+  await eachAtOnce([...starts], CHAINS, async (fen) => {
+    // Each line's count is added once it's in (`state.failed += await …` would read the total before waiting).
+    const failed = await follow(g, fen);
+    state.failed += failed;
     state.done++;
     // Kept as it goes, so a restart halfway loses little.
     if (state.done % 5 === 0) saveGameNow(g);
-  }
+  });
   const lines = g.moves
     .flatMap((m, i) => (m.analysis && !m.analysis.unavailable ? lineOptions(g, i).map((sl) => ({ sl, swing: lineSwing(g, sl) })) : []))
     .sort((a, b) => b.swing - a.swing)
     .slice(0, BRANCH_LINES);
   state.total = starts.size + lines.length;
-  for (const { sl } of lines) {
-    state.failed += await evidence(g, sl);
-    state.failed += await branches(g, sl);
+  await eachAtOnce(lines, CHAINS, async ({ sl }) => {
+    const failed = (await evidence(g, sl)) + (await branches(g, sl));
+    state.failed += failed;
     state.done++;
     saveGameNow(g);
-  }
+  });
+}
+
+/** Lines worked on at once: one more than the line engines, so neither waits while a line moves on to its next step. */
+const CHAINS = 3;
+
+/** `fn` over the items, at most `limit` at a time. */
+async function eachAtOnce<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) await fn(items[i++]);
+  }));
 }
 
 let shallowEngine: Engine | null = null;
@@ -150,37 +165,59 @@ export function passed(fen: string, variant: ReturnType<typeof variantOf>): stri
 export async function evidence(g: Game, sl: ShownLine): Promise<number> {
   const variant = variantOf(g);
   let failed = 0;
-  for (let k = 0; k < Math.min(sl.moves.length, BRANCH_REACH); k++) {
-    const mv = sl.moves[k];
-    const a = await analysed(g, mv.before);
-    if (a.failed) {
-      failed++;
-      continue;
-    }
-    const legal = newRules(mv.before, variant).moves().length;
-    if (mv.color !== sl.for && !a.options && legal > 1) {
-      const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal));
-      if (r.failed || !r.multi) failed++;
-      else a.options = r.multi.filter((l) => l.pv.length).map((l) => ({ uci: l.pv[0], score: l.score, pv: l.pv.slice(0, OPTION_PLIES) }));
-    }
-    if (mv.color === sl.for && !mv.captured && !/[+#]/.test(mv.san)) {
-      const after = await analysed(g, mv.after);
-      if (!after.failed && after.threat === undefined) {
-        const fen = passed(mv.after, variant);
-        if (!fen) after.threat = null;
-        else {
+  // Every position's searches are independent of the others', so they all go to the engines at once.
+  await Promise.all(
+    sl.moves.slice(0, BRANCH_REACH).map(async (mv) => {
+      const a = await analysed(g, mv.before);
+      if (a.failed) return void failed++;
+      const legal = newRules(mv.before, variant).moves().length;
+      // Whether this line wants a search is its own question (asked here); the search, by position, is shared.
+      const options = async () => {
+        if (mv.color === sl.for || legal <= 1) return;
+        const n = await once(`${g.id}|options|${mv.before}`, async () => {
+          if (a.options) return 0;
+          const r = await engineFor().analyze(mv.before, variant, Math.min(OPTIONS, legal));
+          if (r.failed || !r.multi) return 1;
+          a.options = r.multi.filter((l) => l.pv.length).map((l) => ({ uci: l.pv[0], score: l.score, pv: l.pv.slice(0, OPTION_PLIES) }));
+          return 0;
+        });
+        failed += n;
+      };
+      const threat = async () => {
+        if (mv.color !== sl.for || mv.captured || /[+#]/.test(mv.san)) return;
+        const n = await once(`${g.id}|threat|${mv.after}`, async () => {
+          const after = await analysed(g, mv.after);
+          if (after.failed || after.threat !== undefined) return 0;
+          const fen = passed(mv.after, variant);
+          if (!fen) return (after.threat = null), 0;
           const r = await engineFor().analyze(fen, variant);
-          if (r.failed) failed++;
-          else after.threat = { score: r.score, pv: r.pv.slice(0, OPTION_PLIES) };
-        }
-      }
-    }
-    if (a.shallowUci === undefined && legal > 1) {
-      const r = await shallowFor().analyze(mv.before, variant);
-      if (!r.failed && r.bestUci) a.shallowUci = r.bestUci;
-    }
-  }
+          if (r.failed) return 1;
+          after.threat = { score: r.score, pv: r.pv.slice(0, OPTION_PLIES) };
+          return 0;
+        });
+        failed += n;
+      };
+      // Shared too: two lines through the same position search it once (a second answer could differ and overwrite it).
+      const shallow = () =>
+        once(`${g.id}|shallow|${mv.before}`, async () => {
+          if (a.shallowUci !== undefined || legal <= 1) return 0;
+          const r = await shallowFor().analyze(mv.before, variant);
+          if (!r.failed && r.bestUci) a.shallowUci = r.bestUci;
+          return 0;
+        });
+      await Promise.all([options(), threat(), shallow()]);
+    }),
+  );
   return failed;
+}
+
+/** Work under way by key: a second line asking for the same search (lines are worked on at once) waits for the first. */
+const underway = new Map<string, Promise<number>>();
+/** `work` (resolving to how many searches failed) once per key at a time: a second caller meanwhile gets the same outcome. */
+function once(key: string, work: () => Promise<number>): Promise<number> {
+  let p = underway.get(key);
+  if (!p) underway.set(key, (p = work().finally(() => underway.delete(key))));
+  return p;
 }
 
 /** How many of a game's lines get their branches followed. */

@@ -1,4 +1,4 @@
-import type { Classification, Color, Game, MoveRecord, PlayerRef, Score } from "../shared/types";
+import type { CalcLine, Classification, Color, Game, MoveRecord, PlayerRef, Score } from "../shared/types";
 import type {
   AgentRow,
   AnalyticsScope,
@@ -64,13 +64,28 @@ const thinkOf = (m: MoveRecord) => (!firstTurns.has(m) && m.thinkMs > 0 ? m.thin
 /** Analysed moves that say something about quality: book and forced moves are free. */
 const graded = (m: MoveRecord) => !!m.analysis && !m.analysis.unavailable && m.analysis.classification !== "book" && m.analysis.classification !== "forced";
 
+/** How many moves a calculated line names, as the player wrote it (its text never changes). */
+const claimedLengths = new WeakMap<CalcLine, number>();
+const claimedLength = (l: CalcLine) => {
+  let n = claimedLengths.get(l);
+  if (n === undefined) claimedLengths.set(l, (n = lineTokens(l.raw).length));
+  return n;
+};
+
+/** Pieces other than kings and pawns on the board before a move (its fenBefore never changes). */
+const piecesBefore = new WeakMap<MoveRecord, number>();
+
 /**
  * The phase a move was played in, from the position before it: the endgame once at most six pieces other
  * than kings and pawns are left (as Lichess divides games), the opening while still in book or up to move 12.
  */
 export function phaseOf(m: MoveRecord): GamePhase {
-  let pieces = 0;
-  for (const ch of m.fenBefore.split(" ")[0]) if ("nbrqNBRQ".includes(ch)) pieces++;
+  let pieces = piecesBefore.get(m);
+  if (pieces === undefined) {
+    pieces = 0;
+    for (const ch of m.fenBefore.split(" ")[0]) if ("nbrqNBRQ".includes(ch)) pieces++;
+    piecesBefore.set(m, pieces);
+  }
   if (pieces <= 6) return "endgame";
   if (m.ply <= 24 || m.analysis?.classification === "book") return "opening";
   return "middlegame";
@@ -669,7 +684,7 @@ function analyse(
     movesWithLines++;
     for (const l of m.lines) {
       lines++;
-      claimed.push(lineTokens(l.raw).length);
+      claimed.push(claimedLength(l));
       legal.push(l.san.length);
       if (l.brokenAt) beforeBreak.push(l.san.length);
       else legalLines++;
