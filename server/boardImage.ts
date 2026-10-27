@@ -117,7 +117,14 @@ export function boardSvg(fen: string, orientation: Color, code: string, last?: {
   return out.join("");
 }
 
-export const renderPng = (svg: string) => new Resvg(svg, { font: { loadSystemFonts: true } }).render().asPng();
+/**
+ * The fonts the picture's text uses (bold Arial), loaded on their own: loading every system font costs most of
+ * a picture's time, and picks these same two files. Elsewhere, the system's fonts.
+ */
+const FONT_FILES = ["arial.ttf", "arialbd.ttf"].map((f) => path.join(process.env.WINDIR ?? "C:/Windows", "Fonts", f));
+const FONT = FONT_FILES.every((f) => existsSync(f)) ? { loadSystemFonts: false, fontFiles: FONT_FILES, defaultFontFamily: "Arial" } : { loadSystemFonts: true };
+
+export const renderPng = (svg: string) => new Resvg(svg, { font: FONT }).render().asPng();
 
 /**
  * The picture of the current position for a seat, written once per position (the earlier ones removed): its

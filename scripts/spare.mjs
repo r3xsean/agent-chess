@@ -2,9 +2,9 @@
 // reaches outside turned off (the public mirror, model CLIs, T3's usage watch, voice), so nothing a test does
 // shows up on the live site or touches its ratings. Tests import startSpare(); to try things by hand, run
 //   node scripts/spare.mjs
-// which keeps one up until stopped and prints how to reach it.
+// which keeps one up until stopped and prints how to reach it (add --live-copy to start it from a copy of the real games).
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import net from "node:net";
 import path from "node:path";
@@ -20,6 +20,13 @@ const freePort = async () => {
   const port = s.address().port;
   await new Promise((r) => s.close(r));
   return port;
+};
+
+/** A `prepare` that copies the live games, tournaments and ratings into the spare's data dir (they're only read). */
+export const copyLiveData = (dir) => {
+  const live = path.join(ROOT, "data");
+  for (const f of ["games", "tournaments"]) if (existsSync(path.join(live, f))) cpSync(path.join(live, f), path.join(dir, f), { recursive: true });
+  for (const f of ["players.json", "players-960.json"]) if (existsSync(path.join(live, f))) cpSync(path.join(live, f), path.join(dir, f));
 };
 
 /**
@@ -65,7 +72,8 @@ export async function startSpare({ env = {}, prepare } = {}) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const spare = await startSpare();
+  // --live-copy: start from a copy of the real games instead of nothing.
+  const spare = await startSpare(process.argv.includes("--live-copy") ? { prepare: copyLiveData } : {});
   console.log(`Spare Agent Chess server up (stop it with Ctrl+C; its data goes with it):
   AGENT_CHESS_URL=${spare.url}
   AGENT_CHESS_DATA=${spare.data}
