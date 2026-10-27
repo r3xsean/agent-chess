@@ -162,15 +162,30 @@ export const playedMoves = (g: Game) => g.moves.filter((m) => !m.supplied);
 function addSeatKey(gameId: string, role: SeatRole) {
   const key = `${gameId}-${role}-${randomBytes(4).toString("hex")}`;
   seatKeys[key] = { gameId, role };
+  byGame = null;
   return key;
 }
 
-export const seatKeysFor = (gameId: string) =>
-  Object.fromEntries(
-    Object.entries(seatKeys)
-      .filter(([, v]) => v.gameId === gameId)
-      .map(([k, v]) => [v.role, k]),
-  ) as Record<SeatRole, string>;
+/**
+ * Each game's seat keys by seat, built in one pass over all of them and kept until a key is added or dropped (here,
+ * or by anything that changes how many there are) or the keys are loaded again (a new seatKeys object): the
+ * launcher asks for every game's every few seconds.
+ */
+let byGame: Map<string, Record<SeatRole, string>> | null = null;
+let indexed: { keys: object; count: number } | null = null;
+export const seatKeysFor = (gameId: string) => {
+  const count = Object.keys(seatKeys).length;
+  if (!byGame || indexed?.keys !== seatKeys || indexed.count !== count) {
+    byGame = new Map();
+    indexed = { keys: seatKeys, count };
+    for (const [k, v] of Object.entries(seatKeys)) {
+      let seats = byGame.get(v.gameId);
+      if (!seats) byGame.set(v.gameId, (seats = {} as Record<SeatRole, string>));
+      seats[v.role] = k;
+    }
+  }
+  return { ...byGame.get(gameId) } as Record<SeatRole, string>;
+};
 
 /**
  * A new key for a seat, the old one dropped: a relaunched agent takes the seat over, and the agent it
@@ -178,6 +193,7 @@ export const seatKeysFor = (gameId: string) =>
  */
 export function rotateSeatKey(gameId: string, role: SeatRole) {
   for (const [k, v] of Object.entries(seatKeys)) if (v.gameId === gameId && v.role === role) delete seatKeys[k];
+  byGame = null;
   const key = addSeatKey(gameId, role);
   saveSeatsNow();
   return key;

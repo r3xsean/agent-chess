@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import type { Game, PlayerStats, Tournament } from "../shared/types";
 import { DATA } from "./paths";
 import { deleteGameFile, deleteTournamentFile, games, players, players960, saveGameNow, savePlayersNow, saveTournamentNow, tournaments } from "./store";
@@ -46,7 +47,7 @@ export interface SyncBatch {
 
 /* ------------------------------ the local side: push ------------------------------ */
 
-const hash = (v: unknown) => createHash("sha1").update(JSON.stringify(v)).digest("hex");
+const gzipAsync = promisify(gzip);
 const sent = new Map<string, string>();
 const pendingGames = new Set<string>();
 let pendingMeta = false;
@@ -131,22 +132,28 @@ async function push() {
   pendingGames.clear();
   pendingMeta = false;
 
-  const batch: SyncBatch = {};
+  // Each part is serialised once: its hash says whether the mirror has it, and the same text goes in the batch.
+  const parts: string[] = [];
   const changed: [string, string][] = [];
   const keep = (key: string, value: unknown) => {
-    const h = hash(value);
-    if (sent.get(key) === h) return false;
+    const json = JSON.stringify(value);
+    const h = createHash("sha1").update(json).digest("hex");
+    if (sent.get(key) === h) return null;
     changed.push([key, h]);
-    return true;
+    return json;
   };
-  const gameList = ids.map((id) => games.get(id)).filter((g): g is Game => !!g && keep(`g:${g.id}`, g));
-  if (gameList.length) batch.games = gameList;
-  if (!fullSyncDone) batch.allGameIds = [...games.keys()];
+  const gameList = ids.flatMap((id) => {
+    const g = games.get(id);
+    const json = g && keep(`g:${g.id}`, g);
+    return json ? [json] : [];
+  });
+  if (gameList.length) parts.push(`"games":[${gameList.join(",")}]`);
+  if (!fullSyncDone) parts.push(`"allGameIds":${JSON.stringify([...games.keys()])}`);
   if (meta) {
-    if (keep("players", players)) batch.players = players;
-    if (keep("players960", players960)) batch.players960 = players960;
-    const ts = [...tournaments.values()];
-    if (keep("tournaments", ts)) batch.tournaments = ts;
+    for (const [key, value] of [["players", players], ["players960", players960], ["tournaments", [...tournaments.values()]]] as const) {
+      const json = keep(key, value);
+      if (json) parts.push(`${JSON.stringify(key)}:${json}`);
+    }
   }
 
   const restore = () => {
@@ -154,9 +161,9 @@ async function push() {
     pendingMeta ||= meta;
   };
   try {
-    if (Object.keys(batch).length) {
-      batch.seq = nextSeq();
-      const body = gzipSync(JSON.stringify(batch));
+    if (parts.length) {
+      // Compressed off the event loop (a full sync is megabytes); the text was fixed above, so it's what was hashed.
+      const body = await gzipAsync(`{${[...parts, `"seq":${nextSeq()}`].join(",")}}`);
       const r = await fetch(`${cfg.url}/api/mirror/sync`, {
         method: "POST",
         headers: { "content-type": "application/json", "content-encoding": "gzip", authorization: `Bearer ${cfg.secret}` },

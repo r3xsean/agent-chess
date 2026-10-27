@@ -208,10 +208,13 @@ export async function voiceGame(g: Game, onLine?: (done: number, total: number) 
     // One entry per distinct clip: a hook that's also a moment is one recording.
     const clips = new Map<string, { voiceId: string; spoken: string; file: string; url: string; dur?: number; words?: number[] }>();
     for (const j of jobs) clips.set(j.hash, { voiceId: j.voiceId, spoken: j.spoken, file: j.file, url: j.url });
+    // A clip is named by what it says and never rewritten, so the length the last manifest measured for it still
+    // holds: only clips it doesn't list are measured again (ffprobe, a process per clip).
+    const measured = new Map(Object.values(voiceManifest(g.id).clips).map((c) => [c.url, c.dur]));
     for (const clip of clips.values()) {
       if (!existsSync(clip.file)) continue;
       try {
-        clip.dur = audioSeconds(clip.file);
+        clip.dur = measured.get(clip.url) ?? audioSeconds(clip.file);
         clip.words = readWords(clip.file);
       } catch {
         // An unreadable clip (a cut-off download): drop it, and count it as missing.
