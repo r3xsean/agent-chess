@@ -20,6 +20,7 @@ import { playSfx } from "../sfx";
 import { RenderPanel } from "./RenderPanel";
 import { lineTransition, rewindFrame, trackAt } from "./linePlayback";
 import { useMeta } from "../api";
+import { follow } from "../stream";
 import "./video.css";
 
 /** Width of the render panel beside the preview. */
@@ -2198,14 +2199,11 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
   useEffect(() => {
     if (render) return;
     livePlan.current = undefined;
-    const events = new EventSource(`/api/games/${id}/stream`);
-    events.onmessage = e => {
-      const next = JSON.parse(e.data) as Game;
+    return follow<Game>(`/api/games/${id}/stream`, (next) => {
       const signature = JSON.stringify(next.video ?? null);
       if (livePlan.current !== undefined && livePlan.current !== signature) setReload(n => n + 1);
       livePlan.current = signature;
-    };
-    return () => events.close();
+    });
   }, [id, render]);
 
   // Voices land one line at a time while a render records them: the preview takes each as it comes, so it

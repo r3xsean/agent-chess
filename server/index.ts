@@ -66,6 +66,7 @@ import { Engine, SupersededError } from "./engine";
 import { CLASSIFIER_VERSION, classifyMove, reviewSide, terminalScore } from "./classify";
 import { newRules, randomChess960, variantOf, type Variant } from "../shared/rules";
 import { createViewer, crowd, flushPredictions, leaderboard, predict, PredictionError, renameViewer, scoresChanged, setGameSource, viewerInfo } from "./predictions";
+import { current as currentVersion, forget as forgetStream, messageFor, type Shape, type Version } from "./stream";
 import { acceptSeq, ingest, mirrorPublicStatus, syncAck, mirrorChanged as mirrorChangedLobby, mirrorConfig, mirrorStatus, startMirror } from "./mirror";
 
 loadAll();
@@ -211,7 +212,7 @@ function openStream(req: Request, res: Response): ((data: string) => void) | nul
 
 /** One serialisation per change, shared by every stream of the same thing: keyed by how many changes it has seen. */
 const revisions = new Map<string, { rev: number; subscribers: number; bump: () => void }>();
-const serialized = new Map<string, { rev: number; data: string }>();
+const versions = new Map<string, { rev: number; version: Version }>();
 /** Count changes to an event while anyone streams it; the returned function unsubscribes (freeing it with the last). */
 function trackRevisions(event: string): () => void {
   let r = revisions.get(event);
@@ -228,16 +229,18 @@ function trackRevisions(event: string): () => void {
     if (--tracked.subscribers > 0) return;
     bus.off(event, tracked.bump);
     revisions.delete(event);
-    serialized.delete(event);
+    versions.delete(event);
+    forgetStream(event);
   };
 }
-function shared(event: string, payload: () => unknown): string {
+/** The stream's version as of its latest change (see server/stream.ts), worked out once for all its viewers. */
+function versionOf(event: string, payload: () => object, shape: Shape): Version {
   const rev = revisions.get(event)?.rev ?? 0;
-  const hit = serialized.get(event);
-  if (hit && hit.rev === rev) return hit.data;
-  const data = `data: ${JSON.stringify(payload())}\n\n`;
-  serialized.set(event, { rev, data });
-  return data;
+  const hit = versions.get(event);
+  if (hit && hit.rev === rev) return hit.version;
+  const version = currentVersion(event, payload() as Record<string, unknown>, shape);
+  versions.set(event, { rev, version });
+  return version;
 }
 /* ------------------------------ helpers ------------------------------ */
 
@@ -318,19 +321,31 @@ function gameSummary(g: Game) {
   };
 }
 
-function sse(req: Request, res: Response, event: string, payload: () => unknown) {
+/**
+ * A live stream of `payload`: the whole of it on connecting, then what changes. With a `shape` (which fields go
+ * piece by piece), changes go as "patch" events (web/src/stream.ts applies them); without one, whole. Nothing
+ * is sent when nothing changed.
+ */
+function sse(req: Request, res: Response, event: string, payload: () => object, shape?: Shape) {
   const write = openStream(req, res);
   if (!write) return;
   const untrack = trackRevisions(event);
   let timer: NodeJS.Timeout | null = null;
+  let has = 0;
+  const flush = () => {
+    const version = versionOf(event, payload, shape ?? {});
+    const msg = messageFor(shape ? has : 0, version);
+    if (msg && has !== version.v) write(msg);
+    has = version.v;
+  };
   const send = () => {
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;
-      write(shared(event, payload));
+      flush();
     }, 100);
   };
-  write(shared(event, payload));
+  flush();
   const ping = setInterval(() => write(": ping\n\n"), 20000);
   bus.on(event, send);
   req.on("close", () => {
@@ -531,7 +546,7 @@ const lobby = () => ({
 app.get("/api/lobby", handle(lobby));
 /** The lobby's leaderboards alone, for pages that only show players' ratings. */
 app.get("/api/ratings", handle(leaderboards));
-app.get("/api/lobby/stream", (req, res) => sse(req, res, "lobby", lobby));
+app.get("/api/lobby/stream", (req, res) => sse(req, res, "lobby", lobby, { arrays: ["games"] }));
 
 app.post(
   "/api/games",
@@ -594,7 +609,7 @@ app.get("/api/games/:id", handle((req) => getGame(String(req.params.id))));
 app.get("/api/games/:id/stream", (req, res) => {
   const g = games.get(String(req.params.id));
   if (!g) return void res.status(404).end();
-  sse(req, res, `game:${g.id}`, () => games.get(g.id) ?? g);
+  sse(req, res, `game:${g.id}`, () => games.get(g.id) ?? g, { arrays: ["moves"], records: ["analysis"] });
 });
 app.get(
   "/api/games/:id/launch",

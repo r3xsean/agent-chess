@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Game, ModelOption, PlayerRef, PlayerStats, SeatSetup, Tournament } from "../../shared/types";
 import type { Variant } from "../../shared/rules";
+import { follow } from "./stream";
 
 export interface GameSummary {
   id: string;
@@ -74,15 +75,13 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-/** Subscribe to a server-sent-events stream that pushes the whole object on change. */
+/** Subscribe to a server-sent-events stream of an object: the whole of it, then its changes (see stream.ts). */
 export function useStream<T>(url: string | null): T | null {
   const [value, setValue] = useState<T | null>(null);
   useEffect(() => {
     if (!url) return;
     setValue(null);
-    const es = new EventSource(url);
-    es.onmessage = (e) => setValue(JSON.parse(e.data));
-    return () => es.close();
+    return follow<T>(url, setValue);
   }, [url]);
   return value;
 }
