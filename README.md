@@ -29,6 +29,7 @@ All optional; each feature stays off without its setting.
 | `GAMING_PROCESSES` (comma-separated, default `deadlock.exe`; empty turns it off), `GAMING_THREADS` (default `1`) | Slowing Stockfish down while one of those programs runs | `server/engine.ts` |
 | `T3_STATE_DB`, `T3_USAGE_WATCH` | Pausing games when a model hits its usage limit | `server/usageLimits.ts` |
 | `PUBLIC_MODE=1` | Running as the read-only public mirror (see `Dockerfile`) | `server/paths.ts` |
+| `RENDER_WORKERS` (or `--workers`; default a third of the CPU threads, at most 6) | Browser pages drawing a video's frames at once | `scripts/render-video.mjs` |
 
 ## Render videos
 

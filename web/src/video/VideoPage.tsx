@@ -1600,22 +1600,12 @@ function MoveList({ g, ply, branch, current = true, comments = [], dim = 1 }: { 
       </span>
     );
   };
-  // Like a scoresheet: it fills from the top, and once it's full the newest stays at the bottom, the
-  // oldest fading off the top (only then, or the first moves would be faded too).
-  const box = useRef<HTMLDivElement>(null);
-  const list = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (!box.current || !list.current) return;
-    const cs = getComputedStyle(box.current);
-    const room = box.current.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    box.current.classList.toggle("full", list.current.scrollHeight > room + 1);
-  });
   // An aside hangs under the row of the move it's from; one from before the first move, at the top.
   const under = (r: { w?: number; b?: number } | null) =>
     comments.filter((c) => (r ? c.after === r.w || c.after === r.b : c.after < 0)).map((c, k) => <AsideComment key={`${c.after}-${k}-${c.text}`} g={g} a={c} />);
   return (
-    <div ref={box} className="v-movelist" style={dim < 1 ? { opacity: r3(dim) } : undefined}>
-      <div ref={list} className="v-ml-rows">
+    <div className="v-movelist" style={dim < 1 ? { opacity: r3(dim) } : undefined}>
+      <div className="v-ml-rows">
         {under(null)}
         {rows.slice(-ROWS).map((r) => (
           <Fragment key={r.no}>
@@ -1631,6 +1621,26 @@ function MoveList({ g, ply, branch, current = true, comments = [], dim = 1 }: { 
       </div>
     </div>
   );
+}
+
+/**
+ * The move list fills like a scoresheet: from the top, and once it's full the newest stays at the bottom, the
+ * oldest fading off the top (only then, or the first moves would be faded too). Whether it's full depends on the
+ * room the speech box under it leaves, so it's measured here, after that box has taken this frame's height
+ * (layout effects run in order): measured in the list itself it saw the box as it was a frame earlier, so a
+ * frame depended on the one before it.
+ */
+function ListFit() {
+  const mark = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const box = mark.current?.parentElement?.querySelector<HTMLElement>(".v-movelist");
+    const list = box?.querySelector<HTMLElement>(".v-ml-rows");
+    if (!box || !list) return;
+    const cs = getComputedStyle(box);
+    const room = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    box.classList.toggle("full", list.scrollHeight > room + 1);
+  });
+  return <span ref={mark} hidden />;
 }
 
 function ChartLegend({ g }: { g: Game }) {
@@ -1809,6 +1819,7 @@ function GameScene({ g, v, prep, wide, ratings }: { g: Game; v: View; prep: Prep
               <div className="v-ml-wrap">
                 <MoveList g={g} ply={listPly} current={engine?.current ?? true} branch={engine && <Variation e={engine} />} comments={asides} dim={dim} />
                 {sp && <SpeechBox g={g} sp={sp} />}
+                <ListFit />
               </div>
               <div className="v-chart-block" style={dim < 1 ? { opacity: dim } : undefined}>
                 <ChartLegend g={g} />
@@ -2166,8 +2177,31 @@ async function loadRatings(g: Game): Promise<Ratings> {
 
 declare global {
   interface Window {
-    __video?: { ready: boolean; duration: number; scenes: Scene[]; asides: AsideCue[]; cues: SfxCue[]; fps: number; seek: (t: number) => string; settle: () => Promise<void> };
+    __video?: {
+      ready: boolean;
+      duration: number;
+      scenes: Scene[];
+      asides: AsideCue[];
+      cues: SfxCue[];
+      fps: number;
+      /** What the frames are drawn from (the game, ratings, series and voices), hashed: pages rendering parts of one video must agree on it. */
+      inputs: string;
+      seek: (t: number) => string;
+      settle: () => Promise<void>;
+    };
   }
+}
+
+/** A short fingerprint of a text (FNV-1a, two seeds). */
+function hashText(s: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x5bd1e995);
+  }
+  return `${(a >>> 0).toString(36)}${(b >>> 0).toString(36)}`;
 }
 
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -2257,6 +2291,7 @@ export function VideoPage({ id, query }: { id: string; query: URLSearchParams })
       asides: tl!.asides,
       cues: cues!,
       fps: 30,
+      inputs: hashText(JSON.stringify([game, ratings, rival, voice, format, thoughts, pace])),
       seek: (time) => {
         flushSync(() => setT(time));
         return keyRef.current;

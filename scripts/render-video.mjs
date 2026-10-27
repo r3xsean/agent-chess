@@ -1,7 +1,7 @@
 // Render a game replay to MP4 for YouTube (16:9) and/or TikTok (9:16).
 //
 //   node scripts/render-video.mjs <gameId> [--format landscape|portrait|both] [--fps 30]
-//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only] [--package]
+//        [--music file.mp3] [--sfx off] [--out dir] [--stills 12,40.5] [--thoughts off] [--voices off] [--audio-only] [--package] [--workers n]
 //
 // Files ("<id>-youtube.mp4" and so on) go in the game's own folder (data/videos/<date> <White> vs <Black> (<id>)/,
 // see server/videoFiles.ts) unless --out names another.
@@ -15,6 +15,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
 
@@ -139,6 +140,9 @@ async function decode(file, tempo = 1) {
   return decoded.get(key);
 }
 
+/** Sounds decoded at once while building the track. */
+const DECODE_AT_ONCE = 6;
+
 /** Mix every cue into one stereo track and write it as a 16-bit WAV. Variants of a sound rotate. */
 async function buildSfxTrack(cues, duration, file) {
   const files = existsSync(SFX_DIR) ? readdirSync(SFX_DIR).filter((n) => /\.(ogg|wav|mp3)$/i.test(n)).sort() : [];
@@ -146,13 +150,18 @@ async function buildSfxTrack(cues, duration, file) {
   const used = {};
   const mix = new Float32Array(Math.ceil((duration + 2) * RATE) * 2);
   let placed = 0;
-  for (const c of cues) {
-    let src = c.file;
-    if (!src) {
-      const list = variants(c.ev);
-      if (!list.length) continue;
-      src = join(SFX_DIR, list[(used[c.ev] = (used[c.ev] ?? -1) + 1) % list.length]);
-    }
+  // Which file each cue plays (variants rotate in cue order), then every distinct sound decoded a few at a time
+  // (an ffmpeg each), then mixed in cue order as before.
+  const sources = cues.map((c) => {
+    if (c.file) return c.file;
+    const list = variants(c.ev);
+    return list.length ? join(SFX_DIR, list[(used[c.ev] = (used[c.ev] ?? -1) + 1) % list.length]) : null;
+  });
+  const distinct = [...new Map(cues.flatMap((c, i) => (sources[i] ? [[`${sources[i]}|${c.rate ?? 1}`, [sources[i], c.rate ?? 1]]] : []))).values()];
+  for (let i = 0; i < distinct.length; i += DECODE_AT_ONCE) await Promise.all(distinct.slice(i, i + DECODE_AT_ONCE).map(([src, rate]) => decode(src, rate)));
+  for (const [i, c] of cues.entries()) {
+    const src = sources[i];
+    if (!src) continue;
     const pcm = await decode(src, c.rate ?? 1);
     const off = Math.max(0, Math.round(c.t * RATE)) * 2;
     for (let i = 0; i < pcm.length && off + i < mix.length; i++) mix[off + i] += pcm[i] * c.gain;
@@ -379,17 +388,47 @@ const game = await (await fetch(`${SERVER}/api/games/${gameId}`)).json();
 const browser = await puppeteer.launch({
   executablePath: findChrome(),
   headless: true,
-  args: ["--hide-scrollbars", "--force-device-scale-factor=1", "--font-render-hinting=none"],
+  // Every page draws flat out, none held back as a background tab.
+  args: ["--hide-scrollbars", "--force-device-scale-factor=1", "--font-render-hinting=none", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
 });
+
+/**
+ * Pages drawing a video's frames at once (--workers, RENDER_WORKERS): the screenshot is most of a frame's time and
+ * each page's renderer takes it on its own core. Each page draws a chunk (at least CHUNK frames) at a time.
+ */
+const WORKERS = Math.max(1, Math.floor(Number(opt("workers", process.env.RENDER_WORKERS ?? Math.min(6, Math.max(1, Math.floor(availableParallelism() / 3)))))));
+const CHUNK = 30;
+/** How far (in frames) a page may draw ahead of the encoder. */
+const AHEAD = 450;
+
+async function openVideoPage(page, width, height, url) {
+  await page.setViewport({ width, height, deviceScaleFactor: 1 });
+  await page.goto(url, { waitUntil: "load" });
+  await page.waitForFunction(() => window.__video?.ready, { timeout: 60_000 });
+  await page.evaluate(() => document.fonts.ready);
+  return page;
+}
+
+/** Another page for a video's frames, in a browser context of its own, drawing from exactly the same inputs. */
+async function openWorker(width, height, url, inputs) {
+  for (let attempt = 0; ; attempt++) {
+    const context = await browser.createBrowserContext();
+    const page = await openVideoPage(await context.newPage(), width, height, url);
+    if ((await page.evaluate(() => window.__video.inputs)) === inputs) {
+      const cdp = await page.createCDPSession();
+      const shot = async (type) => Buffer.from((await cdp.send("Page.captureScreenshot", { format: type, quality: type === "jpeg" ? 92 : undefined, optimizeForSpeed: true })).data, "base64");
+      return { page, shot };
+    }
+    await context.close();
+    if (attempt >= 2) throw new Error("The game changed while the render was starting (its pages loaded different data): render it again.");
+  }
+}
 
 try {
   for (const format of formats) {
     const [width, height] = SIZES[format];
-    const page = await browser.newPage();
-    await page.setViewport({ width, height, deviceScaleFactor: 1 });
-    await page.goto(`${SERVER}/#/video/${gameId}?format=${format}&render=1&thoughts=${opt("thoughts", "on")}&voices=${opt("voices", "on")}`, { waitUntil: "load" });
-    await page.waitForFunction(() => window.__video?.ready, { timeout: 60_000 });
-    await page.evaluate(() => document.fonts.ready);
+    const url = `${SERVER}/#/video/${gameId}?format=${format}&render=1&thoughts=${opt("thoughts", "on")}&voices=${opt("voices", "on")}`;
+    const page = await openVideoPage(await browser.newPage(), width, height, url);
     const duration = await page.evaluate(() => window.__video.duration);
     const scenes = await page.evaluate(() => window.__video.scenes);
     const asides = await page.evaluate(() => window.__video.asides);
@@ -447,27 +486,75 @@ try {
       const write = (buf) => (ff.stdin.write(buf) ? Promise.resolve() : new Promise((r) => ff.stdin.once("drain", r)));
 
       const frames = Math.ceil(duration * fps);
-      let lastKey = null;
-      let lastBuf = null;
+      // Frames are drawn by several pages at once, each in a browser context (a renderer) of its own, a chunk of
+      // frames each at a time; the encoder takes them in order, so the video is the one a single page would make.
+      // Each page must have drawn from exactly what this one did (the same game, voices, ratings).
+      const inputs = await page.evaluate(() => window.__video.inputs);
+      const workers = [{ page, shot }];
+      for (let n = 1; n < WORKERS; n++) workers.push(await openWorker(width, height, url, inputs));
+      // Chunks start where scenes start: within a scene the browser keeps what it drew a frame earlier (text
+      // that animated in is drawn a hair differently from text that was simply there), so a page starts each
+      // chunk where the single page would have been drawing the scene from its start. Short scenes go together.
+      // A scene's first frame: the first whose time is past the scene before's end, compared as the page does
+      // (sceneAt in web/src/video/timeline.ts), so rounding never starts a chunk on the scene before's last frame.
+      const firstFrame = (end) => {
+        let f = Math.ceil(end * fps);
+        while (f / fps < end) f++;
+        while (f > 0 && !((f - 1) / fps < end)) f--;
+        return f;
+      };
+      const starts = [...new Set(scenes.slice(0, -1).map((s) => firstFrame(s.start + s.dur)))].filter((f) => f > 0 && f < frames).sort((a, b) => a - b);
+      const bounds = [0];
+      for (const f of starts) if (f - bounds[bounds.length - 1] >= CHUNK) bounds.push(f);
+      bounds.push(frames);
+      const chunks = bounds.slice(0, -1).map(() => ({ bufs: [], done: false, wake: null }));
+      let next = 0;
+      let encoded = 0;
       let captured = 0;
-      for (let f = 0; f < frames; f++) {
-        const key = await page.evaluate((x) => window.__video.seek(x), f / fps);
-        // Holds don't change the picture: reuse the previous frame instead of capturing again.
-        if (key !== lastKey) {
-          await page.evaluate(() => window.__video.settle());
-          lastBuf = await shot("jpeg");
-          lastKey = key;
-          captured++;
+      const nudge = (ch) => (ch.wake?.(), (ch.wake = null));
+      const draw = async (w) => {
+        for (let c = next++; c < chunks.length; c = next++) {
+          const ch = chunks[c];
+          let lastKey = null;
+          let lastBuf = null;
+          for (let f = bounds[c]; f < bounds[c + 1]; f++) {
+            // Never far ahead of the encoder, so the frames waiting for it stay few.
+            while (f - encoded > AHEAD) await new Promise((r) => setTimeout(r, 10));
+            const key = await w.page.evaluate((x) => window.__video.seek(x), f / fps);
+            // Holds don't change the picture: reuse the previous frame instead of capturing again.
+            if (key !== lastKey) {
+              await w.page.evaluate(() => window.__video.settle());
+              lastBuf = await w.shot("jpeg");
+              lastKey = key;
+              captured++;
+            }
+            ch.bufs.push(lastBuf);
+            nudge(ch);
+          }
+          ch.done = true;
+          nudge(ch);
         }
-        await write(lastBuf);
-        if (f % (fps * 10) === 0) {
-          const pct = ((f / frames) * 100).toFixed(0);
-          process.stdout.write(`\r${format}: ${pct}%  (${(f / fps).toFixed(0)}s of ${duration.toFixed(0)}s, ${((Date.now() - started) / 1000).toFixed(0)}s elapsed)   `);
+      };
+      // A page that fails stops the render (the race below), rather than leaving the encoder waiting for its frames.
+      const failed = Promise.all(workers.map(draw)).then(() => new Promise(() => {}));
+      for (let c = 0; c < chunks.length; c++) {
+        const ch = chunks[c];
+        for (let i = 0; ; ) {
+          while (i < ch.bufs.length) {
+            await write(ch.bufs[i]);
+            ch.bufs[i++] = null;
+            encoded++;
+          }
+          if (ch.done) break;
+          await Promise.race([new Promise((r) => (ch.wake = r)), failed]);
         }
+        if (Math.floor(bounds[c + 1] / (fps * 10)) !== Math.floor(bounds[c] / (fps * 10)))
+          process.stdout.write(`\r${format}: ${((encoded / frames) * 100).toFixed(0)}%  (${(encoded / fps).toFixed(0)}s of ${duration.toFixed(0)}s, ${((Date.now() - started) / 1000).toFixed(0)}s elapsed)   `);
       }
+      for (const w of workers.slice(1)) await w.page.browserContext().close();
       ff.stdin.end();
       await done;
-      note = `${frames} frames, ${captured} captured, `;
+      note = `${frames} frames, ${captured} captured by ${WORKERS} page${WORKERS === 1 ? "" : "s"}, `;
     }
     if (format === "portrait") await writeCover(page, scenes);
     await page.close();
