@@ -34,5 +34,15 @@ assert.deepEqual(engines.map((e) => e.load), [3, 0]);
 assert.deepEqual(engines.map((e) => e.load), [2, 1], "an idle engine takes a search queued on a busy one");
 await Promise.all(queuedBehind);
 pool.stop();
-console.log("PASS: the game-review pool spreads searches over its engines, idle engines take queued ones, and all finish");
+
+// An urgent search (an agent waiting on it) gets its own thread count; the others the engine's.
+const urgentPool = new EnginePool(1, { label: "test-urgent", depth: 8, threads: 1, urgentThreads: 2, hashMb: 16 });
+urgentPool.start();
+const [solo] = (urgentPool as unknown as { engines: { threadsNow: number }[] }).engines;
+await urgentPool.analyze(fens[0], "standard", undefined, true);
+assert.equal(solo.threadsNow, 2, "an urgent search runs on urgentThreads");
+await urgentPool.analyze(fens[1], "standard");
+assert.equal(solo.threadsNow, 1, "a search nobody waits on runs on threads");
+urgentPool.stop();
+console.log("PASS: the game-review pool spreads searches over its engines, idle engines take queued ones, and all finish; urgent searches get their own threads");
 process.exit(0);

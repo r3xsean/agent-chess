@@ -75,6 +75,8 @@ export interface EngineOptions {
   /** Cut each search short after this long instead (quick answers: the website's analysis board, a shallow guess). */
   maxMs?: number;
   threads: number;
+  /** Threads for an urgent search (an agent waiting on it), if not `threads`. */
+  urgentThreads?: number;
   hashMb: number;
   /** While a game runs, start only urgent searches; the rest (nobody waiting on them) wait for it to end. */
   pauseWhileGaming?: boolean;
@@ -248,7 +250,7 @@ export class Engine {
     const { label } = this.opts;
     const sideToMove = job.fen.split(" ")[1] === "b" ? "b" : "w";
     const lines: Record<number, { depth: number; score: Score; pv: string[] }> = {};
-    const threads = gaming ? Math.min(this.opts.threads, GAMING_THREADS) : this.opts.threads;
+    const threads = gaming ? Math.min(this.opts.threads, GAMING_THREADS) : job.urgent && this.opts.urgentThreads ? this.opts.urgentThreads : this.opts.threads;
     if (threads !== this.threadsNow) {
       this.send(`setoption name Threads value ${threads}`);
       this.threadsNow = threads;

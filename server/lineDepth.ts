@@ -33,14 +33,21 @@ const QUIET = 6;
  * long it takes (24 took three times as long, and no eval moved by more than a few points of winning chances). While a
  * game runs on this PC, only searches an agent is waiting on go ahead (slowed, same depth); the rest wait.
  * An agent's command that outlasts its window answers WAITING and picks up where it was (see probe.ts).
+ *
+ * Four engines with a quarter of the CPU each: a search gets far less than twice as fast on twice the threads, and
+ * deepening a game keeps four busy (over twice as fast as two engines on half each). An agent's searches come one at
+ * a time, so they get half the CPU, as before.
  */
+const LINE_ENGINES = 4;
 let lineEngine: EnginePool | null = null;
 export const engineFor = () => {
   if (!lineEngine) {
-    const threads = Math.max(1, Math.floor(os.availableParallelism() / 2));
+    const cpus = os.availableParallelism();
+    const threads = Math.max(1, Math.floor(cpus / LINE_ENGINES));
+    const urgentThreads = Math.max(1, Math.floor(cpus / 2));
     const depth = Number(process.env.LINES_DEPTH ?? 20);
     const maxMs = process.env.ENGINE_MAX_MS ? Number(process.env.ENGINE_MAX_MS) : undefined; // test servers cap every engine
-    lineEngine = new EnginePool(2, { label: "lines", depth, ...(maxMs !== undefined && { maxMs }), threads, hashMb: 1024, pauseWhileGaming: true });
+    lineEngine = new EnginePool(LINE_ENGINES, { label: "lines", depth, ...(maxMs !== undefined && { maxMs }), threads, urgentThreads, hashMb: 1024, pauseWhileGaming: true });
     lineEngine.start();
   }
   return lineEngine;
@@ -102,7 +109,7 @@ async function run(g: Game, state: { done: number; total: number; failed: number
   // are followed: their branch points get the engine's second choice, and each candidate its own walk.
   state.total = starts.size + BRANCH_LINES;
   // Each line is a chain (every step needs the one before), but the lines are independent of each other: a few are
-  // followed at once, so both line engines stay busy.
+  // followed at once, so the line engines stay busy.
   await eachAtOnce([...starts], CHAINS, async (fen) => {
     // Each line's count is added once it's in (`state.failed += await …` would read the total before waiting).
     const failed = await follow(g, fen);
@@ -124,8 +131,8 @@ async function run(g: Game, state: { done: number; total: number; failed: number
   });
 }
 
-/** Lines worked on at once: one more than the line engines, so neither waits while a line moves on to its next step. */
-const CHAINS = 3;
+/** Lines worked on at once: two per line engine, so none waits while a line moves on to its next step or the last lines finish (one more than the engines took a fifth longer). */
+const CHAINS = 2 * LINE_ENGINES;
 
 /** `fn` over the items, at most `limit` at a time. */
 async function eachAtOnce<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
